@@ -89,12 +89,15 @@ class TerminalController {
     private nonisolated static let focusIntentV2Methods: Set<String> = [
         "window.focus",
         "workspace.create",
+        "workspace.move_to_window",
         "workspace.select",
         "workspace.next",
         "workspace.previous",
         "workspace.last",
         "surface.move",
         "surface.focus",
+        "pane.swap",
+        "pane.break",
         "pane.focus",
         "pane.last",
         "browser.focus_webview",
@@ -9463,9 +9466,9 @@ class TerminalController {
         summaries: [AppDelegate.MainWindowSummary],
         currentWindowId: UUID?
     ) -> UUID? {
-        summaries.first(where: { $0.isKeyWindow })?.windowId
+        currentWindowId
+            ?? summaries.first(where: { $0.isKeyWindow })?.windowId
             ?? summaries.first(where: { $0.isVisible })?.windowId
-            ?? currentWindowId
             ?? summaries.first?.windowId
     }
 

@@ -11519,7 +11519,7 @@ final class TerminalControllerSidebarDedupeTests: XCTestCase {
     }
 
     @MainActor
-    func testPreferredPanelLifecycleWindowIdPrefersKeyWindow() {
+    func testPreferredPanelLifecycleWindowIdPrefersCurrentWindowOverKeyAndVisibleWindows() {
         let currentWindowId = UUID()
         let keyWindowId = UUID()
         let visibleWindowId = UUID()
@@ -11544,13 +11544,36 @@ final class TerminalControllerSidebarDedupeTests: XCTestCase {
             currentWindowId: currentWindowId
         )
 
-        XCTAssertEqual(preferred, keyWindowId)
+        XCTAssertEqual(preferred, currentWindowId)
     }
 
     @MainActor
-    func testPreferredPanelLifecycleWindowIdPrefersVisibleWindowOverCurrentWindow() {
-        let currentWindowId = UUID()
+    func testPreferredPanelLifecycleWindowIdFallsBackToKeyThenVisibleWindow() {
+        let keyWindowId = UUID()
         let visibleWindowId = UUID()
+
+        XCTAssertEqual(
+            TerminalController.preferredPanelLifecycleWindowId(
+                summaries: [
+                    AppDelegate.MainWindowSummary(
+                        windowId: visibleWindowId,
+                        isKeyWindow: false,
+                        isVisible: true,
+                        workspaceCount: 1,
+                        selectedWorkspaceId: nil
+                    ),
+                    AppDelegate.MainWindowSummary(
+                        windowId: keyWindowId,
+                        isKeyWindow: true,
+                        isVisible: true,
+                        workspaceCount: 1,
+                        selectedWorkspaceId: nil
+                    )
+                ],
+                currentWindowId: nil
+            ),
+            keyWindowId
+        )
 
         let preferred = TerminalController.preferredPanelLifecycleWindowId(
             summaries: [
@@ -11562,7 +11585,7 @@ final class TerminalControllerSidebarDedupeTests: XCTestCase {
                     selectedWorkspaceId: nil
                 )
             ],
-            currentWindowId: currentWindowId
+            currentWindowId: nil
         )
 
         XCTAssertEqual(preferred, visibleWindowId)
@@ -11607,7 +11630,25 @@ final class TerminalControllerSidebarDedupeTests: XCTestCase {
         )
         XCTAssertTrue(
             TerminalController.debugSocketCommandAllowsInAppFocusMutations(
+                commandKey: "workspace.move_to_window",
+                isV2: true
+            )
+        )
+        XCTAssertTrue(
+            TerminalController.debugSocketCommandAllowsInAppFocusMutations(
                 commandKey: "surface.move",
+                isV2: true
+            )
+        )
+        XCTAssertTrue(
+            TerminalController.debugSocketCommandAllowsInAppFocusMutations(
+                commandKey: "pane.swap",
+                isV2: true
+            )
+        )
+        XCTAssertTrue(
+            TerminalController.debugSocketCommandAllowsInAppFocusMutations(
+                commandKey: "pane.break",
                 isV2: true
             )
         )
