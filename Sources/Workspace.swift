@@ -1212,6 +1212,7 @@ final class Workspace: Identifiable, ObservableObject {
 
     /// Mapping from bonsplit TabID (surface ID) to panel UUID
     private var surfaceIdToPanelId: [TabID: UUID] = [:]
+    private var cachedSidebarOrderedPanelIds: [UUID]?
 
     /// Tab IDs that are allowed to close even if they would normally require confirmation.
     /// This is used by app-level confirmation prompts (e.g., Cmd+W "Close Tab?") so the
@@ -1290,6 +1291,10 @@ final class Workspace: Identifiable, ObservableObject {
 
     func surfaceIdFromPanelId(_ panelId: UUID) -> TabID? {
         surfaceIdToPanelId.first { $0.value == panelId }?.key
+    }
+
+    private func invalidateSidebarOrderingCache() {
+        cachedSidebarOrderedPanelIds = nil
     }
 
 
@@ -1712,6 +1717,10 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     func sidebarOrderedPanelIds() -> [UUID] {
+        if let cachedSidebarOrderedPanelIds {
+            return cachedSidebarOrderedPanelIds
+        }
+
         let paneTabs: [String: [UUID]] = Dictionary(
             uniqueKeysWithValues: bonsplitController.allPaneIds.map { paneId in
                 let panelIds = bonsplitController
@@ -1723,11 +1732,13 @@ final class Workspace: Identifiable, ObservableObject {
 
         let fallbackPanelIds = panels.keys.sorted { $0.uuidString < $1.uuidString }
         let tree = bonsplitController.treeSnapshot()
-        return SidebarBranchOrdering.orderedPanelIds(
+        let orderedPanelIds = SidebarBranchOrdering.orderedPanelIds(
             tree: tree,
             paneTabs: paneTabs,
             fallbackPanelIds: fallbackPanelIds
         )
+        cachedSidebarOrderedPanelIds = orderedPanelIds
+        return orderedPanelIds
     }
 
     func sidebarGitBranchesInDisplayOrder(orderedPanelIds: [UUID]) -> [SidebarGitBranchState] {
@@ -2022,6 +2033,7 @@ final class Workspace: Identifiable, ObservableObject {
             terminalInheritanceFontPointsByPanelId.removeValue(forKey: newPanel.id)
             return nil
         }
+        invalidateSidebarOrderingCache()
 
 #if DEBUG
         dlog("split.created pane=\(paneId.id.uuidString.prefix(5)) orientation=\(orientation)")
@@ -2091,6 +2103,7 @@ final class Workspace: Identifiable, ObservableObject {
         }
 
         surfaceIdToPanelId[newTabId] = newPanel.id
+        invalidateSidebarOrderingCache()
 
         // bonsplit's createTab may not reliably emit didSelectTab, and its internal selection
         // updates can be deferred. Force a deterministic selection + focus path so the new
@@ -2153,6 +2166,7 @@ final class Workspace: Identifiable, ObservableObject {
             panelTitles.removeValue(forKey: browserPanel.id)
             return nil
         }
+        invalidateSidebarOrderingCache()
 
         // See newTerminalSplit: suppress old view's becomeFirstResponder during reparenting.
         let previousHostedView = focusedTerminalPanel?.hostedView
@@ -2218,6 +2232,7 @@ final class Workspace: Identifiable, ObservableObject {
             let targetIndex = max(0, bonsplitController.tabs(inPane: paneId).count - 1)
             _ = bonsplitController.reorderTab(newTabId, toIndex: targetIndex)
         }
+        invalidateSidebarOrderingCache()
 
         // Match terminal behavior: enforce deterministic selection + focus.
         if shouldFocusNewTab {
@@ -2282,6 +2297,7 @@ final class Workspace: Identifiable, ObservableObject {
             panelTitles.removeValue(forKey: markdownPanel.id)
             return nil
         }
+        invalidateSidebarOrderingCache()
 
         // Suppress old view's becomeFirstResponder during reparenting.
         let previousHostedView = focusedTerminalPanel?.hostedView
@@ -2332,6 +2348,7 @@ final class Workspace: Identifiable, ObservableObject {
         }
 
         surfaceIdToPanelId[newTabId] = markdownPanel.id
+        invalidateSidebarOrderingCache()
 
         // Match terminal behavior: enforce deterministic selection + focus.
         if shouldFocusNewTab {
@@ -2358,6 +2375,7 @@ final class Workspace: Identifiable, ObservableObject {
 
         panels.removeAll(keepingCapacity: false)
         surfaceIdToPanelId.removeAll(keepingCapacity: false)
+        invalidateSidebarOrderingCache()
         panelSubscriptions.removeAll(keepingCapacity: false)
         pruneSurfaceMetadata(validSurfaceIds: [])
         restoredTerminalScrollbackByPanelId.removeAll(keepingCapacity: false)
@@ -2757,6 +2775,7 @@ final class Workspace: Identifiable, ObservableObject {
         guard let tabId = surfaceIdFromPanelId(panelId) else { return false }
         guard bonsplitController.allPaneIds.contains(paneId) else { return false }
         guard bonsplitController.moveTab(tabId, toPane: paneId, atIndex: index) else { return false }
+        invalidateSidebarOrderingCache()
 
         if focus {
             bonsplitController.focusPane(paneId)
@@ -2773,6 +2792,7 @@ final class Workspace: Identifiable, ObservableObject {
     func reorderSurface(panelId: UUID, toIndex index: Int) -> Bool {
         guard let tabId = surfaceIdFromPanelId(panelId) else { return false }
         guard bonsplitController.reorderTab(tabId, toIndex: index) else { return false }
+        invalidateSidebarOrderingCache()
 
         if let paneId = paneId(forPanelId: panelId) {
             applyTabSelection(tabId: tabId, inPane: paneId)
@@ -2918,6 +2938,7 @@ final class Workspace: Identifiable, ObservableObject {
         if let index {
             _ = bonsplitController.reorderTab(newTabId, toIndex: index)
         }
+        invalidateSidebarOrderingCache()
         syncPinnedStateForTab(newTabId, panelId: detached.panelId)
         syncUnreadBadgeStateForPanel(detached.panelId)
         normalizePinnedTabs(in: paneId)
@@ -3380,6 +3401,7 @@ final class Workspace: Identifiable, ObservableObject {
             isPinned: false
         ) {
             surfaceIdToPanelId[newTabId] = newPanel.id
+            invalidateSidebarOrderingCache()
         }
 
         return newPanel
@@ -4531,6 +4553,7 @@ extension Workspace: BonsplitDelegate {
 
         panels.removeValue(forKey: panelId)
         surfaceIdToPanelId.removeValue(forKey: tabId)
+        invalidateSidebarOrderingCache()
         panelDirectories.removeValue(forKey: panelId)
         panelGitBranches.removeValue(forKey: panelId)
         panelPullRequests.removeValue(forKey: panelId)
@@ -4620,6 +4643,7 @@ extension Workspace: BonsplitDelegate {
     }
 
     func splitTabBar(_ controller: BonsplitController, didMoveTab tab: Bonsplit.Tab, fromPane source: PaneID, toPane destination: PaneID) {
+        invalidateSidebarOrderingCache()
 #if DEBUG
         let now = ProcessInfo.processInfo.systemUptime
         let sincePrev: String
@@ -4726,6 +4750,7 @@ extension Workspace: BonsplitDelegate {
 
             let closedSet = Set(closedPanelIds)
             surfaceIdToPanelId = surfaceIdToPanelId.filter { !closedSet.contains($0.value) }
+            invalidateSidebarOrderingCache()
             recomputeListeningPorts()
 
             if let focusedPane = bonsplitController.focusedPaneId,
@@ -4765,6 +4790,7 @@ extension Workspace: BonsplitDelegate {
     }
 
     func splitTabBar(_ controller: BonsplitController, didSplitPane originalPane: PaneID, newPane: PaneID, orientation: SplitOrientation) {
+        invalidateSidebarOrderingCache()
 #if DEBUG
         let panelKindForTab: (TabID) -> String = { tabId in
             guard let panelId = self.panelIdFromSurfaceId(tabId),
