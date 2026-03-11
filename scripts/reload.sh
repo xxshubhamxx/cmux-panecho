@@ -335,6 +335,22 @@ if [[ -n "$TAG" && "$APP_NAME" != "$SEARCH_APP_NAME" ]]; then
         || /usr/libexec/PlistBuddy -c "Add :LSEnvironment:CMUX_SOCKET_PATH string \"${CMUX_SOCKET}\"" "$INFO_PLIST"
       /usr/libexec/PlistBuddy -c "Set :LSEnvironment:CMUX_DEBUG_LOG \"${CMUX_DEBUG_LOG}\"" "$INFO_PLIST" 2>/dev/null \
         || /usr/libexec/PlistBuddy -c "Add :LSEnvironment:CMUX_DEBUG_LOG string \"${CMUX_DEBUG_LOG}\"" "$INFO_PLIST"
+      for passthrough_key in \
+        CMUX_BROWSER_ENGINE \
+        CMUX_REMOTE_BROWSER_ENGINE \
+        CMUX_CEF_FORCE_SURFACE \
+        CMUX_CEF_FRAMEWORK_DIR \
+        CMUX_CEF_APP_BUNDLE \
+        CMUX_CEF_SDK_ROOT
+      do
+        passthrough_value="${!passthrough_key:-}"
+        if [[ -n "$passthrough_value" ]]; then
+          /usr/libexec/PlistBuddy -c "Set :LSEnvironment:${passthrough_key} \"${passthrough_value}\"" "$INFO_PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :LSEnvironment:${passthrough_key} string \"${passthrough_value}\"" "$INFO_PLIST"
+        else
+          /usr/libexec/PlistBuddy -c "Delete :LSEnvironment:${passthrough_key}" "$INFO_PLIST" >/dev/null 2>&1 || true
+        fi
+      done
       if [[ -S "$CMUXD_SOCKET" ]]; then
         for PID in $(lsof -t "$CMUXD_SOCKET" 2>/dev/null); do
           kill "$PID" 2>/dev/null || true

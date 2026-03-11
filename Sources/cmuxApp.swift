@@ -45,7 +45,6 @@ struct cmuxApp: App {
         }
 
         Self.configureGhosttyEnvironment()
-
         // Apply saved language preference before any UI loads
         LanguageSettings.apply(LanguageSettings.languageAtLaunch)
 
@@ -130,6 +129,14 @@ struct cmuxApp: App {
             )
             appendEnvPathIfMissing("MANPATH", path: manDir)
         }
+    }
+
+    @MainActor
+    private static func bootstrapCEFRuntimeIfRequested() {
+        let wantsLocalCEF = BrowserEngineFeatureFlags.preferredEngineKind(isRemoteWorkspace: false) == .cef
+        let wantsRemoteCEF = BrowserEngineFeatureFlags.preferredEngineKind(isRemoteWorkspace: true) == .cef
+        guard wantsLocalCEF || wantsRemoteCEF else { return }
+        _ = CEFEngineRuntime.shared.runtimeStatus(startGlobalRuntime: true)
     }
 
     private static func appendEnvPathIfMissing(_ key: String, path: String, defaultValue: String? = nil) {

@@ -14,8 +14,9 @@
 			A5001003 /* TabManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001013 /* TabManager.swift */; };
 			A5001004 /* GhosttyConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001014 /* GhosttyConfig.swift */; };
 			A5001005 /* GhosttyTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001015 /* GhosttyTerminalView.swift */; };
-			A5001532 /* TerminalWindowPortal.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001531 /* TerminalWindowPortal.swift */; };
-			A5001534 /* BrowserWindowPortal.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001533 /* BrowserWindowPortal.swift */; };
+		A5001532 /* TerminalWindowPortal.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001531 /* TerminalWindowPortal.swift */; };
+		A5001534 /* BrowserWindowPortal.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001533 /* BrowserWindowPortal.swift */; };
+		CEFA1004A1B2C3D4E5F60718 /* CEFWindowPortal.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFA2005A1B2C3D4E5F60718 /* CEFWindowPortal.swift */; };
 		A5001540 /* PortScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001541 /* PortScanner.swift */; };
 			A5001006 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A5001016 /* GhosttyKit.xcframework */; };
 		A5001007 /* TerminalController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001019 /* TerminalController.swift */; };
@@ -28,6 +29,8 @@
 		A5001402 /* BrowserPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001412 /* BrowserPanel.swift */; };
 		A5001403 /* TerminalPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001413 /* TerminalPanelView.swift */; };
 		A5001404 /* BrowserPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001414 /* BrowserPanelView.swift */; };
+		CEFA1001A1B2C3D4E5F60718 /* BrowserEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFA2001A1B2C3D4E5F60718 /* BrowserEngine.swift */; };
+		CEFA1002A1B2C3D4E5F60718 /* CEFWorkspaceBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = CEFA2003A1B2C3D4E5F60718 /* CEFWorkspaceBridge.mm */; };
 		A5001420 /* MarkdownPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001418 /* MarkdownPanel.swift */; };
 		A5001421 /* MarkdownPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001419 /* MarkdownPanelView.swift */; };
 		A5001290 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = A5001291 /* MarkdownUI */; };
@@ -92,6 +95,7 @@
 					F8000000A1B2C3D4E5F60718 /* SocketControlPasswordStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8000001A1B2C3D4E5F60718 /* SocketControlPasswordStoreTests.swift */; };
 					A5008381 /* BrowserFindJavaScriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5008380 /* BrowserFindJavaScriptTests.swift */; };
 					A5008383 /* CommandPaletteSearchEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5008382 /* CommandPaletteSearchEngineTests.swift */; };
+					CEFA1003A1B2C3D4E5F60718 /* BrowserEngineSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFA2004A1B2C3D4E5F60718 /* BrowserEngineSelectionTests.swift */; };
 		DA7A10CA710E000000000003 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = DA7A10CA710E000000000001 /* Localizable.xcstrings */; };
 		DA7A10CA710E000000000004 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = DA7A10CA710E000000000002 /* InfoPlist.xcstrings */; };
 			/* End PBXBuildFile section */
@@ -174,6 +178,10 @@
 		A5001412 /* BrowserPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrowserPanel.swift; sourceTree = "<group>"; };
 		A5001413 /* TerminalPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/TerminalPanelView.swift; sourceTree = "<group>"; };
 		A5001414 /* BrowserPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/BrowserPanelView.swift; sourceTree = "<group>"; };
+		CEFA2001A1B2C3D4E5F60718 /* BrowserEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserEngine.swift; sourceTree = "<group>"; };
+		CEFA2002A1B2C3D4E5F60718 /* CEFWorkspaceBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CEFWorkspaceBridge.h; sourceTree = "<group>"; };
+		CEFA2003A1B2C3D4E5F60718 /* CEFWorkspaceBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = CEFWorkspaceBridge.mm; sourceTree = "<group>"; };
+		CEFA2005A1B2C3D4E5F60718 /* CEFWindowPortal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CEFWindowPortal.swift; sourceTree = "<group>"; };
 		A5001415 /* PanelContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/PanelContentView.swift; sourceTree = "<group>"; };
 		A5001418 /* MarkdownPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/MarkdownPanel.swift; sourceTree = "<group>"; };
 		A5001419 /* MarkdownPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/MarkdownPanelView.swift; sourceTree = "<group>"; };
@@ -233,6 +241,7 @@
 				F8000001A1B2C3D4E5F60718 /* SocketControlPasswordStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketControlPasswordStoreTests.swift; sourceTree = "<group>"; };
 				A5008380 /* BrowserFindJavaScriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserFindJavaScriptTests.swift; sourceTree = "<group>"; };
 				A5008382 /* CommandPaletteSearchEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteSearchEngineTests.swift; sourceTree = "<group>"; };
+				CEFA2004A1B2C3D4E5F60718 /* BrowserEngineSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserEngineSelectionTests.swift; sourceTree = "<group>"; };
 					DA7A10CA710E000000000001 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		DA7A10CA710E000000000002 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -319,7 +328,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nGHOSTTY_DEST=\"${DEST}/ghostty\"\nTERMINFO_DEST=\"${DEST}/terminfo\"\nCMUX_SHELL_DEST=\"${DEST}/shell-integration\"\nSRC_SHARE=\"${SRCROOT}/ghostty/zig-out/share\"\nGHOSTTY_SRC=\"${SRC_SHARE}/ghostty\"\nTERMINFO_SRC=\"${SRC_SHARE}/terminfo\"\nFALLBACK_GHOSTTY=\"${SRCROOT}/Resources/ghostty\"\nFALLBACK_TERMINFO=\"${SRCROOT}/Resources/ghostty/terminfo\"\nTERMINFO_OVERLAY=\"${SRCROOT}/Resources/terminfo-overlay\"\nCMUX_SHELL_SRC=\"${SRCROOT}/Resources/shell-integration\"\nif [ -d \"$GHOSTTY_SRC\" ]; then\n  mkdir -p \"$GHOSTTY_DEST\"\n  rsync -a --delete \"$GHOSTTY_SRC/\" \"$GHOSTTY_DEST/\"\nelif [ -d \"$FALLBACK_GHOSTTY\" ]; then\n  mkdir -p \"$GHOSTTY_DEST\"\n  rsync -a --delete \"$FALLBACK_GHOSTTY/\" \"$GHOSTTY_DEST/\"\nfi\nif [ -d \"$TERMINFO_SRC\" ]; then\n  mkdir -p \"$TERMINFO_DEST\"\n  rsync -a --delete \"$TERMINFO_SRC/\" \"$TERMINFO_DEST/\"\nelif [ -d \"$FALLBACK_TERMINFO\" ]; then\n  mkdir -p \"$TERMINFO_DEST\"\n  rsync -a --delete \"$FALLBACK_TERMINFO/\" \"$TERMINFO_DEST/\"\nfi\n# Overlay any cmux-specific terminfo adjustments.\n# This intentionally does not use --delete so we only patch specific entries.\nif [ -d \"$TERMINFO_OVERLAY\" ]; then\n  mkdir -p \"$TERMINFO_DEST\"\n  rsync -a \"$TERMINFO_OVERLAY/\" \"$TERMINFO_DEST/\"\nfi\nif [ -d \"$CMUX_SHELL_SRC\" ]; then\n  mkdir -p \"$CMUX_SHELL_DEST\"\n  # Use '/.' so dotfiles like .zshenv/.zprofile are copied too.\n  rsync -a \"$CMUX_SHELL_SRC/.\" \"$CMUX_SHELL_DEST/\"\nfi\nINFO_PLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nCOMMIT=\"$(git -C \"${SRCROOT}\" rev-parse --short=9 HEAD 2>/dev/null || true)\"\nif [ -n \"$COMMIT\" ] && [ -f \"$INFO_PLIST\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CMUXCommit $COMMIT\" \"$INFO_PLIST\" >/dev/null 2>&1 || /usr/libexec/PlistBuddy -c \"Add :CMUXCommit string $COMMIT\" \"$INFO_PLIST\" >/dev/null 2>&1 || true\nfi\n";
+			shellScript = "set -euo pipefail\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nGHOSTTY_DEST=\"${DEST}/ghostty\"\nTERMINFO_DEST=\"${DEST}/terminfo\"\nCMUX_SHELL_DEST=\"${DEST}/shell-integration\"\nSRC_SHARE=\"${SRCROOT}/ghostty/zig-out/share\"\nGHOSTTY_SRC=\"${SRC_SHARE}/ghostty\"\nTERMINFO_SRC=\"${SRC_SHARE}/terminfo\"\nFALLBACK_GHOSTTY=\"${SRCROOT}/Resources/ghostty\"\nFALLBACK_TERMINFO=\"${SRCROOT}/Resources/ghostty/terminfo\"\nTERMINFO_OVERLAY=\"${SRCROOT}/Resources/terminfo-overlay\"\nCMUX_SHELL_SRC=\"${SRCROOT}/Resources/shell-integration\"\nif [ -d \"$GHOSTTY_SRC\" ]; then\n  mkdir -p \"$GHOSTTY_DEST\"\n  rsync -a --delete \"$GHOSTTY_SRC/\" \"$GHOSTTY_DEST/\"\nelif [ -d \"$FALLBACK_GHOSTTY\" ]; then\n  mkdir -p \"$GHOSTTY_DEST\"\n  rsync -a --delete \"$FALLBACK_GHOSTTY/\" \"$GHOSTTY_DEST/\"\nfi\nif [ -d \"$TERMINFO_SRC\" ]; then\n  mkdir -p \"$TERMINFO_DEST\"\n  rsync -a --delete \"$TERMINFO_SRC/\" \"$TERMINFO_DEST/\"\nelif [ -d \"$FALLBACK_TERMINFO\" ]; then\n  mkdir -p \"$TERMINFO_DEST\"\n  rsync -a --delete \"$FALLBACK_TERMINFO/\" \"$TERMINFO_DEST/\"\nfi\n# Overlay any cmux-specific terminfo adjustments.\n# This intentionally does not use --delete so we only patch specific entries.\nif [ -d \"$TERMINFO_OVERLAY\" ]; then\n  mkdir -p \"$TERMINFO_DEST\"\n  rsync -a \"$TERMINFO_OVERLAY/\" \"$TERMINFO_DEST/\"\nfi\nif [ -d \"$CMUX_SHELL_SRC\" ]; then\n  mkdir -p \"$CMUX_SHELL_DEST\"\n  # Use '/.' so dotfiles like .zshenv/.zprofile are copied too.\n  rsync -a \"$CMUX_SHELL_SRC/.\" \"$CMUX_SHELL_DEST/\"\nfi\n/bin/sh \"${SRCROOT}/scripts/copy_cef_runtime.sh\"\nINFO_PLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nCOMMIT=\"$(git -C \"${SRCROOT}\" rev-parse --short=9 HEAD 2>/dev/null || true)\"\nif [ -n \"$COMMIT\" ] && [ -f \"$INFO_PLIST\" ]; then\n  /usr/libexec/PlistBuddy -c \"Set :CMUXCommit $COMMIT\" \"$INFO_PLIST\" >/dev/null 2>&1 || /usr/libexec/PlistBuddy -c \"Add :CMUXCommit string $COMMIT\" \"$INFO_PLIST\" >/dev/null 2>&1 || true\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -360,6 +369,7 @@
 				A5001015 /* GhosttyTerminalView.swift */,
 				A5001531 /* TerminalWindowPortal.swift */,
 				A5001533 /* BrowserWindowPortal.swift */,
+				CEFA2005A1B2C3D4E5F60718 /* CEFWindowPortal.swift */,
 				A5001019 /* TerminalController.swift */,
 				A5001541 /* PortScanner.swift */,
 				A5001225 /* SocketControlSettings.swift */,
@@ -370,11 +380,14 @@
 				A5001301 /* SurfaceSearchOverlay.swift */,
 				A5008370 /* BrowserSearchOverlay.swift */,
 				A5008372 /* BrowserFindJavaScript.swift */,
+				CEFA2001A1B2C3D4E5F60718 /* BrowserEngine.swift */,
 				A5001410 /* Panel.swift */,
 				A5001411 /* TerminalPanel.swift */,
 				A5001412 /* BrowserPanel.swift */,
 				A5001413 /* TerminalPanelView.swift */,
 				A5001414 /* BrowserPanelView.swift */,
+				CEFA2002A1B2C3D4E5F60718 /* CEFWorkspaceBridge.h */,
+				CEFA2003A1B2C3D4E5F60718 /* CEFWorkspaceBridge.mm */,
 				A5001418 /* MarkdownPanel.swift */,
 				A5001419 /* MarkdownPanelView.swift */,
 				A5001510 /* CmuxWebView.swift */,
@@ -461,6 +474,7 @@
 					F8000001A1B2C3D4E5F60718 /* SocketControlPasswordStoreTests.swift */,
 					A5008380 /* BrowserFindJavaScriptTests.swift */,
 					A5008382 /* CommandPaletteSearchEngineTests.swift */,
+					CEFA2004A1B2C3D4E5F60718 /* BrowserEngineSelectionTests.swift */,
 				);
 				path = cmuxTests;
 				sourceTree = "<group>";
@@ -627,6 +641,7 @@
 				A5001005 /* GhosttyTerminalView.swift in Sources */,
 				A5001532 /* TerminalWindowPortal.swift in Sources */,
 				A5001534 /* BrowserWindowPortal.swift in Sources */,
+				CEFA1004A1B2C3D4E5F60718 /* CEFWindowPortal.swift in Sources */,
 				A5001007 /* TerminalController.swift in Sources */,
 				A5001540 /* PortScanner.swift in Sources */,
 				A5001226 /* SocketControlSettings.swift in Sources */,
@@ -637,11 +652,13 @@
 				A5001303 /* SurfaceSearchOverlay.swift in Sources */,
 				A5008371 /* BrowserSearchOverlay.swift in Sources */,
 				A5008373 /* BrowserFindJavaScript.swift in Sources */,
+				CEFA1001A1B2C3D4E5F60718 /* BrowserEngine.swift in Sources */,
 				A5001400 /* Panel.swift in Sources */,
 				A5001401 /* TerminalPanel.swift in Sources */,
 				A5001402 /* BrowserPanel.swift in Sources */,
 				A5001403 /* TerminalPanelView.swift in Sources */,
 				A5001404 /* BrowserPanelView.swift in Sources */,
+				CEFA1002A1B2C3D4E5F60718 /* CEFWorkspaceBridge.mm in Sources */,
 				A5001420 /* MarkdownPanel.swift in Sources */,
 				A5001421 /* MarkdownPanelView.swift in Sources */,
 				A5001500 /* CmuxWebView.swift in Sources */,
@@ -694,10 +711,11 @@
 					F5000000A1B2C3D4E5F60718 /* SessionPersistenceTests.swift in Sources */,
 					F6000000A1B2C3D4E5F60718 /* AppDelegateShortcutRoutingTests.swift in Sources */,
 					F7000000A1B2C3D4E5F60718 /* WorkspaceContentViewVisibilityTests.swift in Sources */,
-					F8000000A1B2C3D4E5F60718 /* SocketControlPasswordStoreTests.swift in Sources */,
-					A5008381 /* BrowserFindJavaScriptTests.swift in Sources */,
-					A5008383 /* CommandPaletteSearchEngineTests.swift in Sources */,
-				);
+				F8000000A1B2C3D4E5F60718 /* SocketControlPasswordStoreTests.swift in Sources */,
+				A5008381 /* BrowserFindJavaScriptTests.swift in Sources */,
+				A5008383 /* CommandPaletteSearchEngineTests.swift in Sources */,
+				CEFA1003A1B2C3D4E5F60718 /* BrowserEngineSelectionTests.swift in Sources */,
+			);
 				runOnlyForDeploymentPostprocessing = 0;
 			};
 			B9000006A1B2C3D4E5F60719 /* Sources */ = {

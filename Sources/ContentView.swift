@@ -387,9 +387,9 @@ final class FileDropOverlayView: NSView {
     private var isForwardingMouseEvent = false
     private weak var forwardedMouseDragTarget: NSView?
     private var forwardedMouseDragButton: ForwardedMouseDragButton?
-    /// The WKWebView currently receiving forwarded drag events, so we can
+    /// The browser surface currently receiving forwarded drag events, so we can
     /// synthesize draggingExited/draggingEntered as the cursor moves.
-    private weak var activeDragWebView: WKWebView?
+    private weak var activeDragBrowserSurface: NSView?
     private var lastHitTestLogSignature: String?
     private var lastDragRouteLogSignatureByPhase: [String: String] = [:]
 
@@ -542,7 +542,7 @@ final class FileDropOverlayView: NSView {
     // MARK: NSDraggingDestination – accept file drops over terminal and browser views.
     //
     // AppKit sends draggingEntered once when the drag enters this overlay, then
-    // draggingUpdated as the cursor moves within it. We track which WKWebView (if
+    // draggingUpdated as the cursor moves within it. We track which browser surface (if
     // any) is under the cursor and synthesize enter/exit calls so the browser's
     // HTML5 drag events (dragenter, dragleave, drop) fire correctly.
 
@@ -555,9 +555,9 @@ final class FileDropOverlayView: NSView {
     }
 
     override func draggingExited(_ sender: (any NSDraggingInfo)?) {
-        if let prev = activeDragWebView {
+        if let prev = activeDragBrowserSurface {
             prev.draggingExited(sender)
-            activeDragWebView = nil
+            activeDragBrowserSurface = nil
         }
     }
 
@@ -568,8 +568,8 @@ final class FileDropOverlayView: NSView {
             pasteboardTypes: types,
             hasLocalDraggingSource: hasLocalDraggingSource
         )
-        let webView = activeDragWebView
-        activeDragWebView = nil
+        let browserSurface = activeDragBrowserSurface
+        activeDragBrowserSurface = nil
         let terminal = terminalUnderPoint(sender.draggingLocation)
         let hasTerminalTarget = terminal != nil
 #if DEBUG
@@ -582,8 +582,8 @@ final class FileDropOverlayView: NSView {
         )
 #endif
         guard shouldCapture else { return false }
-        if let webView {
-            return webView.performDragOperation(sender)
+        if let browserSurface {
+            return browserSurface.performDragOperation(sender)
         }
         guard let terminal else { return false }
         return terminal.performDragOperation(sender)
@@ -597,19 +597,19 @@ final class FileDropOverlayView: NSView {
             pasteboardTypes: types,
             hasLocalDraggingSource: hasLocalDraggingSource
         )
-        let webView = shouldCapture ? webViewUnderPoint(loc) : nil
+        let browserSurface = shouldCapture ? browserSurfaceUnderPoint(loc) : nil
 
-        if let prev = activeDragWebView, prev !== webView {
+        if let prev = activeDragBrowserSurface, prev !== browserSurface {
             prev.draggingExited(sender)
-            activeDragWebView = nil
+            activeDragBrowserSurface = nil
         }
 
-        if let webView {
-            if activeDragWebView !== webView {
-                activeDragWebView = webView
-                return webView.draggingEntered(sender)
+        if let browserSurface {
+            if activeDragBrowserSurface !== browserSurface {
+                activeDragBrowserSurface = browserSurface
+                return browserSurface.draggingEntered(sender)
             }
-            return webView.draggingUpdated(sender)
+            return browserSurface.draggingUpdated(sender)
         }
 
         let hasTerminalTarget = terminalUnderPoint(loc) != nil
@@ -631,8 +631,16 @@ final class FileDropOverlayView: NSView {
         return types.map(\.rawValue).joined(separator: ",")
     }
 
-    /// Hit-tests the window to find a WKWebView (browser panel) under the cursor.
-    func webViewUnderPoint(_ windowPoint: NSPoint) -> WKWebView? {
+    private func isBrowserSurfaceView(_ view: NSView) -> Bool {
+        contentViewIsBrowserSurfaceView(view)
+    }
+
+    /// Hit-tests the window to find a browser surface under the cursor.
+    func browserSurfaceUnderPoint(_ windowPoint: NSPoint) -> NSView? {
+        if let window,
+           let portalHostedView = CEFWindowPortalRegistry.hostedViewAtWindowPoint(windowPoint, in: window) {
+            return portalHostedView
+        }
         if let window,
            let portalWebView = BrowserWindowPortalRegistry.webViewAtWindowPoint(windowPoint, in: window) {
             return portalWebView
@@ -646,7 +654,7 @@ final class FileDropOverlayView: NSView {
 
         var current: NSView? = hitView
         while let view = current {
-            if let webView = view as? WKWebView { return webView }
+            if isBrowserSurfaceView(view) { return view }
             current = view.superview
         }
         return nil
@@ -1141,18 +1149,29 @@ private func commandPaletteWindowOverlayController(for window: NSWindow) -> Wind
     return controller
 }
 
-private func commandPaletteOwningWebView(for responder: NSResponder?) -> WKWebView? {
+private func commandPaletteIsBrowserSurfaceView(_ view: NSView) -> Bool {
+    contentViewIsBrowserSurfaceView(view)
+}
+
+private func contentViewIsBrowserSurfaceView(_ view: NSView) -> Bool {
+    if view is WKWebView {
+        return true
+    }
+    return view is any CMUXBrowserSurfaceFocusControlling
+}
+
+private func commandPaletteOwningBrowserSurface(for responder: NSResponder?) -> NSView? {
     guard let responder else { return nil }
 
-    if let webView = responder as? WKWebView {
-        return webView
+    if let view = responder as? NSView, commandPaletteIsBrowserSurfaceView(view) {
+        return view
     }
 
     if let view = responder as? NSView {
         var current: NSView? = view
         while let candidate = current {
-            if let webView = candidate as? WKWebView {
-                return webView
+            if commandPaletteIsBrowserSurfaceView(candidate) {
+                return candidate
             }
             current = candidate.superview
         }
@@ -1160,14 +1179,14 @@ private func commandPaletteOwningWebView(for responder: NSResponder?) -> WKWebVi
 
     if let textView = responder as? NSTextView,
        let delegateView = textView.delegate as? NSView,
-       let webView = commandPaletteOwningWebView(for: delegateView) {
-        return webView
+       let browserSurface = commandPaletteOwningBrowserSurface(for: delegateView) {
+        return browserSurface
     }
 
     var currentResponder = responder.nextResponder
     while let next = currentResponder {
-        if let webView = commandPaletteOwningWebView(for: next) {
-            return webView
+        if let browserSurface = commandPaletteOwningBrowserSurface(for: next) {
+            return browserSurface
         }
         currentResponder = next.nextResponder
     }
@@ -1694,7 +1713,7 @@ struct ContentView: View {
         }
 
         // Use live global pointer location instead of per-event coordinates.
-        // Overlapping tracking areas (notably WKWebView) can deliver stale/jittery
+        // Overlapping tracking areas from browser surfaces can deliver stale/jittery
         // event locations during cursor updates, which causes visible cursor flicker.
         let pointInWindow = window.convertPoint(fromScreen: NSEvent.mouseLocation)
         let pointInContent = contentView.convert(pointInWindow, from: nil)
@@ -1915,7 +1934,7 @@ struct ContentView: View {
                     let shouldPrimeInBackground = tabManager.pendingBackgroundWorkspaceLoadIds.contains(tab.id)
                     // Keep the retiring workspace visible during handoff, but never input-active.
                     // Allowing both selected+retiring workspaces to be input-active lets the
-                    // old workspace steal first responder (notably with WKWebView), which can
+                    // old workspace steal first responder (notably with browser surfaces), which can
                     // delay handoff completion and make browser returns feel laggy.
                     let isInputActive = isSelectedWorkspace
                     let isVisible = isSelectedWorkspace || isRetiringWorkspace
@@ -2322,12 +2341,12 @@ struct ContentView: View {
         })
 
         view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .browserDidBecomeFirstResponderWebView)) { notification in
-            guard let webView = notification.object as? WKWebView,
+            guard let browserSurface = notification.object as? NSView,
                   let selectedTabId = tabManager.selectedTabId,
                   let selectedWorkspace = tabManager.selectedWorkspace,
                   let focusedPanelId = selectedWorkspace.focusedPanelId,
                   let focusedBrowser = selectedWorkspace.browserPanel(for: focusedPanelId),
-                  focusedBrowser.webView === webView else { return }
+                  focusedBrowser.browserSurfaceView() === browserSurface else { return }
             completeWorkspaceHandoffIfNeeded(focusedTabId: selectedTabId, reason: "browser_first_responder")
         })
 
@@ -5498,6 +5517,11 @@ struct ContentView: View {
             return target
         }
 
+        if let browserSurface = CEFWindowPortalRegistry.hostedViewAtWindowPoint(windowPoint, in: window),
+           let target = commandPaletteBrowserFocusTarget(for: browserSurface) {
+            return target
+        }
+
         if let webView = BrowserWindowPortalRegistry.webViewAtWindowPoint(windowPoint, in: window),
            let target = commandPaletteBrowserFocusTarget(for: webView) {
             return target
@@ -5529,23 +5553,23 @@ struct ContentView: View {
             )
         }
 
-        if let webView = commandPaletteOwningWebView(for: responder),
-           let target = commandPaletteBrowserFocusTarget(for: webView) {
+        if let browserSurface = commandPaletteOwningBrowserSurface(for: responder),
+           let target = commandPaletteBrowserFocusTarget(for: browserSurface) {
             return target
         }
 
         return nil
     }
 
-    private func commandPaletteBrowserFocusTarget(for webView: WKWebView) -> CommandPaletteRestoreFocusTarget? {
+    private func commandPaletteBrowserFocusTarget(for browserSurface: NSView) -> CommandPaletteRestoreFocusTarget? {
         if let selectedWorkspace = tabManager.selectedWorkspace,
-           let target = commandPaletteBrowserFocusTarget(in: selectedWorkspace, for: webView) {
+           let target = commandPaletteBrowserFocusTarget(in: selectedWorkspace, for: browserSurface) {
             return target
         }
 
         let selectedWorkspaceId = tabManager.selectedTabId
         for workspace in tabManager.tabs where workspace.id != selectedWorkspaceId {
-            if let target = commandPaletteBrowserFocusTarget(in: workspace, for: webView) {
+            if let target = commandPaletteBrowserFocusTarget(in: workspace, for: browserSurface) {
                 return target
             }
         }
@@ -5555,11 +5579,11 @@ struct ContentView: View {
 
     private func commandPaletteBrowserFocusTarget(
         in workspace: Workspace,
-        for webView: WKWebView
+        for browserSurface: NSView
     ) -> CommandPaletteRestoreFocusTarget? {
         for (panelId, panel) in workspace.panels {
             guard let browserPanel = panel as? BrowserPanel,
-                  browserPanel.webView === webView else {
+                  browserPanel.browserSurfaceView() === browserSurface else {
                 continue
             }
 

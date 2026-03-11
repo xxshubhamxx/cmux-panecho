@@ -381,9 +381,9 @@ struct BrowserPanelView: View {
             addressBarHeight = height
         }
         .onReceive(NotificationCenter.default.publisher(for: .webViewDidReceiveClick).filter { [weak panel] note in
-            // Only handle clicks from our own webview.
-            guard let webView = note.object as? CmuxWebView else { return false }
-            return webView === panel?.webView
+            // Only handle clicks from our own browser surface.
+            guard let browserSurface = note.object as? NSView else { return false }
+            return browserSurface === panel?.browserSurfaceView()
         }) { _ in
 #if DEBUG
             dlog(
@@ -418,7 +418,7 @@ struct BrowserPanelView: View {
             syncURLFromPanel()
             // If the browser surface is focused but has no URL loaded yet, auto-focus the omnibar.
             autoFocusOmnibarIfBlank()
-            syncWebViewResponderPolicyWithViewState(reason: "onAppear")
+            syncBrowserSurfaceResponderPolicyWithViewState(reason: "onAppear")
             BrowserHistoryStore.shared.loadIfNeeded()
 #if DEBUG
             logBrowserFocusState(event: "view.onAppear")
@@ -468,7 +468,7 @@ struct BrowserPanelView: View {
                 hideSuggestions()
                 setAddressBarFocused(false, reason: "panelFocus.onChange.unfocused")
             }
-            syncWebViewResponderPolicyWithViewState(reason: "panelFocusChanged")
+            syncBrowserSurfaceResponderPolicyWithViewState(reason: "panelFocusChanged")
         }
         .onChange(of: addressBarFocused) { focused in
 #if DEBUG
@@ -505,7 +505,7 @@ struct BrowserPanelView: View {
                 }
                 inlineCompletion = nil
             }
-            syncWebViewResponderPolicyWithViewState(reason: "addressBarFocusChanged")
+            syncBrowserSurfaceResponderPolicyWithViewState(reason: "addressBarFocusChanged")
 #if DEBUG
             logBrowserFocusState(event: "addressBarFocus.onChange.applied")
 #endif
@@ -804,30 +804,8 @@ struct BrowserPanelView: View {
     private var webView: some View {
         Group {
             if panel.shouldRenderWebView {
-                WebViewRepresentable(
-                    panel: panel,
-                    paneId: paneId,
-                    shouldAttachWebView: isVisibleInUI && isCurrentPaneOwner,
-                    shouldFocusWebView: isFocused && !addressBarFocused,
-                    isPanelFocused: isFocused,
-                    portalZPriority: portalPriority,
-                    paneDropZone: paneDropZone,
-                    searchOverlay: panel.searchState.map { searchState in
-                        BrowserPortalSearchOverlayConfiguration(
-                            panelId: panel.id,
-                            searchState: searchState,
-                            onNext: { panel.findNext() },
-                            onPrevious: { panel.findPrevious() },
-                            onClose: { panel.hideFind() }
-                        )
-                    },
-                    paneTopChromeHeight: addressBarHeight
-                )
+                browserSurfaceView
                 .accessibilityIdentifier("BrowserWebViewSurface")
-                // Keep the host stable for normal pane churn, but force a remount when
-                // BrowserPanel replaces its underlying WKWebView after process termination
-                // or when the browser moves to a different Bonsplit pane host.
-                .id("\(panel.webViewInstanceID.uuidString)-\(paneId.id.uuidString)")
                 .contentShape(Rectangle())
                 .accessibilityIdentifier(browserContentAccessibilityIdentifier)
                 .simultaneousGesture(TapGesture().onEnded {
@@ -872,6 +850,43 @@ struct BrowserPanelView: View {
         }
     }
 
+    @ViewBuilder
+    private var browserSurfaceView: some View {
+        if panel.usesCEFSurface {
+            CEFViewRepresentable(
+                panel: panel,
+                paneId: paneId,
+                shouldAttachHostedView: isVisibleInUI && isCurrentPaneOwner,
+                portalZPriority: portalPriority
+            )
+                .id("cef-\(panel.id.uuidString)-\(paneId.id.uuidString)")
+        } else {
+            WebViewRepresentable(
+                panel: panel,
+                paneId: paneId,
+                shouldAttachWebView: isVisibleInUI && isCurrentPaneOwner,
+                shouldFocusWebView: isFocused && !addressBarFocused,
+                isPanelFocused: isFocused,
+                portalZPriority: portalPriority,
+                paneDropZone: paneDropZone,
+                searchOverlay: panel.searchState.map { searchState in
+                    BrowserPortalSearchOverlayConfiguration(
+                        panelId: panel.id,
+                        searchState: searchState,
+                        onNext: { panel.findNext() },
+                        onPrevious: { panel.findPrevious() },
+                        onClose: { panel.hideFind() }
+                    )
+                },
+                paneTopChromeHeight: addressBarHeight
+            )
+            // Keep the host stable for normal pane churn, but force a remount when
+            // BrowserPanel replaces its underlying WKWebView after process termination
+            // or when the browser moves to a different Bonsplit pane host.
+            .id("\(panel.webViewInstanceID.uuidString)-\(paneId.id.uuidString)")
+        }
+    }
+
     private func focusFlashAnimation(for curve: FocusFlashCurve, duration: TimeInterval) -> Animation {
         switch curve {
         case .easeIn:
@@ -881,19 +896,11 @@ struct BrowserPanelView: View {
         }
     }
 
-    private func syncWebViewResponderPolicyWithViewState(reason: String) {
-        guard let cmuxWebView = panel.webView as? CmuxWebView else { return }
-        let next = isFocused && !panel.shouldSuppressWebViewFocus()
-        if cmuxWebView.allowsFirstResponderAcquisition != next {
-#if DEBUG
-            dlog(
-                "browser.focus.policy.resync panel=\(panel.id.uuidString.prefix(5)) " +
-                "web=\(ObjectIdentifier(cmuxWebView)) old=\(cmuxWebView.allowsFirstResponderAcquisition ? 1 : 0) " +
-                "new=\(next ? 1 : 0) reason=\(reason)"
-            )
-#endif
-        }
-        cmuxWebView.allowsFirstResponderAcquisition = next
+    private func syncBrowserSurfaceResponderPolicyWithViewState(reason: String) {
+        panel.syncBrowserSurfaceFirstResponderPolicy(
+            isPanelFocused: isFocused,
+            reason: reason
+        )
     }
 
     private func setAddressBarFocused(_ focused: Bool, reason: String) {
@@ -938,12 +945,12 @@ struct BrowserPanelView: View {
     }
 
     private func shouldApplyAddressBarExitFallback(in window: NSWindow) -> Bool {
-        panel.webView.window === window && isPanelFocusedInModel()
+        panel.browserSurfaceWindow() === window && isPanelFocusedInModel()
     }
 
 #if DEBUG
     private func browserFocusWindow() -> NSWindow? {
-        panel.webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+        panel.browserSurfaceWindow() ?? NSApp.keyWindow ?? NSApp.mainWindow
     }
 
     private func browserFocusResponderDescription(_ responder: NSResponder?) -> String {
@@ -955,7 +962,7 @@ struct BrowserPanelView: View {
         let window = browserFocusWindow()
         let firstResponder = window?.firstResponder
         let firstResponderType = browserFocusResponderDescription(firstResponder)
-        let webResponder = browserFocusResponderChainContains(firstResponder, target: panel.webView) ? 1 : 0
+        let webResponder = panel.isBrowserSurfaceFocused() ? 1 : 0
         var line =
             "browser.focus.trace event=\(event) panel=\(panel.id.uuidString.prefix(5)) " +
             "panelFocused=\(isFocused ? 1 : 0) addrFocused=\(addressBarFocused ? 1 : 0) " +
@@ -981,7 +988,7 @@ struct BrowserPanelView: View {
     private func isCommandPaletteVisibleForPanelWindow() -> Bool {
         guard let app = AppDelegate.shared else { return false }
 
-        if let window = panel.webView.window, app.isCommandPaletteVisible(for: window) {
+        if let window = panel.browserSurfaceWindow(), app.isCommandPaletteVisible(for: window) {
             return true
         }
 
@@ -1087,8 +1094,7 @@ struct BrowserPanelView: View {
 
     /// Treat a WebView with no URL (or about:blank) as "blank" for UX purposes.
     private func isWebViewBlank() -> Bool {
-        guard let url = panel.webView.url else { return true }
-        return url.absoluteString == "about:blank"
+        panel.isBrowserSurfaceBlank()
     }
 
     private func autoFocusOmnibarIfBlank() {
@@ -1118,7 +1124,7 @@ struct BrowserPanelView: View {
             return
         }
         // If a real navigation is underway (e.g. open_browser https://...), don't steal focus.
-        guard !panel.webView.isLoading else {
+        guard !panel.isBrowserSurfaceLoading() else {
 #if DEBUG
             logBrowserFocusState(event: "addressBarFocus.autoFocus.skip", detail: "reason=webview_loading")
 #endif
@@ -1496,11 +1502,11 @@ struct BrowserPanelView: View {
             // This transition is stateful: drop omnibar focus suppression before
             // attempting responder handoff so WKWebView can actually become first responder.
             panel.endSuppressWebViewFocusForAddressBar()
-            syncWebViewResponderPolicyWithViewState(reason: "effects.blurToWebView.preHandoff")
+            syncBrowserSurfaceResponderPolicyWithViewState(reason: "effects.blurToWebView.preHandoff")
             setAddressBarFocused(false, reason: "effects.blurToWebView")
             DispatchQueue.main.async {
-                guard let window = panel.webView.window,
-                      !panel.webView.isHiddenOrHasHiddenAncestor else { return }
+                guard let window = panel.browserSurfaceWindow(),
+                      !panel.isBrowserSurfaceHidden() else { return }
                 guard shouldApplyAddressBarExitFallback(in: window) else {
 #if DEBUG
                     dlog(
@@ -1511,9 +1517,9 @@ struct BrowserPanelView: View {
                     NotificationCenter.default.post(name: .browserDidExitAddressBar, object: panel.id)
                     return
                 }
-                syncWebViewResponderPolicyWithViewState(reason: "effects.blurToWebView.handoff")
+                syncBrowserSurfaceResponderPolicyWithViewState(reason: "effects.blurToWebView.handoff")
                 panel.clearWebViewFocusSuppression()
-                let focusedWebView = window.makeFirstResponder(panel.webView)
+                let focusedWebView = panel.focusBrowserSurface()
 #if DEBUG
                 dlog(
                     "browser.focus.addressBar.exit.handoff panel=\(panel.id.uuidString.prefix(5)) " +
@@ -1531,10 +1537,9 @@ struct BrowserPanelView: View {
                         NotificationCenter.default.post(name: .browserDidExitAddressBar, object: panel.id)
                         return
                     }
-                    let hasWebViewResponder =
-                        browserFocusResponderChainContains(window.firstResponder, target: panel.webView)
+                    let hasWebViewResponder = panel.isBrowserSurfaceFocused()
                     if !hasWebViewResponder {
-                        let fallbackFocusedWebView = window.makeFirstResponder(panel.webView)
+                        let fallbackFocusedWebView = panel.focusBrowserSurface()
 #if DEBUG
                         dlog(
                             "browser.focus.addressBar.exit.handoff panel=\(panel.id.uuidString.prefix(5)) " +
@@ -4304,7 +4309,10 @@ struct WebViewRepresentable: NSViewRepresentable {
                 anchorView.trailingAnchor.constraint(equalTo: host.trailingAnchor),
             ])
         }
-        host.layoutSubtreeIfNeeded()
+        // Never force a synchronous layout here. SwiftUI can call into this
+        // while the host view is already being laid out, and AppKit treats a
+        // nested layoutSubtreeIfNeeded as illegal reentrant layout.
+        host.needsLayout = true
     }
 
     private func updateUsingWindowPortal(_ nsView: NSView, context: Context, webView: WKWebView) -> Bool {
@@ -4333,10 +4341,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             // Only the host that currently owns the portal is allowed to hide it.
             // Older keep-alive hosts can still receive updates after a new owner binds.
             if didReleasePortalHost {
-                BrowserWindowPortalRegistry.hide(
-                    webView: webView,
-                    source: "viewStateChanged.\(portalHideReason)"
-                )
+                panel.hideBrowserPortalView(source: "viewStateChanged.\(portalHideReason)")
             }
         } else {
             didReleasePortalHost = false
@@ -4519,10 +4524,10 @@ struct WebViewRepresentable: NSViewRepresentable {
 
         Self.clearPortalCallbacks(for: nsView)
         let hostOwnsPortal = updateUsingWindowPortal(nsView, context: context, webView: webView)
-        Self.applyWebViewFirstResponderPolicy(
+        Self.applyBrowserSurfaceFirstResponderPolicy(
             panel: panel,
-            webView: webView,
-            isPanelFocused: isPanelFocused && isCurrentPaneOwner && hostOwnsPortal
+            isPanelFocused: isPanelFocused && isCurrentPaneOwner && hostOwnsPortal,
+            reason: "webViewRepresentable.update"
         )
 
         Self.applyFocus(
@@ -4592,24 +4597,15 @@ struct WebViewRepresentable: NSViewRepresentable {
         }
     }
 
-    private static func applyWebViewFirstResponderPolicy(
+    private static func applyBrowserSurfaceFirstResponderPolicy(
         panel: BrowserPanel,
-        webView: WKWebView,
-        isPanelFocused: Bool
+        isPanelFocused: Bool,
+        reason: String
     ) {
-        guard let cmuxWebView = webView as? CmuxWebView else { return }
-        let next = isPanelFocused && !panel.shouldSuppressWebViewFocus()
-        if cmuxWebView.allowsFirstResponderAcquisition != next {
-#if DEBUG
-            dlog(
-                "browser.focus.policy panel=\(panel.id.uuidString.prefix(5)) " +
-                "web=\(ObjectIdentifier(cmuxWebView)) old=\(cmuxWebView.allowsFirstResponderAcquisition ? 1 : 0) " +
-                "new=\(next ? 1 : 0) isPanelFocused=\(isPanelFocused ? 1 : 0) " +
-                "suppress=\(panel.shouldSuppressWebViewFocus() ? 1 : 0)"
-            )
-#endif
-        }
-        cmuxWebView.allowsFirstResponderAcquisition = next
+        panel.syncBrowserSurfaceFirstResponderPolicy(
+            isPanelFocused: isPanelFocused,
+            reason: reason
+        )
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -4667,5 +4663,262 @@ struct WebViewRepresentable: NSViewRepresentable {
             panelId: panel.id,
             paneId: paneId
         )
+    }
+}
+
+struct CEFViewRepresentable: NSViewRepresentable {
+    let panel: BrowserPanel
+    let paneId: PaneID
+    let shouldAttachHostedView: Bool
+    let portalZPriority: Int
+
+    final class HostView: NSView {
+        var onDidMoveToWindow: (() -> Void)?
+        var onGeometryChanged: (() -> Void)?
+        private(set) var geometryRevision: UInt64 = 0
+        private var lastGeometryState: GeometryState?
+
+        override var isOpaque: Bool { false }
+
+        private struct GeometryState: Equatable {
+            let frame: CGRect
+            let bounds: CGRect
+            let windowNumber: Int?
+            let superviewID: ObjectIdentifier?
+        }
+
+        private func currentGeometryState() -> GeometryState {
+            GeometryState(
+                frame: frame,
+                bounds: bounds,
+                windowNumber: window?.windowNumber,
+                superviewID: superview.map(ObjectIdentifier.init)
+            )
+        }
+
+        private func notifyGeometryChangedIfNeeded() {
+            let next = currentGeometryState()
+            guard next != lastGeometryState else { return }
+            lastGeometryState = next
+            geometryRevision &+= 1
+            onGeometryChanged?()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            onDidMoveToWindow?()
+            notifyGeometryChangedIfNeeded()
+        }
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            notifyGeometryChangedIfNeeded()
+        }
+
+        override func layout() {
+            super.layout()
+            notifyGeometryChangedIfNeeded()
+        }
+
+        override func setFrameOrigin(_ newOrigin: NSPoint) {
+            super.setFrameOrigin(newOrigin)
+            notifyGeometryChangedIfNeeded()
+        }
+
+        override func setFrameSize(_ newSize: NSSize) {
+            super.setFrameSize(newSize)
+            notifyGeometryChangedIfNeeded()
+        }
+    }
+
+    final class Coordinator {
+        weak var panel: BrowserPanel?
+        weak var hostedView: NSView?
+        var attachGeneration: Int = 0
+        var desiredVisibleInUI: Bool = true
+        var desiredPortalZPriority: Int = 0
+        var lastPortalHostId: ObjectIdentifier?
+        var lastSynchronizedHostGeometryRevision: UInt64 = 0
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = HostView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
+        return view
+    }
+
+    func makeCoordinator() -> Coordinator {
+        let coordinator = Coordinator()
+        coordinator.panel = panel
+        return coordinator
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let host = nsView as? HostView else { return }
+        guard let browserView = panel.makeCEFHostedView() else {
+            for subview in host.subviews {
+                subview.removeFromSuperview()
+            }
+            return
+        }
+
+        let coordinator = context.coordinator
+        if let previousHostedView = coordinator.hostedView, previousHostedView !== browserView {
+            CEFWindowPortalRegistry.detach(hostedView: previousHostedView)
+            coordinator.lastPortalHostId = nil
+            coordinator.lastSynchronizedHostGeometryRevision = 0
+        }
+        coordinator.panel = panel
+        coordinator.hostedView = browserView
+        coordinator.attachGeneration += 1
+        coordinator.desiredVisibleInUI = shouldAttachHostedView
+        coordinator.desiredPortalZPriority = portalZPriority
+        let generation = coordinator.attachGeneration
+        let hostId = ObjectIdentifier(host)
+        let portalAnchorView = panel.portalAnchorView
+        let bindHostedViewIfReady: () -> Void = { [weak host, weak browserView, weak coordinator, weak browserPanel = panel] in
+            guard let host, let browserView, let coordinator, let browserPanel else { return }
+            guard coordinator.attachGeneration == generation else { return }
+            guard browserPanel.claimPortalHost(
+                hostId: ObjectIdentifier(host),
+                paneId: paneId,
+                inWindow: host.window != nil,
+                bounds: host.bounds,
+                reason: "cefBindReady"
+            ) else { return }
+            guard host.window != nil else { return }
+            Self.installPortalAnchorView(portalAnchorView, in: host)
+            CEFWindowPortalRegistry.bind(
+                hostedView: browserView,
+                to: portalAnchorView,
+                visibleInUI: coordinator.desiredVisibleInUI,
+                zPriority: coordinator.desiredPortalZPriority
+            )
+            coordinator.lastPortalHostId = ObjectIdentifier(host)
+            coordinator.lastSynchronizedHostGeometryRevision = host.geometryRevision
+        }
+
+        let didReleasePortalHost: Bool
+        if !shouldAttachHostedView {
+            didReleasePortalHost = panel.releasePortalHostIfOwned(
+                hostId: hostId,
+                reason: "cefHidden"
+            )
+            if didReleasePortalHost {
+                panel.hideBrowserPortalView(source: "cefHidden")
+            }
+        } else {
+            didReleasePortalHost = false
+        }
+
+        let portalHostAccepted =
+            shouldAttachHostedView &&
+            panel.claimPortalHost(
+                hostId: hostId,
+                paneId: paneId,
+                inWindow: host.window != nil,
+                bounds: host.bounds,
+                reason: "cefUpdate"
+            )
+
+        if host.window != nil, portalHostAccepted {
+            Self.installPortalAnchorView(portalAnchorView, in: host)
+        }
+
+        host.onDidMoveToWindow = {
+            bindHostedViewIfReady()
+        }
+
+        host.onGeometryChanged = { [weak host, weak browserView, weak coordinator, weak portalAnchorView, weak browserPanel = panel] in
+            guard let host, let browserView, let coordinator, let portalAnchorView, let browserPanel else { return }
+            guard coordinator.attachGeneration == generation else { return }
+            guard browserPanel.claimPortalHost(
+                hostId: ObjectIdentifier(host),
+                paneId: paneId,
+                inWindow: host.window != nil,
+                bounds: host.bounds,
+                reason: "cefGeometryChanged"
+            ) else { return }
+            guard host.window != nil else { return }
+            let nextHostId = ObjectIdentifier(host)
+            Self.installPortalAnchorView(portalAnchorView, in: host)
+            if coordinator.lastPortalHostId != nextHostId ||
+                !CEFWindowPortalRegistry.isHostedView(browserView, boundTo: portalAnchorView) {
+                CEFWindowPortalRegistry.bind(
+                    hostedView: browserView,
+                    to: portalAnchorView,
+                    visibleInUI: coordinator.desiredVisibleInUI,
+                    zPriority: coordinator.desiredPortalZPriority
+                )
+                coordinator.lastPortalHostId = nextHostId
+            }
+            CEFWindowPortalRegistry.synchronizeForAnchor(portalAnchorView)
+            coordinator.lastSynchronizedHostGeometryRevision = host.geometryRevision
+        }
+
+        if host.window != nil, portalHostAccepted {
+            let geometryRevision = host.geometryRevision
+            let shouldBindNow =
+                coordinator.lastPortalHostId != hostId ||
+                !CEFWindowPortalRegistry.isHostedView(browserView, boundTo: portalAnchorView)
+            if shouldBindNow {
+                Self.installPortalAnchorView(portalAnchorView, in: host)
+                CEFWindowPortalRegistry.bind(
+                    hostedView: browserView,
+                    to: portalAnchorView,
+                    visibleInUI: coordinator.desiredVisibleInUI,
+                    zPriority: coordinator.desiredPortalZPriority
+                )
+                coordinator.lastPortalHostId = hostId
+                coordinator.lastSynchronizedHostGeometryRevision = geometryRevision
+            } else if coordinator.lastSynchronizedHostGeometryRevision != geometryRevision {
+                CEFWindowPortalRegistry.synchronizeForAnchor(portalAnchorView)
+                coordinator.lastSynchronizedHostGeometryRevision = geometryRevision
+            }
+        }
+
+        DispatchQueue.main.async {
+            bindHostedViewIfReady()
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.attachGeneration += 1
+        guard let host = nsView as? HostView else { return }
+        host.onDidMoveToWindow = nil
+        host.onGeometryChanged = nil
+        if let panel = coordinator.panel {
+            panel.releasePortalHostIfOwned(
+                hostId: ObjectIdentifier(host),
+                reason: "cefDismantle"
+            )
+        }
+        if let hostedView = coordinator.hostedView {
+            coordinator.panel?.hideBrowserPortalView(source: "cefDismantle")
+            if coordinator.panel == nil {
+                CEFWindowPortalRegistry.hide(hostedView: hostedView)
+            }
+        }
+        coordinator.lastPortalHostId = nil
+        coordinator.lastSynchronizedHostGeometryRevision = 0
+    }
+
+    private static func installPortalAnchorView(_ anchorView: NSView, in host: NSView) {
+        guard host.window != nil else { return }
+        if anchorView.superview !== host {
+            anchorView.removeFromSuperview()
+            anchorView.translatesAutoresizingMaskIntoConstraints = false
+            host.addSubview(anchorView)
+            NSLayoutConstraint.activate([
+                anchorView.topAnchor.constraint(equalTo: host.topAnchor),
+                anchorView.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+                anchorView.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+                anchorView.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            ])
+        }
+        // Let the next normal layout pass size the anchor. CEF can crash if we
+        // trigger AppKit reentrant layout while mounting the hosted view.
+        host.needsLayout = true
     }
 }

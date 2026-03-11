@@ -785,7 +785,7 @@ final class SocketClient {
         }
     }
 
-    func send(command: String) throws -> String {
+    func send(command: String, timeoutSeconds: TimeInterval? = nil) throws -> String {
         guard socketFD >= 0 else { throw CLIError(message: "Not connected") }
         let payload = command + "\n"
         try payload.withCString { ptr in
@@ -798,6 +798,7 @@ final class SocketClient {
         var data = Data()
         var sawNewline = false
         let start = Date()
+        let timeout = timeoutSeconds ?? Self.responseTimeoutSeconds
 
         while true {
             var pollFD = pollfd(fd: socketFD, events: Int16(POLLIN), revents: 0)
@@ -809,7 +810,7 @@ final class SocketClient {
                 if sawNewline {
                     break
                 }
-                if Date().timeIntervalSince(start) > Self.responseTimeoutSeconds {
+                if Date().timeIntervalSince(start) > timeout {
                     throw CLIError(message: "Command timed out")
                 }
                 continue
@@ -835,7 +836,7 @@ final class SocketClient {
         return response
     }
 
-    func sendV2(method: String, params: [String: Any] = [:]) throws -> [String: Any] {
+    func sendV2(method: String, params: [String: Any] = [:], timeoutSeconds: TimeInterval? = nil) throws -> [String: Any] {
         let request: [String: Any] = [
             "id": UUID().uuidString,
             "method": method,
@@ -850,7 +851,7 @@ final class SocketClient {
             throw CLIError(message: "Failed to encode v2 request")
         }
 
-        let raw = try send(command: requestLine)
+        let raw = try send(command: requestLine, timeoutSeconds: timeoutSeconds)
 
         // The server may return plain-text errors (e.g., "ERROR: Access denied ...")
         // before the JSON protocol starts. Surface these directly instead of letting
@@ -2750,7 +2751,11 @@ struct CMUXCLI {
                 "controlPath=\(sshOptionValue(named: "ControlPath", in: remoteSSHOptions) ?? "nil") " +
                 "sshOptions=\(remoteSSHOptions.joined(separator: "|"))"
             )
-            configuredPayload = try client.sendV2(method: "workspace.remote.configure", params: configureParams)
+            configuredPayload = try client.sendV2(
+                method: "workspace.remote.configure",
+                params: configureParams,
+                timeoutSeconds: 45.0
+            )
             var selectParams: [String: Any] = ["workspace_id": workspaceId]
             if let workspaceWindowId, !workspaceWindowId.isEmpty {
                 selectParams["window_id"] = workspaceWindowId

@@ -1525,6 +1525,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var browserOmnibarRepeatTickWorkItem: DispatchWorkItem?
     private var browserOmnibarRepeatKeyCode: UInt16?
     private var browserOmnibarRepeatDelta: Int = 0
+    private struct PendingSplitShortcutFocus {
+        let panelId: UUID
+        let windowNumber: Int?
+        let armedAt: TimeInterval
+        let triggerKeyCode: UInt16
+    }
+    private struct RecentSplitShortcutControlDGuard {
+        let panelId: UUID
+        let windowNumber: Int?
+        let triggerKeyCode: UInt16
+        let expiresAt: TimeInterval
+    }
+    private struct RecentControlModifierActivation {
+        let windowNumber: Int?
+        let at: TimeInterval
+    }
+    private var pendingSplitShortcutFocus: PendingSplitShortcutFocus?
+    private var pendingSplitShortcutFocusFallbackWorkItem: DispatchWorkItem?
+    private var recentSplitShortcutControlDGuard: RecentSplitShortcutControlDGuard?
+    private var recentControlModifierActivation: RecentControlModifierActivation?
     private var browserAddressBarFocusObserver: NSObjectProtocol?
     private var browserAddressBarBlurObserver: NSObjectProtocol?
     private let updateController = UpdateController()
@@ -3676,7 +3696,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func isFocusStealingResponderWhileCommandPaletteVisible(_ responder: NSResponder) -> Bool {
-        if responder is GhosttyNSView || responder is WKWebView {
+        if responder is GhosttyNSView {
+            return true
+        }
+        if let view = responder as? NSView, NSWindow.cmuxIsBrowserSurfaceView(view) {
             return true
         }
 
@@ -3694,12 +3717,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func isTerminalOrBrowserView(_ view: NSView) -> Bool {
-        if view is GhosttyNSView || view is WKWebView {
+        if view is GhosttyNSView || NSWindow.cmuxIsBrowserSurfaceView(view) {
             return true
         }
         var current: NSView? = view.superview
         while let candidate = current {
-            if candidate is GhosttyNSView || candidate is WKWebView {
+            if candidate is GhosttyNSView || NSWindow.cmuxIsBrowserSurfaceView(candidate) {
                 return true
             }
             current = candidate.superview
@@ -5643,7 +5666,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard attempt < maxAttempts else {
             writeGotoSplitTestData([
                 "webViewFocused": "false",
-                "setupError": "Timed out waiting for WKWebView focus"
+                "setupError": "Timed out waiting for browser surface focus"
             ])
             return
         }
@@ -5656,7 +5679,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return
         }
 
-        // Select the browser surface and try to focus the WKWebView.
+        // Select the browser surface and try to focus the active browser engine view.
         tab.focusPanel(browserPanelId)
 
         if isWebViewFocused(browserPanel),
@@ -5688,9 +5711,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func isWebViewFocused(_ panel: BrowserPanel) -> Bool {
-        guard let window = panel.webView.window else { return false }
-        guard let fr = window.firstResponder as? NSView else { return false }
-        return fr.isDescendant(of: panel.webView)
+        panel.isBrowserSurfaceFocused()
+    }
+
+    private func evaluateGotoSplitUITestScript(
+        panel: BrowserPanel,
+        script: String,
+        completion: @escaping ([String: Any]) -> Void
+    ) {
+        panel.evaluateBrowserSurfaceJavaScript(script, timeout: 3.0, useEval: false) { result, _ in
+            completion(result as? [String: Any] ?? [:])
+        }
     }
 
     private func paneIdsForGotoSplitUITest(tab: Workspace, browserPanelId: UUID) -> (browser: PaneID, terminal: PaneID)? {
@@ -5917,22 +5948,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         })();
         """
 
-        panel.webView.evaluateJavaScript(script) { [weak self] result, _ in
+        evaluateGotoSplitUITestScript(panel: panel, script: script) { [weak self] payload in
             guard let self else { return }
-            let payload = result as? [String: Any]
-            let focused = (payload?["focused"] as? Bool) ?? false
-            let inputId = (payload?["id"] as? String) ?? ""
-            let secondaryInputId = (payload?["secondaryId"] as? String) ?? ""
-            let secondaryCenterX = (payload?["secondaryCenterX"] as? NSNumber)?.doubleValue ?? -1
-            let secondaryCenterY = (payload?["secondaryCenterY"] as? NSNumber)?.doubleValue ?? -1
-            let activeId = (payload?["activeId"] as? String) ?? ""
-            let trackerInstalled = (payload?["trackerInstalled"] as? Bool) ?? false
-            let trackedStateId = (payload?["trackedStateId"] as? String) ?? ""
-            let readyState = (payload?["readyState"] as? String) ?? ""
+            let focused = (payload["focused"] as? Bool) ?? false
+            let inputId = (payload["id"] as? String) ?? ""
+            let secondaryInputId = (payload["secondaryId"] as? String) ?? ""
+            let secondaryCenterX = (payload["secondaryCenterX"] as? NSNumber)?.doubleValue ?? -1
+            let secondaryCenterY = (payload["secondaryCenterY"] as? NSNumber)?.doubleValue ?? -1
+            let activeId = (payload["activeId"] as? String) ?? ""
+            let trackerInstalled = (payload["trackerInstalled"] as? Bool) ?? false
+            let trackedStateId = (payload["trackedStateId"] as? String) ?? ""
+            let readyState = (payload["readyState"] as? String) ?? ""
             var secondaryClickOffsetX = -1.0
             var secondaryClickOffsetY = -1.0
-            if let window = panel.webView.window {
-                let webFrame = panel.webView.convert(panel.webView.bounds, to: nil)
+            if let window = panel.browserSurfaceWindow(),
+               let webFrame = panel.browserSurfaceFrameInWindow() {
                 let contentHeight = Double(window.contentView?.bounds.height ?? 0)
                 if webFrame.width > 1,
                    webFrame.height > 1,
@@ -6067,15 +6097,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         })();
         """
 
-        panel.webView.evaluateJavaScript(script) { result, _ in
-            let payload = result as? [String: Any]
+        evaluateGotoSplitUITestScript(panel: panel, script: script) { payload in
             completion([
-                "id": (payload?["id"] as? String) ?? "",
-                "tag": (payload?["tag"] as? String) ?? "",
-                "type": (payload?["type"] as? String) ?? "",
-                "editable": (payload?["editable"] as? String) ?? "false",
-                "trackedFocusStateId": (payload?["trackedFocusStateId"] as? String) ?? "",
-                "focusTrackerInstalled": (payload?["focusTrackerInstalled"] as? String) ?? "false"
+                "id": (payload["id"] as? String) ?? "",
+                "tag": (payload["tag"] as? String) ?? "",
+                "type": (payload["type"] as? String) ?? "",
+                "editable": (payload["editable"] as? String) ?? "false",
+                "trackedFocusStateId": (payload["trackedFocusStateId"] as? String) ?? "",
+                "focusTrackerInstalled": (payload["focusTrackerInstalled"] as? String) ?? "false"
             ])
         }
     }
@@ -6562,6 +6591,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
                 return event // Pass through
             }
+            self.handleRecentControlModifierLifecycleEvent(event)
+            self.handlePendingSplitShortcutFocusLifecycleEvent(event)
             self.handleBrowserOmnibarSelectionRepeatLifecycleEvent(event)
             if self.clearEscapeSuppressionForKeyUp(event: event, consumeIfSuppressed: true) {
                 return nil
@@ -6807,6 +6838,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
         }
 #endif
+        if shouldSuppressPendingSplitShortcutControlD(event: event, isControlD: isControlD) {
+#if DEBUG
+            dlog(
+                "shortcut.ctrlD stage=suppressedPendingSplit panel=\(pendingSplitShortcutFocus?.panelId.uuidString.prefix(5) ?? "nil") " +
+                "keyCode=\(event.keyCode)"
+            )
+            writeChildExitKeyboardProbe([:], increments: ["probeAppShortcutCtrlDSuppressedCount": 1])
+#endif
+            return true
+        }
+        if shouldSuppressRecentSplitShortcutControlD(event: event, isControlD: isControlD) {
+#if DEBUG
+            dlog(
+                "shortcut.ctrlD stage=suppressedRecentSplit panel=\(recentSplitShortcutControlDGuard?.panelId.uuidString.prefix(5) ?? "nil") " +
+                "keyCode=\(event.keyCode)"
+            )
+            writeChildExitKeyboardProbe([:], increments: ["probeAppShortcutCtrlDRecentSuppressedCount": 1])
+#endif
+            return true
+        }
 
         // Don't steal shortcuts from close-confirmation alerts. Keep standard alert key
         // equivalents working and avoid surprising actions while the confirmation is up.
@@ -7443,7 +7494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if shouldSuppressSplitShortcutForTransientTerminalFocusState(direction: .right) {
                 return true
             }
-            _ = performSplitShortcut(direction: .right)
+            _ = performSplitShortcut(direction: .right, triggerEvent: event)
             return true
         }
 
@@ -7454,7 +7505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             if shouldSuppressSplitShortcutForTransientTerminalFocusState(direction: .down) {
                 return true
             }
-            _ = performSplitShortcut(direction: .down)
+            _ = performSplitShortcut(direction: .down, triggerEvent: event)
             return true
         }
 
@@ -7664,7 +7715,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let firstResponderType = keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
         let panel = tabManager?.focusedBrowserPanel
         let panelToken = panel.map { String($0.id.uuidString.prefix(8)) } ?? "nil"
-        let panelZoom = panel?.webView.pageZoom ?? -1
+        let panelZoom = Double(panel?.currentPageZoomFactor() ?? -1)
         var line =
             "zoom.shortcut stage=\(stage) event=\(NSWindow.keyDescription(event)) " +
             "chars='\(chars)' flags=\(browserZoomShortcutTraceFlagsString(flags)) " +
@@ -8004,6 +8055,146 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    private func cancelPendingSplitShortcutFocus() {
+        pendingSplitShortcutFocusFallbackWorkItem?.cancel()
+        pendingSplitShortcutFocusFallbackWorkItem = nil
+        pendingSplitShortcutFocus = nil
+    }
+
+    private func armPendingSplitShortcutFocus(panelId: UUID, triggerEvent: NSEvent?) {
+        cancelPendingSplitShortcutFocus()
+        let pending = PendingSplitShortcutFocus(
+            panelId: panelId,
+            windowNumber: triggerEvent?.windowNumber,
+            armedAt: ProcessInfo.processInfo.systemUptime,
+            triggerKeyCode: triggerEvent?.keyCode ?? 2
+        )
+        pendingSplitShortcutFocus = pending
+
+        let fallback = DispatchWorkItem { [weak self] in
+            self?.applyPendingSplitShortcutFocusIfNeeded(reason: "fallbackTimeout", matching: pending)
+        }
+        pendingSplitShortcutFocusFallbackWorkItem = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: fallback)
+
+#if DEBUG
+        dlog(
+            "split.shortcut.focus.defer panel=\(panelId.uuidString.prefix(5)) " +
+            "win=\(pending.windowNumber ?? -1) keyCode=\(pending.triggerKeyCode)"
+        )
+#endif
+    }
+
+    private func applyPendingSplitShortcutFocusIfNeeded(
+        reason: String,
+        matching expectedPending: PendingSplitShortcutFocus
+    ) {
+        guard let pending = pendingSplitShortcutFocus,
+              pending.panelId == expectedPending.panelId,
+              pending.armedAt == expectedPending.armedAt else {
+            return
+        }
+        cancelPendingSplitShortcutFocus()
+
+        guard let tabManager,
+              let workspace = tabManager.tabs.first(where: { $0.panels[pending.panelId] != nil }) else {
+            return
+        }
+
+#if DEBUG
+        dlog(
+            "split.shortcut.focus.apply panel=\(pending.panelId.uuidString.prefix(5)) " +
+            "reason=\(reason) ageMs=\(Int((ProcessInfo.processInfo.systemUptime - pending.armedAt) * 1000.0))"
+        )
+#endif
+        recentSplitShortcutControlDGuard = RecentSplitShortcutControlDGuard(
+            panelId: pending.panelId,
+            windowNumber: pending.windowNumber,
+            triggerKeyCode: pending.triggerKeyCode,
+            expiresAt: ProcessInfo.processInfo.systemUptime + 0.75
+        )
+        workspace.focusPanel(pending.panelId)
+    }
+
+    private func handlePendingSplitShortcutFocusLifecycleEvent(_ event: NSEvent) {
+        guard let pending = pendingSplitShortcutFocus else { return }
+
+        if let expectedWindowNumber = pending.windowNumber {
+            let eventWindowNumber = event.window?.windowNumber ?? event.windowNumber
+            if eventWindowNumber != expectedWindowNumber {
+                return
+            }
+        }
+
+        switch event.type {
+        case .keyUp:
+            guard event.keyCode == pending.triggerKeyCode else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.applyPendingSplitShortcutFocusIfNeeded(reason: "triggerKeyUp", matching: pending)
+            }
+        case .flagsChanged:
+            #if DEBUG
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if !flags.contains(.command) {
+                dlog(
+                    "split.shortcut.focus.wait panel=\(pending.panelId.uuidString.prefix(5)) " +
+                    "reason=commandReleased ageMs=\(Int((ProcessInfo.processInfo.systemUptime - pending.armedAt) * 1000.0))"
+                )
+            }
+            #endif
+        default:
+            break
+        }
+    }
+
+    private func shouldSuppressPendingSplitShortcutControlD(event: NSEvent, isControlD: Bool) -> Bool {
+        guard isControlD, let pending = pendingSplitShortcutFocus else { return false }
+        guard event.keyCode == pending.triggerKeyCode else { return false }
+        if let expectedWindowNumber = pending.windowNumber {
+            let eventWindowNumber = event.window?.windowNumber ?? event.windowNumber
+            guard eventWindowNumber == expectedWindowNumber else { return false }
+        }
+        return true
+    }
+
+    private func shouldSuppressRecentSplitShortcutControlD(event: NSEvent, isControlD: Bool) -> Bool {
+        guard isControlD, let recent = recentSplitShortcutControlDGuard else { return false }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now <= recent.expiresAt else {
+            recentSplitShortcutControlDGuard = nil
+            return false
+        }
+        guard event.keyCode == recent.triggerKeyCode else { return false }
+        if let controlActivation = recentControlModifierActivation,
+           now - controlActivation.at <= 0.20 {
+            let eventWindowNumber = event.window?.windowNumber ?? event.windowNumber
+            if controlActivation.windowNumber == nil || controlActivation.windowNumber == eventWindowNumber {
+                recentSplitShortcutControlDGuard = nil
+                return false
+            }
+        }
+        if let expectedWindowNumber = recent.windowNumber {
+            let eventWindowNumber = event.window?.windowNumber ?? event.windowNumber
+            guard eventWindowNumber == expectedWindowNumber else { return false }
+        }
+        guard tabManager?.selectedWorkspace?.focusedPanelId == recent.panelId else { return false }
+        recentSplitShortcutControlDGuard = nil
+        return true
+    }
+
+    private func handleRecentControlModifierLifecycleEvent(_ event: NSEvent) {
+        guard event.type == .flagsChanged else { return }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.control) {
+            recentControlModifierActivation = RecentControlModifierActivation(
+                windowNumber: event.window?.windowNumber ?? event.windowNumber,
+                at: ProcessInfo.processInfo.systemUptime
+            )
+        } else {
+            recentControlModifierActivation = nil
+        }
+    }
+
     private func isLikelyWebInspectorResponder(_ responder: NSResponder?) -> Bool {
         guard let responder else { return false }
         let responderType = String(describing: type(of: responder))
@@ -8083,7 +8274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard isLikelyWebInspectorResponder(keyWindow.firstResponder) else { return }
 
         let beforeResponder = keyWindow.firstResponder
-        let movedToWebView = keyWindow.makeFirstResponder(browser.webView)
+        let movedToWebView = browser.focusBrowserSurface()
         let movedToNil = movedToWebView ? false : keyWindow.makeFirstResponder(nil)
 
         #if DEBUG
@@ -8101,7 +8292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @discardableResult
-    func performSplitShortcut(direction: SplitDirection) -> Bool {
+    func performSplitShortcut(direction: SplitDirection, triggerEvent: NSEvent? = nil) -> Bool {
         _ = synchronizeActiveMainWindowContext(preferredWindow: NSApp.keyWindow ?? NSApp.mainWindow)
 
         let directionLabel: String
@@ -8128,8 +8319,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }()
         let splitContext = "keyWin=\(keyWindow?.windowNumber ?? -1) mainWin=\(NSApp.mainWindow?.windowNumber ?? -1) fr=\(firstResponderType)@\(firstResponderPtr) frWin=\(firstResponderWindow)"
         if let browser = tabManager?.focusedBrowserPanel {
-            let webWindow = browser.webView.window?.windowNumber ?? -1
-            let webSuperview = browser.webView.superview.map { String(describing: Unmanaged.passUnretained($0).toOpaque()) } ?? "nil"
+            let webWindow = browser.browserSurfaceWindow()?.windowNumber ?? -1
+            let webSuperview = browser.browserSurfaceView()?.superview.map { String(describing: Unmanaged.passUnretained($0).toOpaque()) } ?? "nil"
             dlog("split.shortcut dir=\(directionLabel) pre panel=\(browser.id.uuidString.prefix(5)) \(browser.debugDeveloperToolsStateSummary()) webWin=\(webWindow) webSuper=\(webSuperview) \(splitContext)")
         } else {
             dlog("split.shortcut dir=\(directionLabel) pre panel=nil \(splitContext)")
@@ -8137,7 +8328,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         #endif
 
         prepareFocusedBrowserDevToolsForSplit(directionLabel: directionLabel)
-        tabManager?.createSplit(direction: direction)
+        if let triggerEvent,
+           let tabManager,
+           let selectedTabId = tabManager.selectedTabId,
+           let workspace = tabManager.selectedWorkspace,
+           let focusedPanelId = workspace.focusedPanelId,
+           let newPanelId = tabManager.newSplit(
+               tabId: selectedTabId,
+               surfaceId: focusedPanelId,
+               direction: direction,
+               focus: false
+           ) {
+            armPendingSplitShortcutFocus(panelId: newPanelId, triggerEvent: triggerEvent)
+        } else {
+            tabManager?.createSplit(direction: direction)
+        }
 #if DEBUG
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             let keyWindow = NSApp.keyWindow
@@ -8155,8 +8360,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }()
             let splitContext = "keyWin=\(keyWindow?.windowNumber ?? -1) mainWin=\(NSApp.mainWindow?.windowNumber ?? -1) fr=\(firstResponderType)@\(firstResponderPtr) frWin=\(firstResponderWindow)"
             if let browser = self?.tabManager?.focusedBrowserPanel {
-                let webWindow = browser.webView.window?.windowNumber ?? -1
-                let webSuperview = browser.webView.superview.map { String(describing: Unmanaged.passUnretained($0).toOpaque()) } ?? "nil"
+                let webWindow = browser.browserSurfaceWindow()?.windowNumber ?? -1
+                let webSuperview = browser.browserSurfaceView()?.superview.map { String(describing: Unmanaged.passUnretained($0).toOpaque()) } ?? "nil"
                 dlog("split.shortcut dir=\(directionLabel) post panel=\(browser.id.uuidString.prefix(5)) \(browser.debugDeveloperToolsStateSummary()) webWin=\(webWindow) webSuper=\(webSuperview) \(splitContext)")
             } else {
                 dlog("split.shortcut dir=\(directionLabel) post panel=nil \(splitContext)")
@@ -8237,6 +8442,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if event.type == .keyDown {
             return handleCustomShortcut(event: event)
         }
+        handleRecentControlModifierLifecycleEvent(event)
+        handlePendingSplitShortcutFocusLifecycleEvent(event)
         handleBrowserOmnibarSelectionRepeatLifecycleEvent(event)
         return clearEscapeSuppressionForKeyUp(event: event, consumeIfSuppressed: true)
     }
@@ -9808,10 +10015,14 @@ private extension NSWindow {
         }
 
         let currentEvent = Self.cmuxCurrentEvent(for: self)
+        let responderBrowserSurface = responder.flatMap {
+            Self.cmuxOwningBrowserSurfaceView(for: $0, in: self, event: currentEvent)
+        }
         let responderWebView = responder.flatMap {
             Self.cmuxOwningWebView(for: $0, in: self, event: currentEvent)
         }
         var pointerInitiatedWebFocus = false
+        var pointerInitiatedBrowserSurfaceFocusController: (any CMUXBrowserSurfaceFocusControlling)?
 
         if AppDelegate.shared?.shouldBlockFirstResponderChangeWhileCommandPaletteVisible(
             window: self,
@@ -9829,9 +10040,9 @@ private extension NSWindow {
         if let responder,
            let webView = responderWebView,
            !webView.allowsFirstResponderAcquisitionEffective {
-            let pointerInitiatedFocus = Self.cmuxShouldAllowPointerInitiatedWebViewFocus(
+            let pointerInitiatedFocus = Self.cmuxShouldAllowPointerInitiatedBrowserSurfaceFocus(
                 window: self,
-                webView: webView,
+                browserSurface: webView,
                 event: currentEvent
             )
             if pointerInitiatedFocus {
@@ -9859,6 +10070,40 @@ private extension NSWindow {
 #endif
                 return false
             }
+        } else if let responder,
+                  let responderBrowserSurface,
+                  let browserSurfaceFocusController = responderBrowserSurface as? any CMUXBrowserSurfaceFocusControlling,
+                  !browserSurfaceFocusController.cmuxAllowsFirstResponderAcquisitionEffective {
+            let pointerInitiatedFocus = Self.cmuxShouldAllowPointerInitiatedBrowserSurfaceFocus(
+                window: self,
+                browserSurface: responderBrowserSurface,
+                event: currentEvent
+            )
+            if pointerInitiatedFocus {
+                pointerInitiatedBrowserSurfaceFocusController = browserSurfaceFocusController
+#if DEBUG
+                dlog(
+                    "focus.guard allowPointerFirstResponder responder=\(String(describing: type(of: responder))) " +
+                    "window=\(ObjectIdentifier(self)) " +
+                    "browserSurface=\(ObjectIdentifier(browserSurfaceFocusController as AnyObject)) " +
+                    "policy=\(browserSurfaceFocusController.cmuxAllowsFirstResponderAcquisition ? 1 : 0) " +
+                    "pointerDepth=\(browserSurfaceFocusController.cmuxDebugPointerFocusAllowanceDepth) " +
+                    "eventType=\(currentEvent.map { String(describing: $0.type) } ?? "nil")"
+                )
+#endif
+            } else {
+#if DEBUG
+                dlog(
+                    "focus.guard blockedFirstResponder responder=\(String(describing: type(of: responder))) " +
+                    "window=\(ObjectIdentifier(self)) " +
+                    "browserSurface=\(ObjectIdentifier(browserSurfaceFocusController as AnyObject)) " +
+                    "policy=\(browserSurfaceFocusController.cmuxAllowsFirstResponderAcquisition ? 1 : 0) " +
+                    "pointerDepth=\(browserSurfaceFocusController.cmuxDebugPointerFocusAllowanceDepth) " +
+                    "eventType=\(currentEvent.map { String(describing: $0.type) } ?? "nil")"
+                )
+#endif
+                return false
+            }
         }
 #if DEBUG
         if let responder,
@@ -9871,6 +10116,17 @@ private extension NSWindow {
                 "pointerDepth=\(webView.debugPointerFocusAllowanceDepth)"
             )
         }
+        if responderWebView == nil,
+           let responder,
+           let browserSurfaceFocusController = responderBrowserSurface as? any CMUXBrowserSurfaceFocusControlling {
+            dlog(
+                "focus.guard allowFirstResponder responder=\(String(describing: type(of: responder))) " +
+                "window=\(ObjectIdentifier(self)) " +
+                "browserSurface=\(ObjectIdentifier(browserSurfaceFocusController as AnyObject)) " +
+                "policy=\(browserSurfaceFocusController.cmuxAllowsFirstResponderAcquisition ? 1 : 0) " +
+                "pointerDepth=\(browserSurfaceFocusController.cmuxDebugPointerFocusAllowanceDepth)"
+            )
+        }
 #endif
         let result: Bool
         if pointerInitiatedWebFocus, let webView = responderWebView {
@@ -9879,6 +10135,10 @@ private extension NSWindow {
             result = webView.withPointerFocusAllowance {
                 cmux_makeFirstResponder(responder)
             }
+        } else if let browserSurfaceFocusController = pointerInitiatedBrowserSurfaceFocusController {
+            browserSurfaceFocusController.cmuxBeginPointerFocusAllowance()
+            defer { browserSurfaceFocusController.cmuxEndPointerFocusAllowance() }
+            result = cmux_makeFirstResponder(responder)
         } else {
             result = cmux_makeFirstResponder(responder)
         }
@@ -9956,8 +10216,8 @@ private extension NSWindow {
         // (handleCustomShortcut) already handles app-level shortcuts, and anything
         // remaining should be menu items.
         let firstResponderGhosttyView = cmuxOwningGhosttyView(for: self.firstResponder)
-        let firstResponderWebView = self.firstResponder.flatMap {
-            Self.cmuxOwningWebView(for: $0, in: self, event: event)
+        let firstResponderBrowserSurface = self.firstResponder.flatMap {
+            Self.cmuxOwningBrowserSurfaceView(for: $0, in: self, event: event)
         }
         if let ghosttyView = firstResponderGhosttyView {
             // If the IME is composing and the key has no Cmd modifier, don't intercept —
@@ -10001,7 +10261,7 @@ private extension NSWindow {
         // mark handled to avoid the AppKit alert sound path.
         if shouldDispatchBrowserReturnViaFirstResponderKeyDown(
             keyCode: event.keyCode,
-            firstResponderIsBrowser: firstResponderWebView != nil,
+            firstResponderIsBrowser: firstResponderBrowserSurface != nil,
             flags: event.modifierFlags
         ) {
             // Forwarding keyDown can re-enter performKeyEquivalent in WebKit/AppKit internals.
@@ -10126,6 +10386,25 @@ private extension NSWindow {
         return cmuxTrackedOwningWebView(for: textView)
     }
 
+    private static func cmuxOwningBrowserSurfaceView(
+        for responder: NSResponder,
+        in window: NSWindow,
+        event: NSEvent?
+    ) -> NSView? {
+        if let webView = cmuxOwningWebView(for: responder, in: window, event: event) {
+            return webView
+        }
+        if let view = responder as? NSView,
+           let cefView = cmuxOwningCEFBrowserSurfaceView(for: view) {
+            return cefView
+        }
+        if let event,
+           let hitBrowserSurface = cmuxPointerHitBrowserSurfaceView(in: window, event: event) {
+            return hitBrowserSurface
+        }
+        return nil
+    }
+
     private static func cmuxOwningWebView(for view: NSView) -> CmuxWebView? {
         if let webView = view as? CmuxWebView {
             return webView
@@ -10139,6 +10418,29 @@ private extension NSWindow {
             if String(describing: type(of: candidate)).contains("WindowBrowserSlotView"),
                let portalWebView = cmuxUniqueBrowserWebView(in: candidate) {
                 return portalWebView
+            }
+            current = candidate.superview
+        }
+
+        return nil
+    }
+
+    static func cmuxIsBrowserSurfaceView(_ view: NSView) -> Bool {
+        if view is WKWebView {
+            return true
+        }
+        return view is any CMUXBrowserSurfaceFocusControlling
+    }
+
+    private static func cmuxOwningCEFBrowserSurfaceView(for view: NSView) -> NSView? {
+        if cmuxIsBrowserSurfaceView(view) {
+            return view
+        }
+
+        var current: NSView? = view.superview
+        while let candidate = current {
+            if cmuxIsBrowserSurfaceView(candidate) {
+                return candidate
             }
             current = candidate.superview
         }
@@ -10263,6 +10565,13 @@ private extension NSWindow {
     }
 
     private static func cmuxPointerHitWebView(in window: NSWindow, event: NSEvent) -> CmuxWebView? {
+        guard let hitBrowserSurface = cmuxPointerHitBrowserSurfaceView(in: window, event: event) else {
+            return nil
+        }
+        return hitBrowserSurface as? CmuxWebView
+    }
+
+    private static func cmuxPointerHitBrowserSurfaceView(in window: NSWindow, event: NSEvent) -> NSView? {
         guard cmuxIsPointerDownEvent(event) else { return nil }
         if event.windowNumber != 0, event.windowNumber != window.windowNumber {
             return nil
@@ -10270,27 +10579,36 @@ private extension NSWindow {
         if let eventWindow = event.window, eventWindow !== window {
             return nil
         }
+        if let portalHostedView = CEFWindowPortalRegistry.hostedViewAtWindowPoint(
+            event.locationInWindow,
+            in: window
+        ) {
+            return portalHostedView
+        }
         if let portalWebView = BrowserWindowPortalRegistry.webViewAtWindowPoint(
             event.locationInWindow,
             in: window
-        ) as? CmuxWebView {
+        ) {
             return portalWebView
         }
         guard let hitView = cmuxHitViewForCurrentEvent(in: window, event: event) else {
             return nil
         }
-        return cmuxOwningWebView(for: hitView)
+        if let webView = cmuxOwningWebView(for: hitView) {
+            return webView
+        }
+        return cmuxOwningCEFBrowserSurfaceView(for: hitView)
     }
 
-    private static func cmuxShouldAllowPointerInitiatedWebViewFocus(
+    private static func cmuxShouldAllowPointerInitiatedBrowserSurfaceFocus(
         window: NSWindow,
-        webView: CmuxWebView,
+        browserSurface: NSView,
         event: NSEvent?
     ) -> Bool {
         guard let event,
-              let hitWebView = cmuxPointerHitWebView(in: window, event: event) else {
+              let hitBrowserSurface = cmuxPointerHitBrowserSurfaceView(in: window, event: event) else {
             return false
         }
-        return hitWebView === webView
+        return hitBrowserSurface === browserSurface
     }
 }

@@ -1418,6 +1418,16 @@ final class BrowserPanel: Panel, ObservableObject {
     /// The workspace ID this panel belongs to
     private(set) var workspaceId: UUID
 
+    /// Long-term engine preference for this panel.
+    let preferredEngineKind: BrowserEngineKind
+
+    /// Actual hosted browser implementation today.
+    let implementationEngineKind: BrowserEngineKind
+
+    var usesCEFSurface: Bool {
+        implementationEngineKind == .cef
+    }
+
     /// The underlying web view
     private(set) var webView: WKWebView
 
@@ -1679,6 +1689,9 @@ final class BrowserPanel: Panel, ObservableObject {
     /// Published loading state
     @Published private(set) var isLoading: Bool = false
 
+    /// Snapshot of remote SSH connection status for this panel's workspace.
+    @Published private(set) var remoteWorkspaceStatus: BrowserRemoteWorkspaceStatus?
+
     /// Published download state for browser downloads (navigation + context menu).
     @Published private(set) var isDownloading: Bool = false
 
@@ -1772,7 +1785,8 @@ final class BrowserPanel: Panel, ObservableObject {
     private let developerToolsRestoreRetryDelay: TimeInterval = 0.05
     private let developerToolsRestoreRetryMaxAttempts: Int = 40
     private var remoteProxyEndpoint: BrowserProxyEndpoint?
-    @Published private(set) var remoteWorkspaceStatus: BrowserRemoteWorkspaceStatus?
+    private var cefBridge: CEFWorkspaceBridge?
+    private var installedDocumentStartScripts = Set<String>()
     private var browserThemeMode: BrowserThemeMode
 
     var displayTitle: String {
@@ -1951,12 +1965,46 @@ final class BrowserPanel: Panel, ObservableObject {
         self.workspaceId = workspaceId
         self.insecureHTTPBypassHostOnce = BrowserInsecureHTTPSettings.normalizeHost(bypassInsecureHTTPHostOnce ?? "")
         self.remoteProxyEndpoint = proxyEndpoint
+        let preferredEngineKind = BrowserEngineFeatureFlags.preferredEngineKind(
+            isRemoteWorkspace: isRemoteWorkspace
+        )
+        let cefRuntimeStatus = CEFEngineRuntime.shared.runtimeStatus(
+            startGlobalRuntime: preferredEngineKind == .cef
+        )
+        self.preferredEngineKind = preferredEngineKind
+        self.implementationEngineKind = BrowserEngineFeatureFlags.effectiveEngineKind(
+            isRemoteWorkspace: isRemoteWorkspace,
+            runtimeStatus: cefRuntimeStatus
+        )
+#if DEBUG
+        dlog(
+            "browser.engine.select " +
+            "panel=\(self.id.uuidString.prefix(5)) " +
+            "workspace=\(workspaceId.uuidString.prefix(5)) " +
+            "remote=\(isRemoteWorkspace ? 1 : 0) " +
+            "preferred=\(preferredEngineKind.rawValue) " +
+            "effective=\(self.implementationEngineKind.rawValue) " +
+            "linked=\(cefRuntimeStatus.isRuntimeLinked ? 1 : 0) " +
+            "assets=\(cefRuntimeStatus.hasRuntimeAssets ? 1 : 0) " +
+            "frameworkLoaded=\(cefRuntimeStatus.isFrameworkLoaded ? 1 : 0) " +
+            "runtimeStarted=\(cefRuntimeStatus.isRuntimeStarted ? 1 : 0) " +
+            "allowUnlinked=\(cefRuntimeStatus.allowUnlinkedSurface ? 1 : 0) " +
+            "install=\(cefRuntimeStatus.installation?.sourceDescription ?? "nil") " +
+            "loadErr=\(cefRuntimeStatus.frameworkLoadErrorDescription ?? "nil") " +
+            "startErr=\(cefRuntimeStatus.runtimeStartErrorDescription ?? "nil")"
+        )
+#endif
         self.browserThemeMode = BrowserThemeSettings.mode()
 
         let webView = Self.makeWebView()
         self.webView = webView
         self.insecureHTTPAlertFactory = { NSAlert() }
-        let _ = isRemoteWorkspace
+        let installedDocumentStartScripts: Set<String> = [
+            Self.telemetryHookBootstrapScriptSource,
+            Self.addressBarFocusTrackingBootstrapScript
+        ]
+        self.installedDocumentStartScripts = installedDocumentStartScripts
+        refreshCEFBridge(initialURL: initialURL)
         applyRemoteProxyConfigurationIfAvailable()
 
         // Set up navigation delegate
@@ -1983,7 +2031,7 @@ final class BrowserPanel: Panel, ObservableObject {
             }
         }
         navDelegate.openInNewTab = { [weak self] url in
-            self?.openLinkInNewTab(url: url)
+            self?.openBrowserURLInNewTab(url)
         }
         navDelegate.shouldBlockInsecureHTTPNavigation = { [weak self] url in
             self?.shouldBlockInsecureHTTPNavigation(to: url) ?? false
@@ -2015,7 +2063,7 @@ final class BrowserPanel: Panel, ObservableObject {
         let browserUIDelegate = BrowserUIDelegate()
         browserUIDelegate.openInNewTab = { [weak self] url in
             guard let self else { return }
-            self.openLinkInNewTab(url: url)
+            self.openBrowserURLInNewTab(url)
         }
         browserUIDelegate.requestNavigation = { [weak self] request, intent in
             self?.requestNavigation(request, intent: intent)
@@ -2035,9 +2083,39 @@ final class BrowserPanel: Panel, ObservableObject {
         }
     }
 
+    private func beginDownloadActivity() {
+        let apply = {
+            self.activeDownloadCount += 1
+            self.isDownloading = self.activeDownloadCount > 0
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
+    }
+
+    private func endDownloadActivity() {
+        let apply = {
+            self.activeDownloadCount = max(0, self.activeDownloadCount - 1)
+            self.isDownloading = self.activeDownloadCount > 0
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
+    }
+
+    func updateWorkspaceId(_ newWorkspaceId: UUID) {
+        workspaceId = newWorkspaceId
+        refreshCEFBridge(initialURL: currentURL)
+    }
+
     func setRemoteProxyEndpoint(_ endpoint: BrowserProxyEndpoint?) {
         guard remoteProxyEndpoint != endpoint else { return }
         remoteProxyEndpoint = endpoint
+        refreshCEFBridge(initialURL: currentURL)
         applyRemoteProxyConfigurationIfAvailable()
     }
 
@@ -2069,32 +2147,108 @@ final class BrowserPanel: Panel, ObservableObject {
         store.proxyConfigurations = [socks, connect]
     }
 
-    private func beginDownloadActivity() {
-        let apply = {
-            self.activeDownloadCount += 1
-            self.isDownloading = self.activeDownloadCount > 0
+    private func refreshCEFBridge(initialURL: URL?) {
+        guard implementationEngineKind == .cef else {
+            cefBridge = nil
+            return
         }
-        if Thread.isMainThread {
-            apply()
+        cefBridge = CEFEngineRuntime.shared.makeBridge(
+            workspaceId: workspaceId,
+            initialURL: initialURL,
+            proxyEndpoint: remoteProxyEndpoint
+        )
+        cefBridge?.stateDidChangeHandler = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.syncStateFromCEFBridge()
+            }
+        }
+        cefBridge?.openURLInNewTabHandler = { [weak self] urlString in
+            Task { @MainActor [weak self] in
+                guard let self, let url = URL(string: urlString) else { return }
+                self.openBrowserURLInNewTab(url)
+            }
+        }
+        for script in installedDocumentStartScripts {
+            cefBridge?.addDocumentStartJavaScriptString(script)
+        }
+        syncStateFromCEFBridge()
+    }
+
+    func makeCEFHostedView() -> NSView? {
+        guard usesCEFSurface else { return nil }
+        return cefBridge?.makeBrowserView()
+    }
+
+    func browserSurfaceView() -> NSView? {
+        if usesCEFSurface {
+            return makeCEFHostedView()
+        }
+        return webView
+    }
+
+    func browserSurfaceWindow() -> NSWindow? {
+        browserSurfaceView()?.window
+    }
+
+    private static func isVisibleBrowserSurfaceView(_ view: NSView) -> Bool {
+        if view.isHiddenOrHasHiddenAncestor {
+            return false
+        }
+        if view.alphaValue <= 0.01 {
+            return false
+        }
+        let frame = view.frame
+        if frame.width <= 1 || frame.height <= 1 {
+            return false
+        }
+        return true
+    }
+
+    func browserSurfaceFrameInWindow() -> NSRect? {
+        guard let view = browserSurfaceView(), view.window != nil else { return nil }
+        return view.convert(view.bounds, to: nil)
+    }
+
+    func isBrowserSurfaceMountedInWindow() -> Bool {
+        browserSurfaceWindow() != nil
+    }
+
+    func isBrowserSurfaceHidden() -> Bool {
+        guard let view = browserSurfaceView() else { return true }
+        return !Self.isVisibleBrowserSurfaceView(view)
+    }
+
+    func hideBrowserPortalView(source: String) {
+        if usesCEFSurface, let hostedView = browserSurfaceView() {
+            CEFWindowPortalRegistry.hide(hostedView: hostedView)
         } else {
-            DispatchQueue.main.async(execute: apply)
+            BrowserWindowPortalRegistry.hide(
+                webView: webView,
+                source: source
+            )
         }
     }
 
-    private func endDownloadActivity() {
-        let apply = {
-            self.activeDownloadCount = max(0, self.activeDownloadCount - 1)
-            self.isDownloading = self.activeDownloadCount > 0
+    func syncStateFromCEFBridge() {
+        guard let bridge = cefBridge else { return }
+        let wasLoading = isLoading
+        let previousURLString = currentURL?.absoluteString
+        currentURL = URL(string: bridge.currentURLString)
+        pageTitle = bridge.pageTitle
+        nativeCanGoBack = bridge.canGoBack
+        nativeCanGoForward = bridge.canGoForward
+        isDownloading = bridge.isDownloading
+        estimatedProgress = bridge.isLoading ? 0.1 : 1.0
+        isLoading = bridge.isLoading
+        if let searchState {
+            searchState.total = UInt(bridge.findMatchCount)
+            searchState.selected = bridge.findMatchCount > 0 ? UInt(bridge.selectedFindMatchOrdinal) : nil
         }
-        if Thread.isMainThread {
-            apply()
-        } else {
-            DispatchQueue.main.async(execute: apply)
+        refreshNavigationAvailability()
+        if !bridge.isLoading, (wasLoading || previousURLString != bridge.currentURLString) {
+            applyBrowserThemeModeIfNeeded()
+            restoreFindStateAfterNavigation(replaySearch: true)
         }
-    }
-
-    func updateWorkspaceId(_ newWorkspaceId: UUID) {
-        workspaceId = newWorkspaceId
     }
 
     func triggerFlash() {
@@ -2282,28 +2436,62 @@ final class BrowserPanel: Panel, ObservableObject {
 
     // MARK: - Panel Protocol
 
-    func focus() {
+    func focusBrowserSurface() -> Bool {
         if shouldSuppressWebViewFocus() {
-            return
+            return false
         }
 
-        guard let window = webView.window, !webView.isHiddenOrHasHiddenAncestor else { return }
+        if usesCEFSurface,
+           let browserView = browserSurfaceView(),
+           let window = browserView.window,
+           Self.isVisibleBrowserSurfaceView(browserView) {
+            if cefBridge?.isBrowserSurfaceFocused == true {
+                return true
+            }
+            if let bridge = cefBridge, bridge.focusBrowserSurface() {
+                return true
+            }
+            return Self.responderChainContains(window.firstResponder, target: browserView)
+        }
 
-        // If nothing meaningful is loaded yet, prefer letting the omnibar take focus.
+        guard let window = webView.window, !webView.isHiddenOrHasHiddenAncestor else { return false }
+
         if !webView.isLoading {
             let urlString = webView.url?.absoluteString ?? currentURL?.absoluteString
             if urlString == nil || urlString == "about:blank" {
-                return
+                return false
             }
         }
 
         if Self.responderChainContains(window.firstResponder, target: webView) {
-            return
+            return true
         }
         window.makeFirstResponder(webView)
+        return Self.responderChainContains(window.firstResponder, target: webView)
+    }
+
+    func isBrowserSurfaceFocused() -> Bool {
+        if usesCEFSurface,
+           let bridge = cefBridge {
+            return bridge.isBrowserSurfaceFocused
+        }
+
+        guard let window = webView.window else { return false }
+        return Self.responderChainContains(window.firstResponder, target: webView)
+    }
+
+    func focus() {
+        _ = focusBrowserSurface()
     }
 
     func unfocus() {
+        if usesCEFSurface,
+           let bridge = cefBridge,
+           bridge.isBrowserSurfaceFocused {
+            bridge.unfocusBrowserSurface()
+            return
+        }
+
         guard let window = webView.window else { return }
         if Self.responderChainContains(window.firstResponder, target: webView) {
             window.makeFirstResponder(nil)
@@ -2323,6 +2511,10 @@ final class BrowserPanel: Panel, ObservableObject {
         webViewCancellables.removeAll()
         faviconTask?.cancel()
         faviconTask = nil
+        if let cefHostedView = cefBridge?.makeBrowserView() {
+            CEFWindowPortalRegistry.detach(hostedView: cefHostedView)
+            cefHostedView.removeFromSuperview()
+        }
     }
 
     private func refreshFavicon(from webView: WKWebView) {
@@ -2547,6 +2739,15 @@ final class BrowserPanel: Panel, ObservableObject {
         if !preserveRestoredSessionHistory {
             abandonRestoredSessionHistoryIfNeeded()
         }
+        if usesCEFSurface {
+            shouldRenderWebView = true
+            if recordTypedNavigation {
+                BrowserHistoryStore.shared.recordTypedNavigation(url: url)
+            }
+            cefBridge?.navigate(toURLString: url.absoluteString)
+            syncStateFromCEFBridge()
+            return
+        }
         let effectiveRequest = remoteProxyPreparedNavigationRequest(from: request)
         // Some installs can end up with a legacy Chrome UA override; keep this pinned.
         webView.customUserAgent = BrowserUserAgentSettings.safariUserAgent
@@ -2628,6 +2829,20 @@ final class BrowserPanel: Panel, ObservableObject {
         }
     }
 
+    private func openBrowserURLInNewTab(_ url: URL) {
+        if browserShouldOpenURLExternally(url) {
+            let opened = NSWorkspace.shared.open(url)
+            if !opened {
+                NSLog("BrowserPanel external navigation failed to open URL: %@", url.absoluteString)
+            }
+#if DEBUG
+            dlog("browser.navigation.external source=engineBridge opened=\(opened ? 1 : 0) url=\(url.absoluteString)")
+#endif
+            return
+        }
+        requestNavigation(URLRequest(url: url), intent: .newTab)
+    }
+
     private func presentInsecureHTTPAlert(
         for request: URLRequest,
         intent: BrowserInsecureHTTPNavigationIntent,
@@ -2701,8 +2916,12 @@ final class BrowserPanel: Panel, ObservableObject {
         developerToolsRestoreRetryWorkItem?.cancel()
         developerToolsRestoreRetryWorkItem = nil
         let webView = webView
+        let cefHostedView = cefBridge?.makeBrowserView()
         Task { @MainActor in
             BrowserWindowPortalRegistry.detach(webView: webView)
+            if let cefHostedView {
+                CEFWindowPortalRegistry.detach(hostedView: cefHostedView)
+            }
         }
         webViewObservers.removeAll()
         webViewCancellables.removeAll()
@@ -2747,6 +2966,11 @@ extension BrowserPanel {
     /// Go back in history
     func goBack() {
         guard canGoBack else { return }
+        if usesCEFSurface {
+            cefBridge?.goBack()
+            syncStateFromCEFBridge()
+            return
+        }
         if usesRestoredSessionHistory {
             guard let targetURL = restoredBackHistoryStack.popLast() else {
                 refreshNavigationAvailability()
@@ -2771,6 +2995,11 @@ extension BrowserPanel {
     /// Go forward in history
     func goForward() {
         guard canGoForward else { return }
+        if usesCEFSurface {
+            cefBridge?.goForward()
+            syncStateFromCEFBridge()
+            return
+        }
         if usesRestoredSessionHistory {
             guard let targetURL = restoredForwardHistoryStack.popLast() else {
                 refreshNavigationAvailability()
@@ -2838,17 +3067,43 @@ extension BrowserPanel {
 
     /// Reload the current page
     func reload() {
+        if usesCEFSurface {
+            cefBridge?.reload()
+            syncStateFromCEFBridge()
+            return
+        }
         webView.customUserAgent = BrowserUserAgentSettings.safariUserAgent
         webView.reload()
     }
 
     /// Stop loading
     func stopLoading() {
+        if usesCEFSurface {
+            cefBridge?.stopLoading()
+            syncStateFromCEFBridge()
+            return
+        }
         webView.stopLoading()
     }
 
     @discardableResult
     func toggleDeveloperTools() -> Bool {
+        if usesCEFSurface {
+            let targetVisible = !((cefBridge?.isDeveloperToolsVisible()) ?? false)
+            let didToggle = targetVisible
+                ? (cefBridge?.showDeveloperTools() ?? false)
+                : (cefBridge?.hideDeveloperTools() ?? false)
+            if didToggle {
+                preferredDeveloperToolsVisible = targetVisible
+                if targetVisible {
+                    cancelDeveloperToolsRestoreRetry()
+                } else {
+                    forceDeveloperToolsRefreshOnNextAttach = false
+                    cancelDeveloperToolsRestoreRetry()
+                }
+            }
+            return didToggle
+        }
 #if DEBUG
         dlog(
             "browser.devtools toggle.begin panel=\(id.uuidString.prefix(5)) " +
@@ -2893,6 +3148,14 @@ extension BrowserPanel {
 
     @discardableResult
     func showDeveloperTools() -> Bool {
+        if usesCEFSurface {
+            let shown = cefBridge?.showDeveloperTools() ?? false
+            if shown {
+                preferredDeveloperToolsVisible = true
+                cancelDeveloperToolsRestoreRetry()
+            }
+            return shown
+        }
         guard let inspector = webView.cmuxInspectorObject() else { return false }
         let visible = inspector.cmuxCallBool(selector: NSSelectorFromString("isVisible")) ?? false
         if !visible {
@@ -2911,6 +3174,9 @@ extension BrowserPanel {
 
     @discardableResult
     func showDeveloperToolsConsole() -> Bool {
+        if usesCEFSurface {
+            return showDeveloperTools()
+        }
         guard showDeveloperTools() else { return false }
         guard let inspector = webView.cmuxInspectorObject() else { return true }
         // WebKit private inspector API differs by OS; try known console selectors.
@@ -2931,6 +3197,20 @@ extension BrowserPanel {
 
     /// Called before WKWebView detaches so manual inspector closes are respected.
     func syncDeveloperToolsPreferenceFromInspector(preserveVisibleIntent: Bool = false) {
+        if usesCEFSurface {
+            let visible = cefBridge?.isDeveloperToolsVisible() ?? false
+            if visible {
+                preferredDeveloperToolsVisible = true
+                cancelDeveloperToolsRestoreRetry()
+                return
+            }
+            if preserveVisibleIntent && preferredDeveloperToolsVisible {
+                return
+            }
+            preferredDeveloperToolsVisible = false
+            cancelDeveloperToolsRestoreRetry()
+            return
+        }
         guard let inspector = webView.cmuxInspectorObject() else { return }
         guard let visible = inspector.cmuxCallBool(selector: NSSelectorFromString("isVisible")) else { return }
         if visible {
@@ -2947,6 +3227,27 @@ extension BrowserPanel {
 
     /// Called after WKWebView reattaches to keep inspector stable across split/layout churn.
     func restoreDeveloperToolsAfterAttachIfNeeded() {
+        if usesCEFSurface {
+            guard preferredDeveloperToolsVisible else {
+                cancelDeveloperToolsRestoreRetry()
+                forceDeveloperToolsRefreshOnNextAttach = false
+                return
+            }
+            let visible = cefBridge?.isDeveloperToolsVisible() ?? false
+            if visible {
+                cancelDeveloperToolsRestoreRetry()
+                forceDeveloperToolsRefreshOnNextAttach = false
+                return
+            }
+            let didShow = cefBridge?.showDeveloperTools() ?? false
+            if didShow {
+                cancelDeveloperToolsRestoreRetry()
+            } else {
+                scheduleDeveloperToolsRestoreRetry()
+            }
+            forceDeveloperToolsRefreshOnNextAttach = false
+            return
+        }
         guard preferredDeveloperToolsVisible else {
             cancelDeveloperToolsRestoreRetry()
             forceDeveloperToolsRefreshOnNextAttach = false
@@ -2998,12 +3299,24 @@ extension BrowserPanel {
 
     @discardableResult
     func isDeveloperToolsVisible() -> Bool {
+        if usesCEFSurface {
+            return cefBridge?.isDeveloperToolsVisible() ?? false
+        }
         guard let inspector = webView.cmuxInspectorObject() else { return false }
         return inspector.cmuxCallBool(selector: NSSelectorFromString("isVisible")) ?? false
     }
 
     @discardableResult
     func hideDeveloperTools() -> Bool {
+        if usesCEFSurface {
+            let hidden = cefBridge?.hideDeveloperTools() ?? false
+            if hidden {
+                preferredDeveloperToolsVisible = false
+                forceDeveloperToolsRefreshOnNextAttach = false
+                cancelDeveloperToolsRestoreRetry()
+            }
+            return hidden
+        }
         guard let inspector = webView.cmuxInspectorObject() else { return false }
         let visible = inspector.cmuxCallBool(selector: NSSelectorFromString("isVisible")) ?? false
         if visible {
@@ -3021,7 +3334,10 @@ extension BrowserPanel {
     /// while its container is off-window. Avoid detaching in that transient phase if
     /// DevTools is intended to remain open, because detach/reattach can blank inspector content.
     func shouldPreserveWebViewAttachmentDuringTransientHide() -> Bool {
-        preferredDeveloperToolsVisible && !hasSideDockedDeveloperToolsLayout()
+        if usesCEFSurface {
+            return preferredDeveloperToolsVisible
+        }
+        return preferredDeveloperToolsVisible && !hasSideDockedDeveloperToolsLayout()
     }
 
     func requestDeveloperToolsRefreshAfterNextAttach(reason: String) {
@@ -3038,31 +3354,50 @@ extension BrowserPanel {
 
     @discardableResult
     func zoomIn() -> Bool {
-        applyPageZoom(webView.pageZoom + pageZoomStep)
+        if usesCEFSurface {
+            return cefBridge?.zoomIn() ?? false
+        }
+        return applyPageZoom(webView.pageZoom + pageZoomStep)
     }
 
     @discardableResult
     func zoomOut() -> Bool {
-        applyPageZoom(webView.pageZoom - pageZoomStep)
+        if usesCEFSurface {
+            return cefBridge?.zoomOut() ?? false
+        }
+        return applyPageZoom(webView.pageZoom - pageZoomStep)
     }
 
     @discardableResult
     func resetZoom() -> Bool {
-        applyPageZoom(1.0)
+        if usesCEFSurface {
+            return cefBridge?.resetZoom() ?? false
+        }
+        return applyPageZoom(1.0)
     }
 
     func currentPageZoomFactor() -> CGFloat {
-        webView.pageZoom
+        if usesCEFSurface {
+            return CGFloat(cefBridge?.pageZoomFactor ?? 1.0)
+        }
+        return webView.pageZoom
     }
 
     @discardableResult
     func setPageZoomFactor(_ pageZoom: CGFloat) -> Bool {
         let clamped = max(minPageZoom, min(maxPageZoom, pageZoom))
+        if usesCEFSurface {
+            return cefBridge?.applyPageZoomFactor(Double(clamped)) ?? false
+        }
         return applyPageZoom(clamped)
     }
 
     /// Take a snapshot of the web view
     func takeSnapshot(completion: @escaping (NSImage?) -> Void) {
+        if usesCEFSurface, let hostedView = makeCEFHostedView() {
+            completion(Self.snapshotImage(for: hostedView))
+            return
+        }
         let config = WKSnapshotConfiguration()
         webView.takeSnapshot(with: config) { image, error in
             if let error = error {
@@ -3076,7 +3411,189 @@ extension BrowserPanel {
 
     /// Execute JavaScript
     func evaluateJavaScript(_ script: String) async throws -> Any? {
-        try await webView.evaluateJavaScript(script)
+        if usesCEFSurface {
+            cefBridge?.executeJavaScriptString(script)
+            return nil
+        }
+        return try await webView.evaluateJavaScript(script)
+    }
+
+    func runAutomationJavaScript(
+        _ script: String,
+        timeout: TimeInterval = 5.0,
+        useEval: Bool = true
+    ) -> (value: Any?, errorDescription: String?) {
+        if usesCEFSurface {
+            var errorDescription: NSString?
+            let value = cefBridge?.runAutomationJavaScript(
+                script,
+                timeout: timeout,
+                useEval: useEval,
+                errorDescription: &errorDescription
+            )
+            return (value, errorDescription as String?)
+        }
+
+        return runWebKitAutomationJavaScript(
+            script,
+            timeout: timeout,
+            preferAsync: false,
+            contentWorld: .page
+        )
+    }
+
+    func runWebKitAutomationJavaScript(
+        _ script: String,
+        timeout: TimeInterval = 5.0,
+        preferAsync: Bool = false,
+        contentWorld: WKContentWorld
+    ) -> (value: Any?, errorDescription: String?) {
+        guard !usesCEFSurface else {
+            return (nil, "WebKit automation execution is unavailable on CEF browser surfaces")
+        }
+        return Self.runSynchronousJavaScript(
+            on: webView,
+            script: script,
+            timeout: timeout,
+            preferAsync: preferAsync,
+            contentWorld: contentWorld
+        )
+    }
+
+    func cookieDictionaries(timeout: TimeInterval = 3.0) -> (cookies: [[String: Any]]?, errorDescription: String?) {
+        if usesCEFSurface {
+            var errorDescription: NSString?
+            let cookies = cefBridge?.cookieDictionaries(withTimeout: timeout, errorDescription: &errorDescription) as? [[String: Any]]
+            return (cookies, errorDescription as String?)
+        }
+
+        let store = webView.configuration.websiteDataStore.httpCookieStore
+        guard let cookies = Self.cookieStoreAll(store, timeout: timeout) else {
+            return (nil, "Timed out reading cookies")
+        }
+        return (cookies.map(Self.browserCookieDict), nil)
+    }
+
+    func setCookieDictionaries(
+        _ cookies: [[String: Any]],
+        fallbackURL: URL?,
+        timeout: TimeInterval = 3.0
+    ) -> (count: Int, errorDescription: String?) {
+        if usesCEFSurface {
+            var errorDescription: NSString?
+            var count: UInt = 0
+            let ok = cefBridge?.setCookieDictionaries(
+                cookies,
+                fallbackURLString: fallbackURL?.absoluteString,
+                timeout: timeout,
+                count: &count,
+                errorDescription: &errorDescription
+            ) ?? false
+            return (ok ? Int(count) : 0, errorDescription as String?)
+        }
+
+        let store = webView.configuration.websiteDataStore.httpCookieStore
+        var setCount = 0
+        for raw in cookies {
+            guard let cookie = Self.browserCookieFromObject(raw, fallbackURL: fallbackURL) else {
+                return (0, "Invalid cookie payload")
+            }
+            if Self.cookieStoreSet(store, cookie: cookie, timeout: timeout) {
+                setCount += 1
+            } else {
+                return (0, "Timed out setting cookie")
+            }
+        }
+        return (setCount, nil)
+    }
+
+    func clearCookieDictionaries(
+        name: String?,
+        domain: String?,
+        timeout: TimeInterval = 3.0
+    ) -> (count: Int, errorDescription: String?) {
+        if usesCEFSurface {
+            var errorDescription: NSString?
+            let missingCount = UInt.max
+            let count = cefBridge?.clearCookies(
+                matchingName: name,
+                domain: domain,
+                timeout: timeout,
+                errorDescription: &errorDescription
+            ) ?? missingCount
+            if count == missingCount {
+                return (0, errorDescription as String?)
+            }
+            return (Int(count), errorDescription as String?)
+        }
+
+        let clearAll = name == nil && domain == nil
+        let store = webView.configuration.websiteDataStore.httpCookieStore
+        guard let cookies = Self.cookieStoreAll(store, timeout: timeout) else {
+            return (0, "Timed out reading cookies")
+        }
+        let targets = cookies.filter { cookie in
+            if clearAll { return true }
+            if let name, cookie.name != name { return false }
+            if let domain, !cookie.domain.contains(domain) { return false }
+            return true
+        }
+        var removed = 0
+        for cookie in targets {
+            if Self.cookieStoreDelete(store, cookie: cookie, timeout: timeout) {
+                removed += 1
+            } else {
+                return (removed, "Timed out clearing cookie")
+            }
+        }
+        return (removed, nil)
+    }
+
+    func installDocumentStartScript(_ script: String, executeImmediately: Bool = true) {
+        let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let isNewScript = installedDocumentStartScripts.insert(trimmed).inserted
+
+        if usesCEFSurface {
+            cefBridge?.addDocumentStartJavaScriptString(trimmed)
+            if executeImmediately {
+                cefBridge?.executeJavaScriptString(trimmed)
+            }
+            return
+        }
+
+        if isNewScript {
+            let userScript = WKUserScript(source: trimmed, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+            webView.configuration.userContentController.addUserScript(userScript)
+        }
+        if executeImmediately {
+            webView.evaluateJavaScript(trimmed) { _, _ in }
+        }
+    }
+
+    func evaluateBrowserSurfaceJavaScript(
+        _ script: String,
+        timeout: TimeInterval = 5.0,
+        useEval: Bool = false,
+        completion: @escaping (Any?, String?) -> Void
+    ) {
+        if usesCEFSurface {
+            let result = runAutomationJavaScript(script, timeout: timeout, useEval: useEval)
+            completion(result.value, result.errorDescription)
+            return
+        }
+
+        webView.evaluateJavaScript(script) { value, error in
+            completion(value, error?.localizedDescription)
+        }
+    }
+
+    func ensureTelemetryHooksInstalled() {
+        installDocumentStartScript(Self.telemetryHookBootstrapScriptSource, executeImmediately: true)
+    }
+
+    func ensureDialogHooksInstalled() {
+        installDocumentStartScript(Self.dialogTelemetryHookBootstrapScriptSource, executeImmediately: true)
     }
 
     // MARK: - Find in Page
@@ -3101,6 +3618,10 @@ extension BrowserPanel {
     }
 
     func findNext() {
+        if usesCEFSurface, let query = searchState?.needle, !query.isEmpty {
+            cefBridge?.findText(query, forward: true, findNext: true)
+            return
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             let result = try? await self.webView.evaluateJavaScript(BrowserFindJavaScript.nextScript())
@@ -3109,6 +3630,10 @@ extension BrowserPanel {
     }
 
     func findPrevious() {
+        if usesCEFSurface, let query = searchState?.needle, !query.isEmpty {
+            cefBridge?.findText(query, forward: false, findNext: true)
+            return
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             let result = try? await self.webView.evaluateJavaScript(BrowserFindJavaScript.previousScript())
@@ -3137,6 +3662,10 @@ extension BrowserPanel {
             searchState?.total = nil
             return
         }
+        if usesCEFSurface {
+            cefBridge?.findText(needle, forward: true, findNext: false)
+            return
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             let js = BrowserFindJavaScript.searchScript(query: needle)
@@ -3150,6 +3679,10 @@ extension BrowserPanel {
     }
 
     private func executeFindClear() {
+        if usesCEFSurface {
+            cefBridge?.clearFindResults()
+            return
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -3179,6 +3712,10 @@ extension BrowserPanel {
     }
 
     func refreshAppearanceDrivenColors() {
+        if usesCEFSurface, let hostedView = makeCEFHostedView() {
+            hostedView.layer?.backgroundColor = GhosttyBackgroundTheme.currentColor().cgColor
+            return
+        }
         webView.underPageBackgroundColor = GhosttyBackgroundTheme.currentColor()
     }
 
@@ -3227,6 +3764,39 @@ extension BrowserPanel {
             return Date() < until
         }
         return false
+    }
+
+    func syncBrowserSurfaceFirstResponderPolicy(isPanelFocused: Bool, reason: String) {
+        let next = isPanelFocused && !shouldSuppressWebViewFocus()
+        if usesCEFSurface,
+           let browserSurface = browserSurfaceView() as? any CMUXBrowserSurfaceFocusControlling {
+#if DEBUG
+            if browserSurface.cmuxAllowsFirstResponderAcquisition != next {
+                dlog(
+                    "browser.focus.policy panel=\(id.uuidString.prefix(5)) " +
+                    "cef=\(ObjectIdentifier(browserSurface as AnyObject)) " +
+                    "old=\(browserSurface.cmuxAllowsFirstResponderAcquisition ? 1 : 0) " +
+                    "new=\(next ? 1 : 0) isPanelFocused=\(isPanelFocused ? 1 : 0) " +
+                    "suppress=\(shouldSuppressWebViewFocus() ? 1 : 0) reason=\(reason)"
+                )
+            }
+#endif
+            browserSurface.cmuxAllowsFirstResponderAcquisition = next
+            return
+        }
+
+        guard let cmuxWebView = webView as? CmuxWebView else { return }
+#if DEBUG
+        if cmuxWebView.allowsFirstResponderAcquisition != next {
+            dlog(
+                "browser.focus.policy panel=\(id.uuidString.prefix(5)) " +
+                "web=\(ObjectIdentifier(cmuxWebView)) old=\(cmuxWebView.allowsFirstResponderAcquisition ? 1 : 0) " +
+                "new=\(next ? 1 : 0) isPanelFocused=\(isPanelFocused ? 1 : 0) " +
+                "suppress=\(shouldSuppressWebViewFocus() ? 1 : 0) reason=\(reason)"
+            )
+        }
+#endif
+        cmuxWebView.allowsFirstResponderAcquisition = next
     }
 
     func beginSuppressWebViewFocusForAddressBar() {
@@ -3296,13 +3866,13 @@ extension BrowserPanel {
     }
 
     private func captureAddressBarPageFocusIfNeeded() {
-        webView.evaluateJavaScript(Self.addressBarFocusCaptureScript) { [weak self] result, error in
+        evaluateBrowserSurfaceJavaScript(Self.addressBarFocusCaptureScript) { [weak self] result, errorDescription in
 #if DEBUG
             guard let self else { return }
-            if let error {
+            if let errorDescription {
                 dlog(
                     "browser.focus.addressBar.capture panel=\(self.id.uuidString.prefix(5)) " +
-                    "result=error message=\(error.localizedDescription)"
+                    "result=error message=\(errorDescription)"
                 )
                 return
             }
@@ -3314,7 +3884,7 @@ extension BrowserPanel {
 #else
             _ = self
             _ = result
-            _ = error
+            _ = errorDescription
 #endif
         }
     }
@@ -3368,7 +3938,7 @@ extension BrowserPanel {
             completion(false)
             return
         }
-        webView.evaluateJavaScript(Self.addressBarFocusRestoreScript) { [weak self] result, error in
+        evaluateBrowserSurfaceJavaScript(Self.addressBarFocusRestoreScript) { [weak self] result, errorDescription in
             guard let self else {
                 completion(false)
                 return
@@ -3378,16 +3948,18 @@ extension BrowserPanel {
                 return
             }
 
-            let status = Self.addressBarPageFocusRestoreStatus(from: result, error: error)
+            let status = errorDescription == nil
+                ? Self.addressBarPageFocusRestoreStatus(from: result, error: nil)
+                : .error
             let canRetry = (status == .notFocused || status == .error)
             let hasNextAttempt = attempt + 1 < delays.count
 
 #if DEBUG
-            if let error {
+            if let errorDescription {
                 dlog(
                     "browser.focus.addressBar.restore panel=\(self.id.uuidString.prefix(5)) " +
                     "attempt=\(attempt) status=\(status.rawValue) " +
-                    "message=\(error.localizedDescription)"
+                    "message=\(errorDescription)"
                 )
             } else {
                 dlog(
@@ -3430,6 +4002,12 @@ extension BrowserPanel {
     /// Returns the most reliable URL string for omnibar-related matching and UI decisions.
     /// `currentURL` can lag behind navigation changes, so prefer the live WKWebView URL.
     func preferredURLStringForOmnibar() -> String? {
+        if usesCEFSurface,
+           let current = currentURL?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines),
+           !current.isEmpty,
+           current != blankURLString {
+            return current
+        }
         if let webViewURL = webView.url?.absoluteString
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !webViewURL.isEmpty,
@@ -3447,7 +4025,28 @@ extension BrowserPanel {
         return nil
     }
 
+    func resolvedCurrentURLStringForAPI() -> String {
+        preferredURLStringForOmnibar() ?? ""
+    }
+
+    func isBrowserSurfaceBlank() -> Bool {
+        let urlString = resolvedCurrentURLStringForAPI().trimmingCharacters(in: .whitespacesAndNewlines)
+        return urlString.isEmpty || urlString == blankURLString
+    }
+
+    func isBrowserSurfaceLoading() -> Bool {
+        if usesCEFSurface {
+            return isLoading
+        }
+        return webView.isLoading || isLoading
+    }
+
     private func resolvedCurrentSessionHistoryURL() -> URL? {
+        if usesCEFSurface,
+           let currentURL,
+           Self.serializableSessionHistoryURLString(currentURL) != nil {
+            return currentURL
+        }
         if let webViewURL = webView.url,
            Self.serializableSessionHistoryURLString(webViewURL) != nil {
             return webViewURL
@@ -3508,7 +4107,188 @@ extension BrowserPanel {
 }
 
 private extension BrowserPanel {
+    static func runSynchronousJavaScript(
+        on webView: WKWebView,
+        script: String,
+        timeout: TimeInterval,
+        preferAsync: Bool,
+        contentWorld: WKContentWorld
+    ) -> (value: Any?, errorDescription: String?) {
+        let timeoutSeconds = max(0.01, timeout)
+        let resultLock = NSLock()
+        let completionSignal = DispatchSemaphore(value: 0)
+        var done = false
+        var resultValue: Any?
+        var resultError: String?
+
+        let finish: (_ value: Any?, _ error: String?) -> Void = { value, error in
+            resultLock.lock()
+            if !done {
+                done = true
+                resultValue = value
+                resultError = error
+                completionSignal.signal()
+            }
+            resultLock.unlock()
+        }
+
+        let evaluator = {
+            if preferAsync, #available(macOS 11.0, *) {
+                webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: contentWorld) { result in
+                    switch result {
+                    case .success(let value):
+                        finish(value, nil)
+                    case .failure(let error):
+                        finish(nil, error.localizedDescription)
+                    }
+                }
+            } else {
+                webView.evaluateJavaScript(script) { value, error in
+                    if let error {
+                        finish(nil, error.localizedDescription)
+                    } else {
+                        finish(value, nil)
+                    }
+                }
+            }
+        }
+
+        if Thread.isMainThread {
+            evaluator()
+            let deadline = Date().addingTimeInterval(timeoutSeconds)
+            while true {
+                resultLock.lock()
+                let isDone = done
+                resultLock.unlock()
+                if isDone {
+                    break
+                }
+                if Date() >= deadline {
+                    return (nil, "Timed out waiting for JavaScript result")
+                }
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            }
+        } else {
+            DispatchQueue.main.async(execute: evaluator)
+            if completionSignal.wait(timeout: .now() + timeoutSeconds) == .timedOut {
+                return (nil, "Timed out waiting for JavaScript result")
+            }
+        }
+
+        return (resultValue, resultError)
+    }
+
+    static func browserCookieDict(_ cookie: HTTPCookie) -> [String: Any] {
+        var out: [String: Any] = [
+            "name": cookie.name,
+            "value": cookie.value,
+            "domain": cookie.domain,
+            "path": cookie.path,
+            "secure": cookie.isSecure,
+            "session_only": cookie.isSessionOnly,
+        ]
+        if let expiresDate = cookie.expiresDate {
+            out["expires"] = Int(expiresDate.timeIntervalSince1970)
+        } else {
+            out["expires"] = NSNull()
+        }
+        return out
+    }
+
+    static func cookieStoreAll(_ store: WKHTTPCookieStore, timeout: TimeInterval) -> [HTTPCookie]? {
+        var done = false
+        var cookies: [HTTPCookie] = []
+        store.getAllCookies { items in
+            cookies = items
+            done = true
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !done && Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        return done ? cookies : nil
+    }
+
+    static func cookieStoreSet(_ store: WKHTTPCookieStore, cookie: HTTPCookie, timeout: TimeInterval) -> Bool {
+        var done = false
+        store.setCookie(cookie) {
+            done = true
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !done && Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        return done
+    }
+
+    static func cookieStoreDelete(_ store: WKHTTPCookieStore, cookie: HTTPCookie, timeout: TimeInterval) -> Bool {
+        var done = false
+        store.delete(cookie) {
+            done = true
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while !done && Date() < deadline {
+            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        return done
+    }
+
+    static func browserCookieFromObject(_ raw: [String: Any], fallbackURL: URL?) -> HTTPCookie? {
+        var props: [HTTPCookiePropertyKey: Any] = [:]
+        if let name = raw["name"] as? String {
+            props[.name] = name
+        }
+        if let value = raw["value"] as? String {
+            props[.value] = value
+        }
+        if let domain = raw["domain"] as? String {
+            props[.domain] = domain
+        }
+        if let path = raw["path"] as? String {
+            props[.path] = path
+        }
+        if let secure = raw["secure"] as? Bool, secure {
+            props[.secure] = "TRUE"
+        }
+        if let expires = raw["expires"] as? NSNumber {
+            props[.expires] = Date(timeIntervalSince1970: expires.doubleValue)
+        } else if let expiresInt = raw["expires"] as? Int {
+            props[.expires] = Date(timeIntervalSince1970: TimeInterval(expiresInt))
+        }
+
+        if props[.domain] == nil || props[.path] == nil {
+            let urlString = raw["url"] as? String ?? fallbackURL?.absoluteString
+            if let urlString, let url = URL(string: urlString) {
+                if props[.domain] == nil {
+                    props[.domain] = url.host
+                }
+                if props[.path] == nil {
+                    props[.path] = url.path.isEmpty ? "/" : url.path
+                }
+            }
+        }
+
+        if props[.name] == nil || props[.value] == nil || props[.domain] == nil || props[.path] == nil {
+            return nil
+        }
+
+        return HTTPCookie(properties: props)
+    }
+
     func applyBrowserThemeModeIfNeeded() {
+        if usesCEFSurface {
+            switch browserThemeMode {
+            case .system:
+                makeCEFHostedView()?.appearance = nil
+            case .light:
+                makeCEFHostedView()?.appearance = NSAppearance(named: .aqua)
+            case .dark:
+                makeCEFHostedView()?.appearance = NSAppearance(named: .darkAqua)
+            }
+            let script = makeBrowserThemeModeScript(mode: browserThemeMode)
+            cefBridge?.executeJavaScriptString(script)
+            return
+        }
         switch browserThemeMode {
         case .system:
             webView.appearance = nil
@@ -3526,6 +4306,16 @@ private extension BrowserPanel {
             }
             #endif
         }
+    }
+
+    static func snapshotImage(for view: NSView) -> NSImage? {
+        let bounds = view.bounds.integral
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        view.cacheDisplay(in: bounds, to: rep)
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(rep)
+        return image
     }
 
     func makeBrowserThemeModeScript(mode: BrowserThemeMode) -> String {
@@ -3650,30 +4440,27 @@ extension BrowserPanel {
     func debugDeveloperToolsStateSummary() -> String {
         let preferred = preferredDeveloperToolsVisible ? 1 : 0
         let visible = isDeveloperToolsVisible() ? 1 : 0
-        let inspector = webView.cmuxInspectorObject() == nil ? 0 : 1
-        let attached = webView.superview == nil ? 0 : 1
-        let inWindow = webView.window == nil ? 0 : 1
+        let inspector = usesCEFSurface ? visible : (webView.cmuxInspectorObject() == nil ? 0 : 1)
+        let hostedView = browserSurfaceView()
+        let attached = hostedView?.superview == nil ? 0 : 1
+        let inWindow = hostedView?.window == nil ? 0 : 1
         let forceRefresh = forceDeveloperToolsRefreshOnNextAttach ? 1 : 0
         return "pref=\(preferred) vis=\(visible) inspector=\(inspector) attached=\(attached) inWindow=\(inWindow) restoreRetry=\(developerToolsRestoreRetryAttempt) forceRefresh=\(forceRefresh)"
     }
 
     func debugDeveloperToolsGeometrySummary() -> String {
-        let container = webView.superview
+        guard let hostedView = browserSurfaceView() else {
+            return "webFrame=missing webBounds=missing webWin=-1 super=nil superType=nil superBounds=0.0,0.0 0.0x0.0 inspectorHApprox=0.0 inspectorInsets=0.0 inspectorOverflow=0.0 inspectorSubviews=0"
+        }
+        let container = hostedView.superview
         let containerBounds = container?.bounds ?? .zero
-        let webFrame = webView.frame
+        let webFrame = hostedView.frame
         let inspectorInsets = max(0, containerBounds.height - webFrame.height)
         let inspectorOverflow = max(0, webFrame.maxY - containerBounds.maxY)
         let inspectorHeightApprox = max(inspectorInsets, inspectorOverflow)
-        let inspectorSubviews = container.map { Self.debugInspectorSubviewCount(in: $0) } ?? 0
+        let inspectorSubviews = usesCEFSurface ? 0 : (container.map { Self.debugInspectorSubviewCount(in: $0) } ?? 0)
         let containerType = container.map { String(describing: type(of: $0)) } ?? "nil"
-        return "webFrame=\(Self.debugRectDescription(webFrame)) webBounds=\(Self.debugRectDescription(webView.bounds)) webWin=\(webView.window?.windowNumber ?? -1) super=\(Self.debugObjectToken(container)) superType=\(containerType) superBounds=\(Self.debugRectDescription(containerBounds)) inspectorHApprox=\(String(format: "%.1f", inspectorHeightApprox)) inspectorInsets=\(String(format: "%.1f", inspectorInsets)) inspectorOverflow=\(String(format: "%.1f", inspectorOverflow)) inspectorSubviews=\(inspectorSubviews)"
-    }
-
-    func hideBrowserPortalView(source: String) {
-        BrowserWindowPortalRegistry.hide(
-            webView: webView,
-            source: source
-        )
+        return "webFrame=\(Self.debugRectDescription(webFrame)) webBounds=\(Self.debugRectDescription(hostedView.bounds)) webWin=\(hostedView.window?.windowNumber ?? -1) super=\(Self.debugObjectToken(container)) superType=\(containerType) superBounds=\(Self.debugRectDescription(containerBounds)) inspectorHApprox=\(String(format: "%.1f", inspectorHeightApprox)) inspectorInsets=\(String(format: "%.1f", inspectorInsets)) inspectorOverflow=\(String(format: "%.1f", inspectorOverflow)) inspectorSubviews=\(inspectorSubviews)"
     }
 
 }
@@ -3817,6 +4604,15 @@ private class BrowserDownloadDelegate: NSObject, WKDownloadDelegate {
         return dir
     }()
 
+    private static var autoSaveDirectoryURL: URL? {
+        let raw = ProcessInfo.processInfo.environment["CMUX_UI_TEST_BROWSER_DOWNLOAD_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: raw, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
     private static func sanitizedFilename(_ raw: String, fallbackURL: URL?) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let candidate = (trimmed as NSString).lastPathComponent
@@ -3885,6 +4681,18 @@ private class BrowserDownloadDelegate: NSObject, WKDownloadDelegate {
         // Show NSSavePanel on the next runloop iteration (safe context).
         DispatchQueue.main.async {
             self.onDownloadReadyToSave?()
+            if let autoSaveDirectoryURL = Self.autoSaveDirectoryURL {
+                let destURL = autoSaveDirectoryURL.appendingPathComponent(info.suggestedFilename, isDirectory: false)
+                do {
+                    try? FileManager.default.removeItem(at: destURL)
+                    try FileManager.default.moveItem(at: info.tempURL, to: destURL)
+                    NSLog("BrowserPanel download auto-saved: %@", destURL.path)
+                } catch {
+                    NSLog("BrowserPanel download auto-save failed: %@", error.localizedDescription)
+                    try? FileManager.default.removeItem(at: info.tempURL)
+                }
+                return
+            }
             let savePanel = NSSavePanel()
             savePanel.nameFieldStringValue = info.suggestedFilename
             savePanel.canCreateDirectories = true

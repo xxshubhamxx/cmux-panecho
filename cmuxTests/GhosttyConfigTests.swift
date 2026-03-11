@@ -999,16 +999,29 @@ final class SocketControlSettingsTests: XCTestCase {
         XCTAssertEqual(path, "/tmp/cmux-nightly.sock")
     }
 
-    func testDebugBundleHonorsSocketOverrideWithoutOptInFlag() {
+    func testTaggedDebugBundleIgnoresAmbientSocketOverride() {
         let path = SocketControlSettings.socketPath(
             environment: [
-                "CMUX_SOCKET_PATH": "/tmp/cmux-debug-my-tag.sock",
+                "CMUX_SOCKET_PATH": "/tmp/cmux-nightly.sock",
             ],
-            bundleIdentifier: "com.cmuxterm.app.debug.my-tag",
+            bundleIdentifier: "com.cmuxterm.app.debug.cef.live.fix18",
             isDebugBuild: false
         )
 
-        XCTAssertEqual(path, "/tmp/cmux-debug-my-tag.sock")
+        XCTAssertEqual(path, "/tmp/cmux-debug-cef-live-fix18.sock")
+    }
+
+    func testTaggedDebugBundleCanStillOptInToSocketOverride() {
+        let path = SocketControlSettings.socketPath(
+            environment: [
+                "CMUX_SOCKET_PATH": "/tmp/cmux-debug-forced.sock",
+                "CMUX_ALLOW_SOCKET_OVERRIDE": "1",
+            ],
+            bundleIdentifier: "com.cmuxterm.app.debug.cef.live.fix18",
+            isDebugBuild: false
+        )
+
+        XCTAssertEqual(path, "/tmp/cmux-debug-forced.sock")
     }
 
     func testStagingBundleHonorsSocketOverrideWithoutOptInFlag() {
@@ -1046,13 +1059,23 @@ final class SocketControlSettingsTests: XCTestCase {
             "/tmp/cmux-nightly.sock"
         )
         XCTAssertEqual(
-            SocketControlSettings.defaultSocketPath(bundleIdentifier: "com.cmuxterm.app.debug.tag", isDebugBuild: false),
-            "/tmp/cmux-debug.sock"
+            SocketControlSettings.defaultSocketPath(bundleIdentifier: "com.cmuxterm.app.debug.issue.151.ssh", isDebugBuild: false),
+            "/tmp/cmux-debug-issue-151-ssh.sock"
         )
         XCTAssertEqual(
             SocketControlSettings.defaultSocketPath(bundleIdentifier: "com.cmuxterm.app.staging.tag", isDebugBuild: false),
             "/tmp/cmux-staging.sock"
         )
+    }
+
+    func testBaseDebugBundleUsesLaunchTagForSocketPath() {
+        let path = SocketControlSettings.socketPath(
+            environment: ["CMUX_TAG": "cef-live-fix20ui"],
+            bundleIdentifier: "com.cmuxterm.app.debug",
+            isDebugBuild: true
+        )
+
+        XCTAssertEqual(path, "/tmp/cmux-debug-cef-live-fix20ui.sock")
     }
 
     func testUntaggedDebugBundleBlockedWithoutLaunchTag() {

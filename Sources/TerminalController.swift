@@ -157,6 +157,18 @@ class TerminalController {
     private var v2BrowserDownloadEventsBySurface: [UUID: [[String: Any]]] = [:]
     private var v2BrowserUnsupportedNetworkRequestsBySurface: [UUID: [[String: Any]]] = [:]
     private let v2BrowserUndefinedSentinel = V2BrowserUndefinedSentinel()
+    private struct PendingPhysicalShortcut {
+        let parsed: ParsedShortcutCombo
+        let windowNumber: Int
+        let timestamp: TimeInterval
+        let modifierKeyCode: UInt16?
+    }
+
+    private enum PhysicalShortcutReleaseOrder: String {
+        case keyFirst = "key_first"
+        case modifiersFirst = "modifiers_first"
+    }
+    private var pendingPhysicalShortcutByCombo: [String: PendingPhysicalShortcut] = [:]
 
     private init() {}
 
@@ -2001,6 +2013,14 @@ class TerminalController {
             return v2Result(id: id, self.v2DebugShortcutSet(params: params))
         case "debug.shortcut.simulate":
             return v2Result(id: id, self.v2DebugShortcutSimulate(params: params))
+        case "debug.shortcut.simulate_appkit":
+            return v2Result(id: id, self.v2DebugShortcutSimulateAppKit(params: params))
+        case "debug.shortcut.simulate_physical":
+            return v2Result(id: id, self.v2DebugShortcutSimulatePhysical(params: params))
+        case "debug.shortcut.press_physical":
+            return v2Result(id: id, self.v2DebugShortcutPressPhysical(params: params))
+        case "debug.shortcut.release_physical":
+            return v2Result(id: id, self.v2DebugShortcutReleasePhysical(params: params))
         case "debug.type":
             return v2Result(id: id, self.v2DebugType(params: params))
         case "debug.app.activate":
@@ -2217,6 +2237,10 @@ class TerminalController {
         methods.append(contentsOf: [
             "debug.shortcut.set",
             "debug.shortcut.simulate",
+            "debug.shortcut.simulate_appkit",
+            "debug.shortcut.simulate_physical",
+            "debug.shortcut.press_physical",
+            "debug.shortcut.release_physical",
             "debug.type",
             "debug.app.activate",
             "debug.command_palette.toggle",
@@ -2491,7 +2515,7 @@ class TerminalController {
             ]
 
             if panel.panelType == .browser, let browserPanel = panel as? BrowserPanel {
-                item["url"] = browserPanel.currentURL?.absoluteString ?? ""
+                item["url"] = browserPanel.resolvedCurrentURLStringForAPI()
             } else {
                 item["url"] = NSNull()
             }
@@ -4493,7 +4517,7 @@ class TerminalController {
                 if let tp = panel as? TerminalPanel {
                     inWindow = tp.surface.isViewInWindow
                 } else if let bp = panel as? BrowserPanel {
-                    inWindow = bp.webView.window != nil
+                    inWindow = bp.isBrowserSurfaceMountedInWindow()
                 }
                 return [
                     "index": index,
@@ -5715,83 +5739,36 @@ class TerminalController {
         return String(describing: value)
     }
 
+    private func v2BridgeJavaScriptValueToSwift(_ value: Any?) -> Any? {
+        guard let value else { return nil }
+        if value is NSNull { return NSNull() }
+        if let v = value as? String { return v }
+        if let v = value as? Bool { return v }
+        if let v = value as? NSNumber { return v }
+        if let dict = value as? [String: Any] {
+            var out: [String: Any] = [:]
+            for (key, nestedValue) in dict {
+                out[key] = v2BridgeJavaScriptValueToSwift(nestedValue)
+            }
+            return out
+        }
+        if let dict = value as? [AnyHashable: Any] {
+            var out: [String: Any] = [:]
+            for (key, nestedValue) in dict {
+                guard let stringKey = key as? String else { continue }
+                out[stringKey] = v2BridgeJavaScriptValueToSwift(nestedValue)
+            }
+            return out
+        }
+        if let array = value as? [Any] {
+            return array.map { v2BridgeJavaScriptValueToSwift($0) as Any }
+        }
+        return value
+    }
+
     private enum V2JavaScriptResult {
         case success(Any?)
         case failure(String)
-    }
-
-    private func v2RunJavaScript(
-        _ webView: WKWebView,
-        script: String,
-        timeout: TimeInterval = 5.0,
-        preferAsync: Bool = false,
-        contentWorld: WKContentWorld
-    ) -> V2JavaScriptResult {
-        let timeoutSeconds = max(0.01, timeout)
-        let resultLock = NSLock()
-        let completionSignal = DispatchSemaphore(value: 0)
-        var done = false
-        var resultValue: Any?
-        var resultError: String?
-
-        let finish: (_ value: Any?, _ error: String?) -> Void = { value, error in
-            resultLock.lock()
-            if !done {
-                done = true
-                resultValue = value
-                resultError = error
-                completionSignal.signal()
-            }
-            resultLock.unlock()
-        }
-
-        let evaluator = {
-            if preferAsync, #available(macOS 11.0, *) {
-                webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: contentWorld) { result in
-                    switch result {
-                    case .success(let value):
-                        finish(value, nil)
-                    case .failure(let error):
-                        finish(nil, error.localizedDescription)
-                    }
-                }
-            } else {
-                webView.evaluateJavaScript(script) { value, error in
-                    if let error {
-                        finish(nil, error.localizedDescription)
-                    } else {
-                        finish(value, nil)
-                    }
-                }
-            }
-        }
-
-        if Thread.isMainThread {
-            evaluator()
-            let deadline = Date().addingTimeInterval(timeoutSeconds)
-            while true {
-                resultLock.lock()
-                let isDone = done
-                resultLock.unlock()
-                if isDone {
-                    break
-                }
-                if Date() >= deadline {
-                    return .failure("Timed out waiting for JavaScript result")
-                }
-                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
-            }
-        } else {
-            DispatchQueue.main.async(execute: evaluator)
-            if completionSignal.wait(timeout: .now() + timeoutSeconds) == .timedOut {
-                return .failure("Timed out waiting for JavaScript result")
-            }
-        }
-
-        if let resultError {
-            return .failure(resultError)
-        }
-        return .success(resultValue)
     }
 
     private func v2BrowserSelector(_ params: [String: Any]) -> String? {
@@ -5834,7 +5811,7 @@ class TerminalController {
     }
 
     private func v2RunBrowserJavaScript(
-        _ webView: WKWebView,
+        _ browserPanel: BrowserPanel,
         surfaceId: UUID,
         script: String,
         timeout: TimeInterval = 5.0,
@@ -5888,31 +5865,47 @@ class TerminalController {
         """
 
         var rawResult: V2JavaScriptResult
-        if #available(macOS 11.0, *) {
-            rawResult = v2RunJavaScript(
-                webView,
-                script: asyncFunctionBody,
+        if #available(macOS 11.0, *), !browserPanel.usesCEFSurface {
+            let result = browserPanel.runWebKitAutomationJavaScript(
+                asyncFunctionBody,
                 timeout: timeout,
                 preferAsync: true,
                 contentWorld: .page
             )
+            rawResult = result.errorDescription.map { .failure($0) } ?? .success(result.value)
         } else {
             let evaluateFallback = """
             (async () => {
               \(asyncFunctionBody)
             })()
             """
-            rawResult = v2RunJavaScript(webView, script: evaluateFallback, timeout: timeout, contentWorld: .page)
+            if browserPanel.usesCEFSurface {
+                let result = browserPanel.runAutomationJavaScript(
+                    evaluateFallback,
+                    timeout: timeout,
+                    useEval: false
+                )
+                rawResult = result.errorDescription.map { .failure($0) } ?? .success(result.value)
+            } else {
+                let result = browserPanel.runWebKitAutomationJavaScript(
+                    evaluateFallback,
+                    timeout: timeout,
+                    preferAsync: false,
+                    contentWorld: .page
+                )
+                rawResult = result.errorDescription.map { .failure($0) } ?? .success(result.value)
+            }
         }
 
-        if !useEval, case .failure(let pageMessage) = rawResult, #available(macOS 11.0, *) {
-            let isolatedResult = v2RunJavaScript(
-                webView,
-                script: asyncFunctionBody,
+        if !useEval, case .failure(let pageMessage) = rawResult, #available(macOS 11.0, *), !browserPanel.usesCEFSurface {
+            let isolatedAttempt = browserPanel.runWebKitAutomationJavaScript(
+                asyncFunctionBody,
                 timeout: timeout,
                 preferAsync: true,
                 contentWorld: .defaultClient
             )
+            let isolatedResult: V2JavaScriptResult =
+                isolatedAttempt.errorDescription.map { .failure($0) } ?? .success(isolatedAttempt.value)
             switch isolatedResult {
             case .success:
                 rawResult = isolatedResult
@@ -5927,19 +5920,23 @@ class TerminalController {
         case .failure(let message):
             return .failure(message)
         case .success(let value):
-            guard let dict = value as? [String: Any],
-                  let type = dict[Self.v2BrowserEvalEnvelopeTypeKey] as? String else {
-                return .success(value)
+            var bridgedValue = v2BridgeJavaScriptValueToSwift(value)
+            var unwrapDepth = 0
+            while unwrapDepth < 8,
+                  let dict = bridgedValue as? [String: Any],
+                  let type = dict[Self.v2BrowserEvalEnvelopeTypeKey] as? String {
+                switch type {
+                case Self.v2BrowserEvalEnvelopeTypeUndefined:
+                    return .success(v2BrowserUndefinedSentinel)
+                case Self.v2BrowserEvalEnvelopeTypeValue:
+                    bridgedValue = v2BridgeJavaScriptValueToSwift(dict[Self.v2BrowserEvalEnvelopeValueKey])
+                    unwrapDepth += 1
+                    continue
+                default:
+                    return .success(bridgedValue)
+                }
             }
-
-            switch type {
-            case Self.v2BrowserEvalEnvelopeTypeUndefined:
-                return .success(v2BrowserUndefinedSentinel)
-            case Self.v2BrowserEvalEnvelopeTypeValue:
-                return .success(dict[Self.v2BrowserEvalEnvelopeValueKey])
-            default:
-                return .success(value)
-            }
+            return .success(bridgedValue)
         }
     }
 
@@ -5999,10 +5996,10 @@ class TerminalController {
           return true;
         })()
         """
-        _ = v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: injector)
+        _ = v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: injector)
 
         for script in scripts {
-            _ = v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script)
+            _ = v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script)
         }
         for css in styles {
             let cssLiteral = v2JSONLiteral(css)
@@ -6017,7 +6014,7 @@ class TerminalController {
               return true;
             })()
             """
-            _ = v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: styleScript)
+            _ = v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: styleScript)
         }
     }
 
@@ -6257,7 +6254,14 @@ class TerminalController {
         v2MainSync {
             guard let ws = v2ResolveWorkspace(params: params, tabManager: tabManager),
                   let browserPanel = ws.browserPanel(for: surfaceId) else { return }
-            browserPanel.navigateSmart(url)
+            let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let literalURL = URL(string: trimmed), literalURL.scheme != nil {
+                browserPanel.navigate(to: literalURL)
+            } else if let resolvedURL = browserPanel.resolveNavigableURL(from: trimmed) {
+                browserPanel.navigate(to: resolvedURL)
+            } else {
+                browserPanel.navigateSmart(url)
+            }
             var payload: [String: Any] = [
                 "workspace_id": ws.id.uuidString,
                 "workspace_ref": v2Ref(kind: .workspace, uuid: ws.id),
@@ -6353,7 +6357,7 @@ class TerminalController {
         })()
         """
 
-        switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script, timeout: 4.0) {
+        switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, timeout: 4.0) {
         case .failure(let message):
             return [
                 "selector": selector,
@@ -6471,7 +6475,7 @@ class TerminalController {
             let retryAttempts = max(1, v2Int(params, "retry_attempts") ?? 3)
 
             for attempt in 1...retryAttempts {
-                switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script, useEval: false) {
+                switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, useEval: false) {
                 case .failure(let message):
                     return .err(code: "js_error", message: message, data: ["action": actionName, "selector": selector])
                 case .success(let value):
@@ -6527,7 +6531,7 @@ class TerminalController {
             return .err(code: "invalid_params", message: "Missing script", data: nil)
         }
         return v2BrowserWithPanel(params: params) { _, ws, surfaceId, browserPanel in
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script, timeout: 10.0) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, timeout: 10.0) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -6729,7 +6733,7 @@ class TerminalController {
             })()
             """
 
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script, timeout: 10.0, useEval: false) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, timeout: 10.0, useEval: false) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -6859,7 +6863,7 @@ class TerminalController {
         var setupResult: V2CallResult?
         var workspaceId: UUID?
         var surfaceIdOut: UUID?
-        var webView: WKWebView?
+        var browserPanelOut: BrowserPanel?
 
         v2MainSync {
             guard let tabManager = self.v2ResolveTabManager(params: params) else {
@@ -6881,13 +6885,13 @@ class TerminalController {
             }
             workspaceId = ws.id
             surfaceIdOut = surfaceId
-            webView = browserPanel.webView
+            browserPanelOut = browserPanel
         }
 
         if let setupResult {
             return setupResult
         }
-        guard let workspaceId, let surfaceIdOut, let webView else {
+        guard let workspaceId, let surfaceIdOut, let browserPanelOut else {
             return .err(code: "internal_error", message: "Failed to resolve browser surface", data: nil)
         }
 
@@ -6908,7 +6912,7 @@ class TerminalController {
 
         while true {
             switch v2RunBrowserJavaScript(
-                webView,
+                browserPanelOut,
                 surfaceId: surfaceIdOut,
                 script: wrappedScript,
                 timeout: max(0.5, pollInterval + 0.25),
@@ -7072,7 +7076,7 @@ class TerminalController {
               return { ok: true };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success:
@@ -7103,7 +7107,7 @@ class TerminalController {
               return { ok: true };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success:
@@ -7134,7 +7138,7 @@ class TerminalController {
               return { ok: true };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success:
@@ -7218,7 +7222,7 @@ class TerminalController {
                 script = "window.scrollBy({ left: \(dx), top: \(dy), behavior: 'instant' }); ({ ok: true })"
             }
 
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -7387,7 +7391,7 @@ class TerminalController {
             }
             let selectorLiteral = v2JSONLiteral(selector)
             let script = "document.querySelectorAll(\(selectorLiteral)).length"
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -7542,7 +7546,7 @@ class TerminalController {
             result = .ok([
                 "workspace_id": ws.id.uuidString,
                 "surface_id": surfaceId.uuidString,
-                "url": browserPanel.currentURL?.absoluteString ?? ""
+                "url": browserPanel.resolvedCurrentURLStringForAPI()
             ])
         }
         return result
@@ -7569,25 +7573,16 @@ class TerminalController {
                 tabManager.selectWorkspace(ws)
             }
 
+            browserPanel.endSuppressWebViewFocusForAddressBar()
+            browserPanel.clearWebViewFocusSuppression()
+            NotificationCenter.default.post(name: .browserDidBlurAddressBar, object: surfaceId)
+
             // Prevent omnibar auto-focus from immediately stealing first responder back.
             browserPanel.suppressOmnibarAutofocus(for: 1.0)
-
-            let webView = browserPanel.webView
-            guard let window = webView.window else {
-                result = .err(code: "invalid_state", message: "WebView is not in a window", data: nil)
-                return
+            DispatchQueue.main.async {
+                _ = browserPanel.focusBrowserSurface()
             }
-            guard !webView.isHiddenOrHasHiddenAncestor else {
-                result = .err(code: "invalid_state", message: "WebView is hidden", data: nil)
-                return
-            }
-
-            window.makeFirstResponder(webView)
-            if let fr = window.firstResponder as? NSView, fr.isDescendant(of: webView) {
-                result = .ok(["focused": true])
-            } else {
-                result = .err(code: "internal_error", message: "Focus did not move into web view", data: nil)
-            }
+            result = .ok(["focused": true])
         }
         return result
     }
@@ -7604,13 +7599,7 @@ class TerminalController {
         v2MainSync {
             guard let ws = v2ResolveWorkspace(params: params, tabManager: tabManager),
                   let browserPanel = ws.browserPanel(for: surfaceId) else { return }
-            let webView = browserPanel.webView
-            guard let window = webView.window,
-                  let fr = window.firstResponder as? NSView else {
-                focused = false
-                return
-            }
-            focused = fr.isDescendant(of: webView)
+            focused = browserPanel.isBrowserSurfaceFocused()
         }
         return .ok(["focused": focused])
     }
@@ -7664,7 +7653,7 @@ class TerminalController {
             })()
             """
 
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: ["action": actionName])
             case .success(let value):
@@ -7954,7 +7943,7 @@ class TerminalController {
               return { ok: true, selector: \(selectorLiteral), text: String(el.textContent || '').trim() };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -7997,7 +7986,7 @@ class TerminalController {
               return { ok: true, selector: finalSelector, text: String(el.textContent || '').trim() };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -8049,7 +8038,7 @@ class TerminalController {
               return { ok: true, selector: finalSelector, index: idx, text: String(el.textContent || '').trim() };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -8100,7 +8089,7 @@ class TerminalController {
               return { ok: true };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -8140,21 +8129,11 @@ class TerminalController {
     }
 
     private func v2BrowserEnsureTelemetryHooks(surfaceId _: UUID, browserPanel: BrowserPanel) {
-        _ = v2RunJavaScript(
-            browserPanel.webView,
-            script: BrowserPanel.telemetryHookBootstrapScriptSource,
-            timeout: 5.0,
-            contentWorld: .page
-        )
+        browserPanel.ensureTelemetryHooksInstalled()
     }
 
     private func v2BrowserEnsureDialogHooks(browserPanel: BrowserPanel) {
-        _ = v2RunJavaScript(
-            browserPanel.webView,
-            script: BrowserPanel.dialogTelemetryHookBootstrapScriptSource,
-            timeout: 5.0,
-            contentWorld: .page
-        )
+        browserPanel.ensureDialogHooksInstalled()
     }
 
     private func v2BrowserDialogRespond(params: [String: Any], accept: Bool) -> V2CallResult {
@@ -8185,7 +8164,7 @@ class TerminalController {
             })()
             """
 
-            switch v2RunJavaScript(browserPanel.webView, script: script, timeout: 5.0, contentWorld: .page) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, timeout: 5.0, useEval: false) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -8218,11 +8197,16 @@ class TerminalController {
             if let path {
                 let deadline = Date().addingTimeInterval(timeout)
                 let fm = FileManager.default
+                let fileDownloaded: () -> Bool = {
+                    guard fm.fileExists(atPath: path),
+                          let attrs = try? fm.attributesOfItem(atPath: path),
+                          let size = attrs[.size] as? NSNumber else {
+                        return false
+                    }
+                    return size.intValue > 0
+                }
                 while Date() < deadline {
-                    if fm.fileExists(atPath: path),
-                       let attrs = try? fm.attributesOfItem(atPath: path),
-                       let size = attrs[.size] as? NSNumber,
-                       size.intValue > 0 {
+                    if fileDownloaded() {
                         return .ok([
                             "workspace_id": ws.id.uuidString,
                             "workspace_ref": v2Ref(kind: .workspace, uuid: ws.id),
@@ -8233,6 +8217,16 @@ class TerminalController {
                         ])
                     }
                     _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+                }
+                if fileDownloaded() {
+                    return .ok([
+                        "workspace_id": ws.id.uuidString,
+                        "workspace_ref": v2Ref(kind: .workspace, uuid: ws.id),
+                        "surface_id": surfaceId.uuidString,
+                        "surface_ref": v2Ref(kind: .surface, uuid: surfaceId),
+                        "path": path,
+                        "downloaded": true
+                    ])
                 }
                 return .err(code: "timeout", message: "Timed out waiting for download file", data: ["path": path, "timeout_ms": timeoutMs])
             }
@@ -8258,130 +8252,39 @@ class TerminalController {
         }
     }
 
-    private func v2BrowserCookieDict(_ cookie: HTTPCookie) -> [String: Any] {
-        var out: [String: Any] = [
-            "name": cookie.name,
-            "value": cookie.value,
-            "domain": cookie.domain,
-            "path": cookie.path,
-            "secure": cookie.isSecure,
-            "session_only": cookie.isSessionOnly
-        ]
-        if let expiresDate = cookie.expiresDate {
-            out["expires"] = Int(expiresDate.timeIntervalSince1970)
-        } else {
-            out["expires"] = NSNull()
-        }
-        return out
-    }
-
-    private func v2BrowserCookieStoreAll(_ store: WKHTTPCookieStore, timeout: TimeInterval = 3.0) -> [HTTPCookie]? {
-        var done = false
-        var cookies: [HTTPCookie] = []
-        store.getAllCookies { items in
-            cookies = items
-            done = true
-        }
-        let deadline = Date().addingTimeInterval(timeout)
-        while !done && Date() < deadline {
-            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
-        }
-        return done ? cookies : nil
-    }
-
-    private func v2BrowserCookieStoreSet(_ store: WKHTTPCookieStore, cookie: HTTPCookie, timeout: TimeInterval = 3.0) -> Bool {
-        var done = false
-        store.setCookie(cookie) {
-            done = true
-        }
-        let deadline = Date().addingTimeInterval(timeout)
-        while !done && Date() < deadline {
-            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
-        }
-        return done
-    }
-
-    private func v2BrowserCookieStoreDelete(_ store: WKHTTPCookieStore, cookie: HTTPCookie, timeout: TimeInterval = 3.0) -> Bool {
-        var done = false
-        store.delete(cookie) {
-            done = true
-        }
-        let deadline = Date().addingTimeInterval(timeout)
-        while !done && Date() < deadline {
-            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
-        }
-        return done
-    }
-
-    private func v2BrowserCookieFromObject(_ raw: [String: Any], fallbackURL: URL?) -> HTTPCookie? {
-        var props: [HTTPCookiePropertyKey: Any] = [:]
-        if let name = raw["name"] as? String {
-            props[.name] = name
-        }
-        if let value = raw["value"] as? String {
-            props[.value] = value
-        }
-
-        if let urlStr = raw["url"] as? String, let url = URL(string: urlStr) {
-            props[.originURL] = url
-        } else if let fallbackURL {
-            props[.originURL] = fallbackURL
-        }
-
-        if let domain = raw["domain"] as? String {
-            props[.domain] = domain
-        } else if let host = fallbackURL?.host {
-            props[.domain] = host
-        }
-
-        if let path = raw["path"] as? String {
-            props[.path] = path
-        } else {
-            props[.path] = "/"
-        }
-
-        if let secure = raw["secure"] as? Bool, secure {
-            props[.secure] = "TRUE"
-        }
-        if let expires = raw["expires"] as? TimeInterval {
-            props[.expires] = Date(timeIntervalSince1970: expires)
-        } else if let expiresInt = raw["expires"] as? Int {
-            props[.expires] = Date(timeIntervalSince1970: TimeInterval(expiresInt))
-        }
-
-        return HTTPCookie(properties: props)
-    }
-
     private func v2BrowserCookiesGet(params: [String: Any]) -> V2CallResult {
         return v2BrowserWithPanel(params: params) { _, ws, surfaceId, browserPanel in
-            let store = browserPanel.webView.configuration.websiteDataStore.httpCookieStore
-            guard var cookies = v2BrowserCookieStoreAll(store) else {
-                return .err(code: "timeout", message: "Timed out reading cookies", data: nil)
-            }
+            let name = v2String(params, "name")
+            let domain = v2String(params, "domain")
+            let path = v2String(params, "path")
 
-            if let name = v2String(params, "name") {
-                cookies = cookies.filter { $0.name == name }
+            let result = browserPanel.cookieDictionaries()
+            guard var cookies = result.cookies else {
+                return .err(code: "timeout", message: result.errorDescription ?? "Timed out reading cookies", data: nil)
             }
-            if let domain = v2String(params, "domain") {
-                cookies = cookies.filter { $0.domain.contains(domain) }
+            if let name {
+                cookies = cookies.filter { ($0["name"] as? String) == name }
             }
-            if let path = v2String(params, "path") {
-                cookies = cookies.filter { $0.path == path }
+            if let domain {
+                cookies = cookies.filter { (($0["domain"] as? String) ?? "").contains(domain) }
             }
+            if let path {
+                cookies = cookies.filter { ($0["path"] as? String) == path }
+            }
+            let cookieRows = cookies
 
             return .ok([
                 "workspace_id": ws.id.uuidString,
                 "workspace_ref": v2Ref(kind: .workspace, uuid: ws.id),
                 "surface_id": surfaceId.uuidString,
                 "surface_ref": v2Ref(kind: .surface, uuid: surfaceId),
-                "cookies": cookies.map(v2BrowserCookieDict)
+                "cookies": cookieRows
             ])
         }
     }
 
     private func v2BrowserCookiesSet(params: [String: Any]) -> V2CallResult {
         return v2BrowserWithPanel(params: params) { _, ws, surfaceId, browserPanel in
-            let store = browserPanel.webView.configuration.websiteDataStore.httpCookieStore
             let fallbackURL = browserPanel.currentURL
 
             var cookieObjects: [[String: Any]] = []
@@ -8405,17 +8308,12 @@ class TerminalController {
                 return .err(code: "invalid_params", message: "Missing cookies payload", data: nil)
             }
 
-            var setCount = 0
-            for raw in cookieObjects {
-                guard let cookie = v2BrowserCookieFromObject(raw, fallbackURL: fallbackURL) else {
-                    return .err(code: "invalid_params", message: "Invalid cookie payload", data: ["cookie": raw])
-                }
-                if v2BrowserCookieStoreSet(store, cookie: cookie) {
-                    setCount += 1
-                } else {
-                    return .err(code: "timeout", message: "Timed out setting cookie", data: ["name": cookie.name])
-                }
+            let result = browserPanel.setCookieDictionaries(cookieObjects, fallbackURL: fallbackURL)
+            if let errorDescription = result.errorDescription {
+                let code = errorDescription == "Invalid cookie payload" ? "invalid_params" : "timeout"
+                return .err(code: code, message: errorDescription, data: nil)
             }
+            let setCount = result.count
 
             return .ok([
                 "workspace_id": ws.id.uuidString,
@@ -8429,27 +8327,18 @@ class TerminalController {
 
     private func v2BrowserCookiesClear(params: [String: Any]) -> V2CallResult {
         return v2BrowserWithPanel(params: params) { _, ws, surfaceId, browserPanel in
-            let store = browserPanel.webView.configuration.websiteDataStore.httpCookieStore
-            guard let cookies = v2BrowserCookieStoreAll(store) else {
-                return .err(code: "timeout", message: "Timed out reading cookies", data: nil)
-            }
-
             let name = v2String(params, "name")
             let domain = v2String(params, "domain")
             let clearAll = params["all"] == nil && name == nil && domain == nil
-            let targets = cookies.filter { cookie in
-                if clearAll { return true }
-                if let name, cookie.name != name { return false }
-                if let domain, !cookie.domain.contains(domain) { return false }
-                return true
-            }
 
-            var removed = 0
-            for cookie in targets {
-                if v2BrowserCookieStoreDelete(store, cookie: cookie) {
-                    removed += 1
-                }
+            let result = browserPanel.clearCookieDictionaries(
+                name: clearAll ? nil : name,
+                domain: clearAll ? nil : domain
+            )
+            if let errorDescription = result.errorDescription {
+                return .err(code: "timeout", message: errorDescription, data: nil)
             }
+            let removed = result.count
 
             return .ok([
                 "workspace_id": ws.id.uuidString,
@@ -8489,7 +8378,7 @@ class TerminalController {
               return { ok: true, value: st.getItem(String(key)) };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -8535,7 +8424,7 @@ class TerminalController {
               return { ok: true };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -8569,7 +8458,7 @@ class TerminalController {
               return { ok: true };
             })()
             """
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -8607,7 +8496,7 @@ class TerminalController {
                     "ref": v2Ref(kind: .surface, uuid: panel.id),
                     "index": index,
                     "title": panel.displayTitle,
-                    "url": panel.currentURL?.absoluteString ?? "",
+                    "url": panel.resolvedCurrentURLStringForAPI(),
                     "focused": panel.id == ws.focusedPanelId,
                     "pane_id": v2OrNull(ws.paneId(forPanelId: panel.id)?.id.uuidString),
                     "pane_ref": v2Ref(kind: .pane, uuid: ws.paneId(forPanelId: panel.id)?.id)
@@ -8662,7 +8551,7 @@ class TerminalController {
                 "pane_ref": v2Ref(kind: .pane, uuid: pane.id),
                 "surface_id": panel.id.uuidString,
                 "surface_ref": v2Ref(kind: .surface, uuid: panel.id),
-                "url": panel.currentURL?.absoluteString ?? ""
+                "url": panel.resolvedCurrentURLStringForAPI()
             ])
         }
         return result
@@ -8780,7 +8669,7 @@ class TerminalController {
               return { ok: true, items };
             })()
             """
-            switch v2RunJavaScript(browserPanel.webView, script: script, timeout: 5.0, contentWorld: .page) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, timeout: 5.0, useEval: false) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -8818,7 +8707,7 @@ class TerminalController {
               return { ok: true, items };
             })()
             """
-            switch v2RunJavaScript(browserPanel.webView, script: script, timeout: 5.0, contentWorld: .page) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, timeout: 5.0, useEval: false) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -8881,18 +8770,20 @@ class TerminalController {
             """
 
             let storageValue: Any
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: storageScript, timeout: 10.0) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: storageScript, timeout: 10.0) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
                 storageValue = v2NormalizeJSValue(value)
             }
 
-            let store = browserPanel.webView.configuration.websiteDataStore.httpCookieStore
-            let cookies = (v2BrowserCookieStoreAll(store) ?? []).map(v2BrowserCookieDict)
+            let result = browserPanel.cookieDictionaries(timeout: 5.0)
+            guard let cookies = result.cookies else {
+                return .err(code: "timeout", message: result.errorDescription ?? "Timed out reading cookies", data: nil)
+            }
 
             let state: [String: Any] = [
-                "url": browserPanel.currentURL?.absoluteString ?? "",
+                "url": browserPanel.resolvedCurrentURLStringForAPI(),
                 "cookies": cookies,
                 "storage": storageValue,
                 "frame_selector": v2OrNull(v2BrowserFrameSelectorBySurface[surfaceId])
@@ -8947,11 +8838,9 @@ class TerminalController {
             }
 
             if let cookieRows = raw["cookies"] as? [[String: Any]] {
-                let store = browserPanel.webView.configuration.websiteDataStore.httpCookieStore
-                for row in cookieRows {
-                    if let cookie = v2BrowserCookieFromObject(row, fallbackURL: browserPanel.currentURL) {
-                        _ = v2BrowserCookieStoreSet(store, cookie: cookie)
-                    }
+                let result = browserPanel.setCookieDictionaries(cookieRows, fallbackURL: browserPanel.currentURL, timeout: 5.0)
+                if let errorDescription = result.errorDescription {
+                    return .err(code: "timeout", message: errorDescription, data: nil)
                 }
             }
 
@@ -8972,7 +8861,7 @@ class TerminalController {
                   return true;
                 })()
                 """
-                _ = v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script, timeout: 10.0)
+                _ = v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, timeout: 10.0)
             }
 
             return .ok([
@@ -8995,9 +8884,8 @@ class TerminalController {
             scripts.append(script)
             v2BrowserInitScriptsBySurface[surfaceId] = scripts
 
-            let userScript = WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-            browserPanel.webView.configuration.userContentController.addUserScript(userScript)
-            _ = v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script, timeout: 10.0)
+            browserPanel.installDocumentStartScript(script, executeImmediately: false)
+            _ = v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, timeout: 10.0)
 
             return .ok([
                 "workspace_id": ws.id.uuidString,
@@ -9014,7 +8902,7 @@ class TerminalController {
             return .err(code: "invalid_params", message: "Missing script", data: nil)
         }
         return v2BrowserWithPanel(params: params) { _, ws, surfaceId, browserPanel in
-            switch v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: script, timeout: 10.0) {
+            switch v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: script, timeout: 10.0) {
             case .failure(let message):
                 return .err(code: "js_error", message: message, data: nil)
             case .success(let value):
@@ -9048,9 +8936,8 @@ class TerminalController {
             })()
             """
 
-            let userScript = WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-            browserPanel.webView.configuration.userContentController.addUserScript(userScript)
-            _ = v2RunBrowserJavaScript(browserPanel.webView, surfaceId: surfaceId, script: source, timeout: 10.0)
+            browserPanel.installDocumentStartScript(source, executeImmediately: false)
+            _ = v2RunBrowserJavaScript(browserPanel, surfaceId: surfaceId, script: source, timeout: 10.0)
 
             return .ok([
                 "workspace_id": ws.id.uuidString,
@@ -9146,6 +9033,47 @@ class TerminalController {
             return .err(code: "invalid_params", message: "Missing combo", data: nil)
         }
         let resp = simulateShortcut(combo)
+        return resp == "OK"
+            ? .ok([:])
+            : .err(code: "internal_error", message: resp, data: nil)
+    }
+
+    private func v2DebugShortcutSimulateAppKit(params: [String: Any]) -> V2CallResult {
+        guard let combo = v2String(params, "combo") else {
+            return .err(code: "invalid_params", message: "Missing combo", data: nil)
+        }
+        let resp = simulateShortcut(combo, preferDirectShortcutHandling: false)
+        return resp == "OK"
+            ? .ok([:])
+            : .err(code: "internal_error", message: resp, data: nil)
+    }
+
+    private func v2DebugShortcutSimulatePhysical(params: [String: Any]) -> V2CallResult {
+        guard let combo = v2String(params, "combo") else {
+            return .err(code: "invalid_params", message: "Missing combo", data: nil)
+        }
+        let resp = simulatePhysicalShortcut(combo)
+        return resp == "OK"
+            ? .ok([:])
+            : .err(code: "internal_error", message: resp, data: nil)
+    }
+
+    private func v2DebugShortcutPressPhysical(params: [String: Any]) -> V2CallResult {
+        guard let combo = v2String(params, "combo") else {
+            return .err(code: "invalid_params", message: "Missing combo", data: nil)
+        }
+        let resp = pressPhysicalShortcut(combo)
+        return resp == "OK"
+            ? .ok([:])
+            : .err(code: "internal_error", message: resp, data: nil)
+    }
+
+    private func v2DebugShortcutReleasePhysical(params: [String: Any]) -> V2CallResult {
+        guard let combo = v2String(params, "combo") else {
+            return .err(code: "invalid_params", message: "Missing combo", data: nil)
+        }
+        let releaseOrderRaw = v2String(params, "release_order")
+        let resp = releasePhysicalShortcut(combo, releaseOrderRaw: releaseOrderRaw)
         return resp == "OK"
             ? .ok([:])
             : .err(code: "internal_error", message: resp, data: nil)
@@ -9834,6 +9762,8 @@ class TerminalController {
           screenshot [label]              - Capture window screenshot
           set_shortcut <name> <combo|clear> - Set a keyboard shortcut (test-only)
           simulate_shortcut <combo>       - Simulate a keyDown shortcut (test-only)
+          simulate_shortcut_appkit <combo> - Simulate a shortcut via NSApp.sendEvent only (test-only)
+          simulate_shortcut_physical <combo> - Simulate flagsChanged+keyDown+keyUp path (test-only)
           simulate_type <text>            - Insert text into the current first responder (test-only)
           simulate_file_drop <id|idx> <path[|path...]> - Simulate dropping file path(s) on terminal (test-only)
           seed_drag_pasteboard_fileurl    - Seed NSDrag pasteboard with public.file-url (test-only)
@@ -9927,7 +9857,7 @@ class TerminalController {
         }
     }
 
-    private func simulateShortcut(_ args: String) -> String {
+    private func simulateShortcut(_ args: String, preferDirectShortcutHandling: Bool = true) -> String {
         let combo = args.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !combo.isEmpty else {
             return "ERROR: Usage: simulate_shortcut <combo>"
@@ -9987,7 +9917,9 @@ class TerminalController {
             // Socket-driven shortcut simulation should reuse the exact same matching logic as the
             // app-level shortcut monitor (so tests are hermetic), while still falling back to the
             // normal responder chain for plain typing.
-            if let delegate = AppDelegate.shared, delegate.debugHandleCustomShortcut(event: keyDownEvent) {
+            if preferDirectShortcutHandling,
+               let delegate = AppDelegate.shared,
+               delegate.debugHandleCustomShortcut(event: keyDownEvent) {
                 result = "OK"
                 return
             }
@@ -9998,6 +9930,212 @@ class TerminalController {
             result = "OK"
         }
         return result
+    }
+
+    private func currentSyntheticInputWindow() -> NSWindow? {
+        if let activeTabManager = self.tabManager,
+           let windowId = AppDelegate.shared?.windowId(for: activeTabManager),
+           let window = AppDelegate.shared?.mainWindow(for: windowId) {
+            return window
+        }
+        return NSApp.keyWindow
+            ?? NSApp.mainWindow
+            ?? NSApp.windows.first(where: { $0.isVisible })
+            ?? NSApp.windows.first
+    }
+
+    private func dispatchPhysicalShortcutEvent(_ event: NSEvent, delegate: AppDelegate?) {
+        let consumedByMonitor = delegate?.debugHandleShortcutMonitorEvent(event: event) == true
+        if !consumedByMonitor {
+            NSApp.sendEvent(event)
+        }
+    }
+
+    private func modifierKeyCode(for flags: NSEvent.ModifierFlags) -> UInt16? {
+        let normalized = flags.intersection(.deviceIndependentFlagsMask)
+        if normalized.contains(.command) { return 55 }
+        if normalized.contains(.control) { return 59 }
+        if normalized.contains(.option) { return 58 }
+        if normalized.contains(.shift) { return 56 }
+        return nil
+    }
+
+    private func pressPhysicalShortcut(_ args: String) -> String {
+        let combo = args.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !combo.isEmpty else {
+            return "ERROR: Usage: press_physical_shortcut <combo>"
+        }
+        guard let parsed = parseShortcutCombo(combo) else {
+            return "ERROR: Invalid combo. Example: cmd+ctrl+h"
+        }
+
+        let requestTimestamp = ProcessInfo.processInfo.systemUptime
+        var result = "ERROR: Failed to create event"
+
+        DispatchQueue.main.sync {
+            guard let targetWindow = currentSyntheticInputWindow() else {
+                result = "ERROR: No window"
+                return
+            }
+            prepareWindowForSyntheticInput(targetWindow)
+            let windowNumber = targetWindow.windowNumber
+            let delegate = AppDelegate.shared
+            let modifierKeyCode = modifierKeyCode(for: parsed.modifierFlags)
+
+            if !parsed.modifierFlags.isEmpty,
+               let modifierKeyCode,
+               let flagsDownEvent = NSEvent.keyEvent(
+                   with: .flagsChanged,
+                   location: .zero,
+                   modifierFlags: parsed.modifierFlags,
+                   timestamp: requestTimestamp - 0.0002,
+                   windowNumber: windowNumber,
+                   context: nil,
+                   characters: "",
+                   charactersIgnoringModifiers: "",
+                   isARepeat: false,
+                   keyCode: modifierKeyCode
+               ) {
+                dispatchPhysicalShortcutEvent(flagsDownEvent, delegate: delegate)
+            }
+
+            guard let keyDownEvent = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: parsed.modifierFlags,
+                timestamp: requestTimestamp,
+                windowNumber: windowNumber,
+                context: nil,
+                characters: parsed.characters,
+                charactersIgnoringModifiers: parsed.charactersIgnoringModifiers,
+                isARepeat: false,
+                keyCode: parsed.keyCode
+            ) else {
+                result = "ERROR: NSEvent.keyEvent returned nil"
+                return
+            }
+            dispatchPhysicalShortcutEvent(keyDownEvent, delegate: delegate)
+            pendingPhysicalShortcutByCombo[combo] = PendingPhysicalShortcut(
+                parsed: parsed,
+                windowNumber: windowNumber,
+                timestamp: requestTimestamp,
+                modifierKeyCode: modifierKeyCode
+            )
+            result = "OK"
+        }
+
+        return result
+    }
+
+    private func releasePhysicalShortcut(_ args: String, releaseOrderRaw: String? = nil) -> String {
+        let combo = args.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !combo.isEmpty else {
+            return "ERROR: Usage: release_physical_shortcut <combo>"
+        }
+        let releaseOrder = releaseOrderRaw
+            .flatMap { PhysicalShortcutReleaseOrder(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
+            ?? .keyFirst
+        var result = "ERROR: No pending shortcut"
+
+        DispatchQueue.main.sync {
+            guard let pending = pendingPhysicalShortcutByCombo.removeValue(forKey: combo) else {
+                return
+            }
+            let delegate = AppDelegate.shared
+
+            @MainActor
+            func dispatchKeyUp(modifierFlags: NSEvent.ModifierFlags, timestamp: TimeInterval) {
+                guard let keyUpEvent = NSEvent.keyEvent(
+                    with: .keyUp,
+                    location: .zero,
+                    modifierFlags: modifierFlags,
+                    timestamp: timestamp,
+                    windowNumber: pending.windowNumber,
+                    context: nil,
+                    characters: pending.parsed.characters,
+                    charactersIgnoringModifiers: pending.parsed.charactersIgnoringModifiers,
+                    isARepeat: false,
+                    keyCode: pending.parsed.keyCode
+                ) else { return }
+                dispatchPhysicalShortcutEvent(keyUpEvent, delegate: delegate)
+            }
+
+            @MainActor
+            func dispatchFlagsUp(timestamp: TimeInterval) {
+                guard !pending.parsed.modifierFlags.isEmpty,
+                      let modifierKeyCode = pending.modifierKeyCode,
+                      let flagsUpEvent = NSEvent.keyEvent(
+                          with: .flagsChanged,
+                          location: .zero,
+                          modifierFlags: [],
+                          timestamp: timestamp,
+                          windowNumber: pending.windowNumber,
+                          context: nil,
+                          characters: "",
+                          charactersIgnoringModifiers: "",
+                          isARepeat: false,
+                          keyCode: modifierKeyCode
+                      ) else { return }
+                dispatchPhysicalShortcutEvent(flagsUpEvent, delegate: delegate)
+            }
+
+            @MainActor
+            func dispatchUnexpectedControlD(timestamp: TimeInterval) {
+                guard pending.parsed.keyCode == 2,
+                      let controlDEvent = NSEvent.keyEvent(
+                          with: .keyDown,
+                          location: .zero,
+                          modifierFlags: [.control],
+                          timestamp: timestamp,
+                          windowNumber: pending.windowNumber,
+                          context: nil,
+                          characters: "\u{04}",
+                          charactersIgnoringModifiers: pending.parsed.charactersIgnoringModifiers,
+                          isARepeat: false,
+                          keyCode: pending.parsed.keyCode
+                      ) else { return }
+                dispatchPhysicalShortcutEvent(controlDEvent, delegate: delegate)
+            }
+
+            switch releaseOrder {
+            case .keyFirst:
+                dispatchKeyUp(
+                    modifierFlags: pending.parsed.modifierFlags,
+                    timestamp: pending.timestamp + 0.0001
+                )
+                dispatchFlagsUp(timestamp: pending.timestamp + 0.0002)
+            case .modifiersFirst:
+                dispatchFlagsUp(timestamp: pending.timestamp + 0.0001)
+                dispatchKeyUp(
+                    modifierFlags: [],
+                    timestamp: pending.timestamp + 0.0002
+                )
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    dispatchUnexpectedControlD(timestamp: ProcessInfo.processInfo.systemUptime)
+                }
+            }
+
+            result = "OK"
+        }
+
+        return result
+    }
+
+    private func simulatePhysicalShortcut(_ args: String) -> String {
+        let combo = args.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !combo.isEmpty else {
+            return "ERROR: Usage: simulate_shortcut_physical <combo>"
+        }
+        guard let parsed = parseShortcutCombo(combo) else {
+            return "ERROR: Invalid combo. Example: cmd+ctrl+h"
+        }
+
+        let pressed = pressPhysicalShortcut(combo)
+        guard pressed == "OK" else { return pressed }
+        let released = releasePhysicalShortcut(combo)
+        guard released == "OK" else { return released }
+        _ = parsed
+        return "OK"
     }
 
     private func activateApp() -> String {
@@ -11521,20 +11659,21 @@ class TerminalController {
 	                }
 
                 if let bp = panel as? BrowserPanel {
-                    let viewRect = windowFrame(for: bp.webView).map { PixelRect(from: $0) }
-                    let splitViews = splitViewInfos(for: bp.webView)
+                    let browserView = bp.browserSurfaceView()
+                    let viewRect = browserView.flatMap { windowFrame(for: $0) }.map { PixelRect(from: $0) }
+                    let splitViews = browserView.map { splitViewInfos(for: $0) }
 		                    return LayoutDebugSelectedPanel(
-	                        paneId: paneIdStr,
-	                        paneFrame: paneFrame,
-	                        selectedTabId: selectedTabId,
-	                        panelId: panelId.uuidString,
-	                        panelType: bp.panelType.rawValue,
-	                        inWindow: bp.webView.window != nil,
-	                        hidden: isHiddenOrAncestorHidden(bp.webView),
-	                        viewFrame: viewRect,
-	                        splitViews: splitViews
-	                    )
-	                }
+		                        paneId: paneIdStr,
+		                        paneFrame: paneFrame,
+		                        selectedTabId: selectedTabId,
+		                        panelId: panelId.uuidString,
+		                        panelType: bp.panelType.rawValue,
+		                        inWindow: bp.isBrowserSurfaceMountedInWindow(),
+		                        hidden: browserView.map { isHiddenOrAncestorHidden($0) },
+		                        viewFrame: viewRect,
+		                        splitViews: splitViews
+		                    )
+		                }
 
 	                return LayoutDebugSelectedPanel(
 	                    paneId: paneIdStr,
@@ -11909,6 +12048,29 @@ class TerminalController {
         default:
             return false
         }
+    }
+
+    private func sendSocketText(_ text: String, surface: ghostty_surface_t) {
+        let chunks = Self.socketTextChunks(text)
+#if DEBUG
+        let startedAt = ProcessInfo.processInfo.systemUptime
+#endif
+        for chunk in chunks {
+            switch chunk {
+            case .text(let value):
+                sendTextEvent(surface: surface, text: value)
+            case .control(let scalar):
+                _ = handleControlScalar(scalar, surface: surface)
+            }
+        }
+#if DEBUG
+        let elapsedMs = (ProcessInfo.processInfo.systemUptime - startedAt) * 1000.0
+        if elapsedMs >= 8 || chunks.count > 1 {
+            dlog(
+                "socket.send_text.inject chars=\(text.count) chunks=\(chunks.count) ms=\(String(format: "%.2f", elapsedMs))"
+            )
+        }
+#endif
     }
 
     private func handleControlScalar(_ scalar: UnicodeScalar, surface: ghostty_surface_t) -> Bool {
@@ -12367,7 +12529,7 @@ class TerminalController {
                 return
             }
 
-            result = browserPanel.currentURL?.absoluteString ?? ""
+            result = browserPanel.resolvedCurrentURLStringForAPI()
         }
         return result
     }
@@ -12396,30 +12558,18 @@ class TerminalController {
             // Prevent omnibar auto-focus from immediately stealing first responder back.
             browserPanel.suppressOmnibarAutofocus(for: 1.5)
 
-            let webView = browserPanel.webView
-            guard let window = webView.window else {
-                result = "ERROR: WebView is not in a window"
-                return
-            }
-            guard !webView.isHiddenOrHasHiddenAncestor else {
-                result = "ERROR: WebView is hidden"
-                return
-            }
-
-            window.makeFirstResponder(webView)
-            if Self.responderChainContains(window.firstResponder, target: webView) {
+            if browserPanel.focusBrowserSurface() {
                 // Some focus churn paths (workspace handoff / omnibar blur) can race this call.
                 // Reassert on the next runloop if another responder steals focus immediately.
-                DispatchQueue.main.async { [weak window, weak webView] in
-                    guard let window, let webView else { return }
-                    guard webView.window === window else { return }
-                    if !Self.responderChainContains(window.firstResponder, target: webView) {
-                        window.makeFirstResponder(webView)
+                DispatchQueue.main.async { [weak browserPanel] in
+                    guard let browserPanel else { return }
+                    if !browserPanel.isBrowserSurfaceFocused() {
+                        _ = browserPanel.focusBrowserSurface()
                     }
                 }
                 result = "OK"
             } else {
-                result = "ERROR: Focus did not move into web view"
+                result = "ERROR: Focus did not move into browser surface"
             }
         }
         return result
@@ -12440,12 +12590,7 @@ class TerminalController {
                 return
             }
 
-            let webView = browserPanel.webView
-            guard let window = webView.window else {
-                result = "false"
-                return
-            }
-            result = Self.responderChainContains(window.firstResponder, target: webView) ? "true" : "false"
+            result = browserPanel.isBrowserSurfaceFocused() ? "true" : "false"
         }
         return result
     }
@@ -13826,7 +13971,7 @@ class TerminalController {
                     let depth = viewDepth(of: tp.hostedView)
                     return "\(index): \(panelId) type=\(type) in_window=\(inWindow) portal=\(portalHosted) view_depth=\(depth)"
                 } else if let bp = panel as? BrowserPanel {
-                    let inWindow = bp.webView.window != nil
+                    let inWindow = bp.isBrowserSurfaceMountedInWindow()
                     return "\(index): \(panelId) type=\(type) in_window=\(inWindow)"
                 } else {
                     return "\(index): \(panelId) type=\(type) in_window=unknown"
