@@ -4864,24 +4864,24 @@ private struct ThemePickerRow: View {
     let selectedMode: String
     let onSelect: (AppearanceMode) -> Void
 
-    private let thumbWidth: CGFloat = 88
-    private let thumbHeight: CGFloat = 58
+    private let thumbWidth: CGFloat = 76
+    private let thumbHeight: CGFloat = 50
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             Text(String(localized: "settings.app.theme", defaultValue: "Theme"))
                 .font(.system(size: 13, weight: .medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 ForEach(AppearanceMode.visibleCases) { mode in
                     let isSelected = selectedMode == mode.rawValue
                     Button {
                         onSelect(mode)
                     } label: {
-                        VStack(spacing: 6) {
+                        VStack(spacing: 4) {
                             Group {
                                 if mode == .system {
-                                    // Split-mask: light on left, dark on right
                                     ZStack {
                                         ThemeWindowThumbnail(isDark: false)
                                             .mask(
@@ -4899,7 +4899,6 @@ private struct ThemePickerRow: View {
                                                         .position(x: geo.size.width * 0.75, y: geo.size.height / 2)
                                                 }
                                             )
-                                        // Center divider
                                         GeometryReader { geo in
                                             Rectangle()
                                                 .fill(Color.primary.opacity(0.15))
@@ -4914,26 +4913,27 @@ private struct ThemePickerRow: View {
                             .frame(width: thumbWidth, height: thumbHeight)
 
                             Text(mode.displayName)
-                                .font(.system(size: 11))
+                                .font(.system(size: 10))
                                 .fontWeight(isSelected ? .semibold : .regular)
                                 .foregroundColor(isSelected ? .primary : .secondary)
                         }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
                         .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(isSelected
                                     ? Color.accentColor.opacity(0.12)
                                     : Color.clear)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
                         )
                     }
                     .buttonStyle(.plain)
                 }
             }
+            .layoutPriority(1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
@@ -4949,7 +4949,7 @@ private struct AppIconPickerRow: View {
     private let autoIconSize: CGFloat = 36
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(String(localized: "settings.app.appIcon", defaultValue: "App Icon"))
                     .font(.system(size: 13, weight: .medium))
@@ -4957,17 +4957,17 @@ private struct AppIconPickerRow: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 ForEach(AppIconMode.allCases) { mode in
                     let isSelected = selectedMode == mode.rawValue
                     Button {
                         onSelect(mode)
                     } label: {
-                        VStack(spacing: 6) {
+                        VStack(spacing: 4) {
                             Group {
                                 if mode == .automatic {
-                                    // Show both icons overlapping
                                     ZStack {
                                         Image("AppIconLight")
                                             .resizable()
@@ -4993,25 +4993,26 @@ private struct AppIconPickerRow: View {
                             }
 
                             Text(mode.displayName)
-                                .font(.system(size: 11))
+                                .font(.system(size: 10))
                                 .foregroundColor(isSelected ? .primary : .secondary)
                         }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
                         .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(isSelected
                                     ? Color.accentColor.opacity(0.12)
                                     : Color.clear)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
                         )
                     }
                     .buttonStyle(.plain)
                 }
             }
+            .layoutPriority(1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
