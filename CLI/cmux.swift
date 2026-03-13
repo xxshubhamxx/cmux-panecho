@@ -1571,24 +1571,29 @@ struct CMUXCLI {
                 throw error
             }
 
-        case "set-status":
+        case "set-status", "set-meta":
             let (icon, r1) = parseOption(commandArgs, name: "--icon")
             let (color, r2) = parseOption(r1, name: "--color")
-            let (wsFlag, r3) = parseOption(r2, name: "--workspace")
-            guard r3.count >= 2 else {
-                throw CLIError(message: "set-status requires <key> and <value>")
+            let (url, r3) = parseOption(r2, name: "--url")
+            let (priority, r4) = parseOption(r3, name: "--priority")
+            let (format, r5) = parseOption(r4, name: "--format")
+            let (wsFlag, r6) = parseOption(r5, name: "--workspace")
+            guard let key = r6.first else {
+                throw CLIError(message: "\(command) requires <key> and <value>")
             }
-            let key = r3[0]
-            let value = r3.dropFirst().joined(separator: " ")
+            let valueParts = stripLeadingTerminator(Array(r6.dropFirst()))
+            let value = valueParts.joined(separator: " ")
             guard !value.isEmpty else {
-                throw CLIError(message: "set-status requires a non-empty value")
+                throw CLIError(message: "\(command) requires a non-empty value")
             }
-            let workspaceArg = wsFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
-            let wsId = try resolveWorkspaceId(workspaceArg, client: client)
-            var socketCmd = "set_status \(key) \(socketQuote(value))"
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
+            var socketCmd = command == "set-status" ? "set_status \(key)" : "report_meta \(key)"
             if let icon { socketCmd += " --icon=\(socketQuote(icon))" }
             if let color { socketCmd += " --color=\(socketQuote(color))" }
-            socketCmd += " --tab=\(wsId)"
+            if let url { socketCmd += " --url=\(socketQuote(url))" }
+            if let priority { socketCmd += " --priority=\(socketQuote(priority))" }
+            if let format { socketCmd += " --format=\(socketQuote(format))" }
+            socketCmd += " --tab=\(wsId) -- \(socketQuote(value))"
             let response = try sendV1Command(socketCmd, client: client)
             print(response)
 
@@ -1597,16 +1602,62 @@ struct CMUXCLI {
             guard let key = csRemaining.first else {
                 throw CLIError(message: "clear-status requires a <key>")
             }
-            let workspaceArg = wsFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
-            let wsId = try resolveWorkspaceId(workspaceArg, client: client)
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
             let response = try sendV1Command("clear_status \(key) --tab=\(wsId)", client: client)
+            print(response)
+
+        case "clear-meta":
+            let (wsFlag, cmRemaining) = parseOption(commandArgs, name: "--workspace")
+            guard let key = cmRemaining.first else {
+                throw CLIError(message: "clear-meta requires a <key>")
+            }
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
+            let response = try sendV1Command("clear_meta \(key) --tab=\(wsId)", client: client)
             print(response)
 
         case "list-status":
             let (wsFlag, _) = parseOption(commandArgs, name: "--workspace")
-            let workspaceArg = wsFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
-            let wsId = try resolveWorkspaceId(workspaceArg, client: client)
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
             let response = try sendV1Command("list_status --tab=\(wsId)", client: client)
+            print(response)
+
+        case "list-meta":
+            let (wsFlag, _) = parseOption(commandArgs, name: "--workspace")
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
+            let response = try sendV1Command("list_meta --tab=\(wsId)", client: client)
+            print(response)
+
+        case "set-meta-block":
+            let (priority, r1) = parseOption(commandArgs, name: "--priority")
+            let (wsFlag, r2) = parseOption(r1, name: "--workspace")
+            guard let key = r2.first else {
+                throw CLIError(message: "set-meta-block requires <key> and <markdown>")
+            }
+            let markdownParts = stripLeadingTerminator(Array(r2.dropFirst()))
+            let markdown = markdownParts.joined(separator: " ")
+            guard !markdown.isEmpty else {
+                throw CLIError(message: "set-meta-block requires a non-empty markdown payload")
+            }
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
+            var socketCmd = "report_meta_block \(key)"
+            if let priority { socketCmd += " --priority=\(socketQuote(priority))" }
+            socketCmd += " --tab=\(wsId) -- \(socketQuote(markdown))"
+            let response = try sendV1Command(socketCmd, client: client)
+            print(response)
+
+        case "clear-meta-block":
+            let (wsFlag, cmbRemaining) = parseOption(commandArgs, name: "--workspace")
+            guard let key = cmbRemaining.first else {
+                throw CLIError(message: "clear-meta-block requires a <key>")
+            }
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
+            let response = try sendV1Command("clear_meta_block \(key) --tab=\(wsId)", client: client)
+            print(response)
+
+        case "list-meta-blocks":
+            let (wsFlag, _) = parseOption(commandArgs, name: "--workspace")
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
+            let response = try sendV1Command("list_meta_blocks --tab=\(wsId)", client: client)
             print(response)
 
         case "set-progress":
@@ -1615,8 +1666,7 @@ struct CMUXCLI {
             guard let valueStr = spR2.first else {
                 throw CLIError(message: "set-progress requires a progress value (0.0-1.0)")
             }
-            let workspaceArg = wsFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
-            let wsId = try resolveWorkspaceId(workspaceArg, client: client)
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
             var socketCmd = "set_progress \(valueStr)"
             if let label { socketCmd += " --label=\(socketQuote(label))" }
             socketCmd += " --tab=\(wsId)"
@@ -1625,8 +1675,7 @@ struct CMUXCLI {
 
         case "clear-progress":
             let (wsFlag, _) = parseOption(commandArgs, name: "--workspace")
-            let workspaceArg = wsFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
-            let wsId = try resolveWorkspaceId(workspaceArg, client: client)
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
             let response = try sendV1Command("clear_progress --tab=\(wsId)", client: client)
             print(response)
 
@@ -1640,8 +1689,7 @@ struct CMUXCLI {
             guard !message.isEmpty else {
                 throw CLIError(message: "log requires a message")
             }
-            let workspaceArg = wsFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
-            let wsId = try resolveWorkspaceId(workspaceArg, client: client)
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
             var socketCmd = "log"
             if let level { socketCmd += " --level=\(level)" }
             if let source { socketCmd += " --source=\(socketQuote(source))" }
@@ -1651,16 +1699,14 @@ struct CMUXCLI {
 
         case "clear-log":
             let (wsFlag, _) = parseOption(commandArgs, name: "--workspace")
-            let workspaceArg = wsFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
-            let wsId = try resolveWorkspaceId(workspaceArg, client: client)
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
             let response = try sendV1Command("clear_log --tab=\(wsId)", client: client)
             print(response)
 
         case "list-log":
             let (limitStr, r1) = parseOption(commandArgs, name: "--limit")
             let (wsFlag, _) = parseOption(r1, name: "--workspace")
-            let workspaceArg = wsFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
-            let wsId = try resolveWorkspaceId(workspaceArg, client: client)
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
             var socketCmd = "list_log"
             if let limitStr { socketCmd += " --limit=\(limitStr)" }
             socketCmd += " --tab=\(wsId)"
@@ -1669,8 +1715,7 @@ struct CMUXCLI {
 
         case "sidebar-state":
             let (wsFlag, _) = parseOption(commandArgs, name: "--workspace")
-            let workspaceArg = wsFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
-            let wsId = try resolveWorkspaceId(workspaceArg, client: client)
+            let wsId = try resolveSidebarWorkspaceId(workspaceFlag: wsFlag, windowId: windowId, client: client)
             let response = try sendV1Command("sidebar_state --tab=\(wsId)", client: client)
             print(response)
 
@@ -5055,7 +5100,7 @@ struct CMUXCLI {
             """
         case "set-status":
             return """
-            Usage: cmux set-status <key> <value> [flags]
+            Usage: cmux set-status <key> [flags] [--] <value>
 
             Set a sidebar status entry for a workspace. Status entries appear as
             pills in the sidebar tab row. Use a unique key so different tools
@@ -5064,11 +5109,14 @@ struct CMUXCLI {
             Flags:
               --icon <name>          Icon name (e.g. "sparkle", "hammer")
               --color <#hex>         Pill color (e.g. "#ff9500")
+              --url <https://...>    Optional link target for the entry
+              --priority <n>         Higher values sort first
+              --format <plain|markdown>
               --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
 
             Example:
-              cmux set-status build "compiling" --icon hammer --color "#ff9500"
-              cmux set-status deploy "v1.2.3" --workspace workspace:2
+              cmux set-status build --icon hammer --color "#ff9500" -- "compiling"
+              cmux set-status deploy --url "https://example.com/deploy/42" --priority 80 --format markdown --workspace workspace:2 -- "**v1.2.3**"
             """
         case "clear-status":
             return """
@@ -5094,6 +5142,87 @@ struct CMUXCLI {
             Example:
               cmux list-status
               cmux list-status --workspace workspace:2
+            """
+        case "set-meta":
+            return """
+            Usage: cmux set-meta <key> [flags] [--] <value>
+
+            Set a generic sidebar metadata entry for a workspace.
+
+            Flags:
+              --icon <name>          Icon name (e.g. "laptopcomputer", "tag")
+              --color <#hex>         Optional accent color
+              --url <https://...>    Optional link target for the entry
+              --priority <n>         Higher values sort first
+              --format <plain|markdown>
+              --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
+
+            Example:
+              cmux set-meta host --icon laptopcomputer --priority 50 -- "cmux-macmini"
+              cmux set-meta review --format markdown --url "https://github.com/manaflow-ai/cmux/pull/1338" -- "**Needs attention**"
+            """
+        case "clear-meta":
+            return """
+            Usage: cmux clear-meta <key> [flags]
+
+            Remove a generic sidebar metadata entry by key.
+
+            Flags:
+              --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
+
+            Example:
+              cmux clear-meta host
+            """
+        case "list-meta":
+            return """
+            Usage: cmux list-meta [flags]
+
+            List all generic sidebar metadata entries for a workspace.
+
+            Flags:
+              --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
+
+            Example:
+              cmux list-meta
+              cmux list-meta --workspace workspace:2
+            """
+        case "set-meta-block":
+            return """
+            Usage: cmux set-meta-block <key> [flags] [--] <markdown>
+
+            Set a freeform markdown block in the sidebar for a workspace.
+
+            Flags:
+              --priority <n>         Higher values sort first
+              --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
+
+            Example:
+              cmux set-meta-block summary --priority 50 -- "### Agent\\n- status: busy"
+            """
+        case "clear-meta-block":
+            return """
+            Usage: cmux clear-meta-block <key> [flags]
+
+            Remove a sidebar markdown block by key.
+
+            Flags:
+              --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
+
+            Example:
+              cmux clear-meta-block summary
+            """
+        case "list-meta-blocks":
+            return """
+            Usage: cmux list-meta-blocks [flags]
+
+            List all sidebar markdown blocks for a workspace.
+
+            Flags:
+              --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
+
+            Example:
+              cmux list-meta-blocks
+              cmux list-meta-blocks --workspace workspace:2
             """
         case "set-progress":
             return """
@@ -5394,9 +5523,19 @@ struct CMUXCLI {
         return (values, remaining)
     }
 
+    private func stripLeadingTerminator(_ args: [String]) -> [String] {
+        guard args.first == "--" else { return args }
+        return Array(args.dropFirst())
+    }
+
     private func optionValue(_ args: [String], name: String) -> String? {
         guard let index = args.firstIndex(of: name), index + 1 < args.count else { return nil }
         return args[index + 1]
+    }
+
+    private func resolveSidebarWorkspaceId(workspaceFlag: String?, windowId: String?, client: SocketClient) throws -> String {
+        let workspaceArg = workspaceFlag ?? (windowId == nil ? ProcessInfo.processInfo.environment["CMUX_WORKSPACE_ID"] : nil)
+        return try resolveWorkspaceId(workspaceArg, client: client)
     }
 
     private func hasFlag(_ args: [String], name: String) -> Bool {
@@ -8446,9 +8585,15 @@ struct CMUXCLI {
           claude-hook <session-start|stop|notification> [--workspace <id|ref>] [--surface <id|ref>]
 
           # sidebar metadata commands
-          set-status <key> <value> [--icon <name>] [--color <#hex>] [--workspace <id|ref>]
+          set-status <key> [--icon <name>] [--color <#hex>] [--url <https://...>] [--priority <n>] [--format <plain|markdown>] [--workspace <id|ref>] [--] <value>
           clear-status <key> [--workspace <id|ref>]
           list-status [--workspace <id|ref>]
+          set-meta <key> [--icon <name>] [--color <#hex>] [--url <https://...>] [--priority <n>] [--format <plain|markdown>] [--workspace <id|ref>] [--] <value>
+          clear-meta <key> [--workspace <id|ref>]
+          list-meta [--workspace <id|ref>]
+          set-meta-block <key> [--priority <n>] [--workspace <id|ref>] [--] <markdown>
+          clear-meta-block <key> [--workspace <id|ref>]
+          list-meta-blocks [--workspace <id|ref>]
           set-progress <0.0-1.0> [--label <text>] [--workspace <id|ref>]
           clear-progress [--workspace <id|ref>]
           log [--level <level>] [--source <name>] [--workspace <id|ref>] [--] <message>
