@@ -3052,27 +3052,6 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var iconName: String {
-        switch self {
-        case .general:
-            return "switch.2"
-        case .notifications:
-            return "bell.badge"
-        case .sidebar:
-            return "sidebar.left"
-        case .workspaceColors:
-            return "paintpalette"
-        case .browser:
-            return "globe"
-        case .automation:
-            return "terminal"
-        case .shortcuts:
-            return "command"
-        case .reset:
-            return "arrow.counterclockwise"
-        }
-    }
-
     var title: String {
         switch self {
         case .general:
@@ -3145,10 +3124,6 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         }
     }
 
-    var summary: String {
-        highlightTokens.prefix(2).joined(separator: " • ")
-    }
-
     var searchKeywords: [String] {
         switch self {
         case .general:
@@ -3171,20 +3146,14 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     }
 
     var searchCandidates: [String] {
-        [title, summary] + highlightTokens + searchKeywords
+        [title] + highlightTokens + searchKeywords
     }
-}
-
-private struct SettingsCategoryMatch: Identifiable {
-    let category: SettingsCategory
-    let score: Int
-
-    var id: String { category.id }
 }
 
 struct SettingsView: View {
     private let pickerColumnWidth: CGFloat = 196
     private let notificationSoundControlWidth: CGFloat = 280
+    private let settingsTopAnchor = "SettingsDetailTop"
 
     @AppStorage(LanguageSettings.languageKey) private var appLanguage = LanguageSettings.defaultLanguage.rawValue
     @AppStorage(AppearanceSettings.appearanceModeKey) private var appearanceMode = AppearanceSettings.defaultMode.rawValue
@@ -3233,6 +3202,7 @@ struct SettingsView: View {
     @AppStorage("sidebarShowStatusPills") private var sidebarShowMetadata = true
     @ObservedObject private var notificationStore = TerminalNotificationStore.shared
     @State private var selectedCategory = SettingsCategory.general
+    @State private var pendingScrollCategory: SettingsCategory?
     @State private var settingsSearchText = ""
     @State private var shortcutResetToken = UUID()
     @State private var showClearBrowserHistoryConfirmation = false
@@ -3410,37 +3380,26 @@ struct SettingsView: View {
         !trimmedSettingsSearchText.isEmpty
     }
 
-    private var settingsCategoryMatches: [SettingsCategoryMatch] {
-        let query = trimmedSettingsSearchText
-        guard !query.isEmpty else {
-            return SettingsCategory.allCases.map { SettingsCategoryMatch(category: $0, score: 0) }
-        }
-
-        return SettingsCategory.allCases
-            .compactMap { category in
-                guard let score = CommandPaletteFuzzyMatcher.score(query: query, candidates: category.searchCandidates) else {
-                    return nil
-                }
-                return SettingsCategoryMatch(category: category, score: score)
-            }
-            .sorted { lhs, rhs in
-                if lhs.score == rhs.score {
-                    return lhs.category.rawValue < rhs.category.rawValue
-                }
-                return lhs.score > rhs.score
-            }
+    private var normalizedSettingsSearchTerms: [String] {
+        trimmedSettingsSearchText
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
     }
 
-    private var sidebarCategories: [SettingsCategory] {
-        settingsCategoryMatches.map(\.category)
+    private var visibleCategories: [SettingsCategory] {
+        let terms = normalizedSettingsSearchTerms
+        guard !terms.isEmpty else { return SettingsCategory.allCases }
+        return SettingsCategory.allCases.filter { category in
+            let haystack = category.searchCandidates
+                .joined(separator: " ")
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            return terms.allSatisfy { haystack.contains($0) }
+        }
     }
 
     private var detailCategories: [SettingsCategory] {
-        hasActiveSettingsSearch ? sidebarCategories : [selectedCategory]
-    }
-
-    private var settingsDetailIdentity: String {
-        hasActiveSettingsSearch ? "search:\(trimmedSettingsSearchText)" : "category:\(selectedCategory.rawValue)"
+        hasActiveSettingsSearch ? visibleCategories : SettingsCategory.allCases
     }
 
     private func previewNotificationSound() {
@@ -3607,35 +3566,35 @@ struct SettingsView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let sidebarWidth = min(max(232, geometry.size.width * 0.25), 286)
+            let sidebarWidth = min(max(172, geometry.size.width * 0.2), 208)
 
-            HStack(spacing: 0) {
-                settingsSidebar
-                    .frame(width: sidebarWidth)
+            ScrollViewReader { proxy in
+                HStack(spacing: 0) {
+                    settingsSidebar
+                        .frame(width: sidebarWidth)
 
-                Rectangle()
-                    .fill(Color(nsColor: .separatorColor).opacity(0.52))
-                    .frame(width: 1)
+                    Rectangle()
+                        .fill(Color(nsColor: .separatorColor).opacity(0.52))
+                        .frame(width: 1)
 
-                settingsDetailPane
-            }
-            .background(
-                ZStack {
-                    LinearGradient(
-                        colors: [
-                            Color.accentColor.opacity(0.10),
-                            Color(nsColor: .windowBackgroundColor),
-                            Color(nsColor: .controlBackgroundColor).opacity(0.40),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-
-                    Color(nsColor: .windowBackgroundColor)
-                        .opacity(0.82)
+                    settingsDetailPane
                 }
-                .ignoresSafeArea()
-            )
+                .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+                .onChange(of: pendingScrollCategory) { _, target in
+                    guard let target else { return }
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            proxy.scrollTo(target.id, anchor: .top)
+                        }
+                        pendingScrollCategory = nil
+                    }
+                }
+                .onChange(of: trimmedSettingsSearchText) { _, _ in
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(settingsTopAnchor, anchor: .top)
+                    }
+                }
+            }
         }
         .toggleStyle(.switch)
         .onAppear {
@@ -3670,6 +3629,7 @@ struct SettingsView: View {
             case .keyboardShortcuts:
                 settingsSearchText = ""
                 selectedCategory = .shortcuts
+                pendingScrollCategory = .shortcuts
             }
         }
         .confirmationDialog(
@@ -3723,21 +3683,14 @@ struct SettingsView: View {
     }
 
     private var settingsSidebar: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(String(localized: "settings.title", defaultValue: "Settings"))
-                    .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(.primary)
+        VStack(alignment: .leading, spacing: 14) {
+            Text(String(localized: "settings.title", defaultValue: "Settings"))
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.primary)
 
-                Text(selectedCategory.summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
 
                 TextField(
@@ -3752,30 +3705,32 @@ struct SettingsView: View {
                         settingsSearchText = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.84))
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.7))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Color(nsColor: .separatorColor).opacity(0.45), lineWidth: 1)
                     )
             )
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(sidebarCategories) { category in
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(visibleCategories) { category in
                         Button {
                             selectedCategory = category
                             if hasActiveSettingsSearch {
                                 settingsSearchText = ""
                             }
+                            pendingScrollCategory = category
                         } label: {
                             SettingsCategorySidebarButton(
                                 category: category,
@@ -3786,7 +3741,7 @@ struct SettingsView: View {
                         .accessibilityIdentifier("SettingsCategoryButton-\(category.rawValue)")
                     }
 
-                    if hasActiveSettingsSearch && sidebarCategories.isEmpty {
+                    if hasActiveSettingsSearch && visibleCategories.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(String(localized: "settings.search.empty.title", defaultValue: "No matching settings"))
                                 .font(.system(size: 13, weight: .semibold))
@@ -3794,28 +3749,25 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .padding(14)
+                        .padding(.top, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.76))
-                        )
                     }
                 }
                 .padding(.vertical, 2)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 20)
-        .background(
-            AboutVisualEffectBackground(material: .sidebar, blendingMode: .behindWindow)
-                .ignoresSafeArea()
-        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 18)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.28).ignoresSafeArea())
     }
 
     private var settingsDetailPane: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                Color.clear
+                    .frame(height: 0)
+                    .id(settingsTopAnchor)
+
                 if detailCategories.isEmpty {
                     SettingsSearchEmptyStateCard(query: trimmedSettingsSearchText)
                 } else {
@@ -3828,19 +3780,13 @@ struct SettingsView: View {
             .padding(.vertical, 24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .id(settingsDetailIdentity)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
     private func settingsCategoryPane(_ category: SettingsCategory) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            SettingsCategoryHeaderCard(category: category)
-                .accessibilityIdentifier(
-                    category == .shortcuts
-                        ? "SettingsKeyboardShortcutsSection"
-                        : "SettingsCategoryCard-\(category.rawValue)"
-                )
+            SettingsCategoryHeader(title: category.title)
 
             switch category {
             case .general:
@@ -3861,6 +3807,12 @@ struct SettingsView: View {
                 resetSettingsContent
             }
         }
+        .id(category.id)
+        .accessibilityIdentifier(
+            category == .shortcuts
+                ? "SettingsKeyboardShortcutsSection"
+                : "SettingsCategoryCard-\(category.rawValue)"
+        )
     }
 
     @ViewBuilder
@@ -4740,18 +4692,6 @@ struct SettingsView: View {
     }
 }
 
-private struct SettingsSectionHeader: View {
-    let title: String
-
-    var body: some View {
-        Text(title)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundColor(.secondary)
-            .padding(.leading, 2)
-            .padding(.bottom, -2)
-    }
-}
-
 private struct SettingsCard<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -4920,118 +4860,29 @@ private struct SettingsCategorySidebarButton: View {
     let isSelected: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.white.opacity(0.001))
-                    .frame(width: 34, height: 34)
-
-                Image(systemName: category.iconName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(category.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text(category.summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
+        Text(category.title)
+            .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+            .foregroundStyle(isSelected ? .primary : .secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isSelected ? Color.accentColor.opacity(0.11) : Color.clear)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(
-                            isSelected ? Color.accentColor.opacity(0.22) : Color(nsColor: .separatorColor).opacity(0.001),
-                            lineWidth: 1
-                        )
-                )
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
         )
     }
 }
 
-private struct SettingsCategoryHeaderCard: View {
-    let category: SettingsCategory
+private struct SettingsCategoryHeader: View {
+    let title: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.accentColor.opacity(0.20),
-                                    Color.accentColor.opacity(0.08),
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 54, height: 54)
-
-                    Image(systemName: category.iconName)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                }
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(category.title)
-                        .font(.system(size: 28, weight: .semibold))
-                    Text(category.summary)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 0)
-            }
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    ForEach(category.highlightTokens, id: \.self) { token in
-                        settingsCategoryToken(token)
-                    }
-                    Spacer(minLength: 0)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(category.highlightTokens, id: \.self) { token in
-                        settingsCategoryToken(token)
-                    }
-                }
-            }
-        }
-        .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.78))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color(nsColor: .separatorColor).opacity(0.44), lineWidth: 1)
-                )
-        )
-    }
-
-    private func settingsCategoryToken(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                Capsule()
-                    .fill(Color.accentColor.opacity(0.08))
-            )
+        Text(title)
+            .font(.system(size: 21, weight: .semibold))
+            .foregroundStyle(.primary)
+            .padding(.top, 2)
     }
 }
 
@@ -5039,13 +4890,13 @@ private struct SettingsSearchEmptyStateCard: View {
     let query: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(String(localized: "settings.search.empty.title", defaultValue: "No matching settings"))
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
 
             if !query.isEmpty {
                 Text(String(localized: "settings.search.empty.query", defaultValue: "“\(query)”"))
-                    .font(.system(size: 18, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.primary)
             }
 
@@ -5053,16 +4904,7 @@ private struct SettingsSearchEmptyStateCard: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }
-        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.78))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color(nsColor: .separatorColor).opacity(0.44), lineWidth: 1)
-                )
-        )
     }
 }
 
