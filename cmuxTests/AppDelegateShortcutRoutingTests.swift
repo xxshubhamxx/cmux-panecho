@@ -418,8 +418,11 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
 #endif
 
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
-
-        XCTAssertNil(self.window(withId: windowId), "Confirming Cmd+Ctrl+W should close the window")
+        XCTAssertNil(appDelegate.tabManagerFor(windowId: windowId), "Confirming Cmd+Ctrl+W should unregister the window context")
+        XCTAssertFalse(
+            self.window(withId: windowId)?.isVisible ?? false,
+            "Confirming Cmd+Ctrl+W should leave no visible main window behind"
+        )
     }
 
     func testCmdPhysicalIWithDvorakCharactersDoesNotTriggerShowNotifications() {
