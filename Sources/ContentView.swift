@@ -1636,8 +1636,8 @@ struct ContentView: View {
     private static let commandPaletteVisiblePreviewCandidateLimit = 192
     private static let commandPaletteListMaxHeight: CGFloat = 450
     private static let commandPaletteRowHeight: CGFloat = 24
-    private static let commandPaletteEmptyStateHeight: CGFloat = 44
-    private static let commandPaletteEmptyStateVerticalPadding: CGFloat = 12
+    private static let commandPaletteEmptyStateHeight: CGFloat = 30
+    private static let commandPaletteEmptyStateVerticalPadding: CGFloat = 7
     private static let minimumSidebarWidth: CGFloat = 186
     private static let maximumSidebarWidthRatio: CGFloat = 1.0 / 3.0
 
