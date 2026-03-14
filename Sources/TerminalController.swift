@@ -13067,13 +13067,15 @@ class TerminalController {
             return tabResolution.error ?? "ERROR: No tab selected"
         }
 
-        let pidValue: pid_t? = {
-            if let rawPid = normalizedOptionValue(parsed.options["pid"]),
-               let p = Int32(rawPid), p > 0 {
-                return p
+        let pidValue: pid_t?
+        if let rawPid = normalizedOptionValue(parsed.options["pid"]) {
+            guard let p = Int32(rawPid), p > 0 else {
+                return "ERROR: Invalid pid '\(rawPid)' — must be a positive integer"
             }
-            return nil
-        }()
+            pidValue = p
+        } else {
+            pidValue = nil
+        }
 
         DispatchQueue.main.async { [weak self] in
             guard let self, let tab = self.tabForSidebarMutation(id: targetTabId) else { return }
