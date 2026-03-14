@@ -306,7 +306,7 @@ export default function ChangelogPage() {
                 </time>
               </div>
 
-              {media?.title && (
+              {media?.showTitle && (
                 <div style={{ paddingTop: 12, margin: 0, fontSize: "1.5rem", fontWeight: 700, letterSpacing: "-0.025em" }}>
                   {t(`${versionKey(v.version)}.title`)}
                 </div>

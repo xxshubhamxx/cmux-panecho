@@ -19,8 +19,8 @@ export interface FeatureHighlight {
 }
 
 export interface VersionMedia {
-  /** Big title shown as a heading, summarizing the main features. */
-  title: string;
+  /** Whether this version should render a spotlight heading above its highlights. */
+  showTitle?: boolean;
   /** Hero image shown at the top of the version entry. */
   hero?: string;
   /** Feature highlights shown inline below the title. */
@@ -29,7 +29,7 @@ export interface VersionMedia {
 
 export const changelogMedia: Record<string, VersionMedia> = {
   "0.62.0": {
-    title: "Markdown Viewer, Browser Find, Vi Copy Mode, and Localization",
+    showTitle: true,
     features: [
       {
         key: "markdownViewer",
@@ -64,7 +64,7 @@ export const changelogMedia: Record<string, VersionMedia> = {
     ],
   },
   "0.61.0": {
-    title: "Tab Colors, Command Palette, Pin Workspaces",
+    showTitle: true,
     features: [
       {
         key: "tabColors",
@@ -104,7 +104,7 @@ export const changelogMedia: Record<string, VersionMedia> = {
     ],
   },
   "0.60.0": {
-    title: "Tab Context Menu, DevTools, Notification Rings, CJK Input",
+    showTitle: true,
     features: [
       {
         key: "tabContextMenu",
@@ -142,7 +142,7 @@ export const changelogMedia: Record<string, VersionMedia> = {
     ],
   },
   "0.32.0": {
-    title: "Sidebar Metadata",
+    showTitle: true,
     features: [
       {
         key: "sidebarMetadata",
