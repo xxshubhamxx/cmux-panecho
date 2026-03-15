@@ -97,6 +97,21 @@ final class GhosttyScrollbarSyncPlanTests: XCTestCase {
         )
     }
 
+    func testAutomaticFirstResponderAcquisitionIsSuppressedWhileReviewingScrollback() {
+        XCTAssertFalse(
+            ghosttyShouldApplyTerminalSurfaceFocusOnFirstResponderAcquisition(
+                storedTopVisibleRow: 70,
+                acquisitionSource: .automaticWindowActivation
+            )
+        )
+        XCTAssertTrue(
+            ghosttyShouldApplyTerminalSurfaceFocusOnFirstResponderAcquisition(
+                storedTopVisibleRow: 70,
+                acquisitionSource: .directSurfaceInteraction
+            )
+        )
+    }
+
     func testFailedScrollCorrectionDispatchKeepsRetryStateClear() {
         let failed = ghosttyScrollCorrectionDispatchState(
             previousLastSentRow: 4,
