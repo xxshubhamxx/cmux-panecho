@@ -4,14 +4,17 @@ import Sparkle
 /// SPUUserDriver that updates the view model for custom update UI.
 class UpdateDriver: NSObject, SPUUserDriver {
     let viewModel: UpdateViewModel
-    private let minimumCheckDuration: TimeInterval = UpdateTiming.minimumCheckDisplayDuration
+    private let timing: UpdateTiming.Values
+    private let minimumCheckDuration: TimeInterval
     private var lastCheckStart: Date?
     private var pendingCheckTransition: DispatchWorkItem?
     private var checkTimeoutWorkItem: DispatchWorkItem?
     private var lastFeedURLString: String?
 
-    init(viewModel: UpdateViewModel, hostBundle _: Bundle) {
+    init(viewModel: UpdateViewModel, hostBundle _: Bundle, timing: UpdateTiming.Values = .live) {
         self.viewModel = viewModel
+        self.timing = timing
+        self.minimumCheckDuration = timing.minimumCheckDisplayDuration
         super.init()
     }
 
@@ -233,7 +236,7 @@ class UpdateDriver: NSObject, SPUUserDriver {
             self.setState(.notFound(.init(acknowledgement: {})))
         }
         checkTimeoutWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + UpdateTiming.checkTimeoutDuration, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + timing.checkTimeoutDuration, execute: workItem)
     }
 
     private func applyState(_ newState: UpdateState) {
