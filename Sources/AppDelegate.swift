@@ -8344,20 +8344,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
 
-        // Cmd+W must close the focused panel even if first-responder momentarily lags on a
-        // browser NSTextView during split focus transitions.
-        if matchShortcut(
-            event: event,
-            shortcut: StoredShortcut(key: "w", command: true, shift: false, option: false, control: false)
-        ) {
-            // Browser popup windows primarily intercept Cmd+W in BrowserPopupPanel.
+        // The configured close-tab shortcut must close the focused panel even if first-responder
+        // momentarily lags on a browser NSTextView during split focus transitions.
+        if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .closeTab)) {
+            // Browser popup windows primarily intercept the default Cmd+W in BrowserPopupPanel.
             // This AppDelegate path is a fallback for cases where AppKit routes the
             // event through the global shortcut handler first.
             if let targetWindow = [NSApp.keyWindow, event.window]
                 .compactMap({ $0 })
                 .first(where: { $0.identifier?.rawValue == "cmux.browser-popup" }) {
 #if DEBUG
-                dlog("shortcut.cmdW route=browserPopup")
+                dlog("shortcut.closeTab route=browserPopup")
 #endif
                 targetWindow.performClose(nil)
                 return true
@@ -8374,14 +8371,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                    let manager = tabManagerFor(tabId: workspaceId) ?? tabManager {
 #if DEBUG
                     dlog(
-                        "shortcut.cmdW route=ghostty workspace=\(workspaceId.uuidString.prefix(5)) " +
+                        "shortcut.closeTab route=ghostty workspace=\(workspaceId.uuidString.prefix(5)) " +
                         "panel=\(panelId.uuidString.prefix(5)) selected=\(manager.selectedTabId?.uuidString.prefix(5) ?? "nil")"
                     )
 #endif
                     manager.closePanelWithConfirmation(tabId: workspaceId, surfaceId: panelId)
                 } else {
 #if DEBUG
-                    dlog("shortcut.cmdW route=focusedPanelFallback")
+                    dlog("shortcut.closeTab route=focusedPanelFallback")
 #endif
                     tabManager?.closeCurrentPanelWithConfirmation()
                 }
