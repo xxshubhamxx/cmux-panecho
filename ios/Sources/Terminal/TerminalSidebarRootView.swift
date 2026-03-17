@@ -9,8 +9,27 @@ struct TerminalSidebarRootView: View {
 
     init(store: TerminalSidebarStore? = nil) {
         _store = StateObject(
-            wrappedValue: store ?? TerminalSidebarStore(serverDiscovery: TerminalServerDiscovery())
+            wrappedValue: store ?? TerminalSidebarStore(
+                snapshotStore: Self.makeDefaultSnapshotStore(),
+                serverDiscovery: TerminalServerDiscovery()
+            )
         )
+    }
+
+    private static func makeDefaultSnapshotStore() -> TerminalSnapshotPersisting {
+        do {
+            let database = try AppDatabase.live()
+            try AppDatabaseMigrator.importLegacySnapshotIfNeeded(
+                from: TerminalSnapshotStore(),
+                into: database
+            )
+            return TerminalCacheRepository(database: database)
+        } catch {
+            #if DEBUG
+            print("Failed to initialize SQLite terminal cache: \(error)")
+            #endif
+            return TerminalSnapshotStore()
+        }
     }
 
     private var filteredWorkspaces: [TerminalWorkspace] {

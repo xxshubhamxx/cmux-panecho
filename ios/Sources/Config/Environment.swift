@@ -92,7 +92,7 @@ enum Environment {
         case .development:
             return "http://localhost:3000"
         case .production:
-            return "https://cmux.dev"
+            return "https://api.cmux.sh"
         }
     }
 
