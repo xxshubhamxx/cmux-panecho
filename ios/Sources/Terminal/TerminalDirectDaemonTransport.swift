@@ -178,11 +178,12 @@ final class TerminalDirectDaemonTransport: @unchecked Sendable, TerminalTranspor
         request: TerminalDaemonTicketRequest
     ) async throws -> (TerminalDaemonTicket, any TerminalRemoteDaemonTransport) {
         let ticket = try await ticketService.fetchTicket(request: request)
+        let certificatePins = normalizedCertificatePins(from: ticket)
         do {
             let daemonTransport = try await directClient.connect(
                 url: ticket.directURL,
                 ticket: ticket.ticket,
-                certificatePins: host.directTLSPins
+                certificatePins: certificatePins
             )
             return (ticket, daemonTransport)
         } catch let error as TerminalDirectDaemonClientError {
@@ -192,10 +193,11 @@ final class TerminalDirectDaemonTransport: @unchecked Sendable, TerminalTranspor
 
             ticketService.invalidateTicket(request: request)
             let freshTicket = try await ticketService.fetchTicket(request: request)
+            let freshCertificatePins = normalizedCertificatePins(from: freshTicket)
             let daemonTransport = try await directClient.connect(
                 url: freshTicket.directURL,
                 ticket: freshTicket.ticket,
-                certificatePins: host.directTLSPins
+                certificatePins: freshCertificatePins
             )
             return (freshTicket, daemonTransport)
         }
@@ -307,6 +309,14 @@ final class TerminalDirectDaemonTransport: @unchecked Sendable, TerminalTranspor
             return ["session.open"]
         }
         return ["session.open", "session.attach"]
+    }
+
+    private func normalizedCertificatePins(from ticket: TerminalDaemonTicket) -> [String] {
+        let normalizedTicketPins = ticket.directTLSPins.normalizedTerminalPins
+        if !normalizedTicketPins.isEmpty {
+            return normalizedTicketPins
+        }
+        return host.directTLSPins
     }
 }
 

@@ -30,6 +30,7 @@ final class TerminalDaemonTicketServiceTests: XCTestCase {
             {
               "ticket": "ticket-123",
               "direct_url": "tls://cmux-macmini:9443",
+              "direct_tls_pins": [" sha256:pin-a ", "", "sha256:pin-b"],
               "session_id": "sess-1",
               "attachment_id": "att-1",
               "expires_at": "2026-03-15T23:59:59Z"
@@ -51,6 +52,7 @@ final class TerminalDaemonTicketServiceTests: XCTestCase {
 
         XCTAssertEqual(ticket.ticket, "ticket-123")
         XCTAssertEqual(ticket.directURL.absoluteString, "tls://cmux-macmini:9443")
+        XCTAssertEqual(ticket.directTLSPins, ["sha256:pin-a", "sha256:pin-b"])
         XCTAssertEqual(ticket.sessionID, "sess-1")
         XCTAssertEqual(ticket.attachmentID, "att-1")
         XCTAssertEqual(ticket.expiresAt, ISO8601DateFormatter().date(from: "2026-03-15T23:59:59Z"))
@@ -108,6 +110,7 @@ final class TerminalDaemonTicketServiceTests: XCTestCase {
             {
               "ticket": "ticket-\(requestCounter.value())",
               "direct_url": "tls://cmux-macmini:9443",
+              "direct_tls_pins": [],
               "session_id": "sess-1",
               "attachment_id": "att-1",
               "expires_at": "2023-11-14T22:30:00Z"
@@ -152,6 +155,7 @@ final class TerminalDaemonTicketServiceTests: XCTestCase {
                 {
                   "ticket": "ticket-1",
                   "direct_url": "tls://cmux-macmini:9443",
+                  "direct_tls_pins": [],
                   "session_id": "sess-1",
                   "attachment_id": "att-1",
                   "expires_at": "2023-11-14T22:14:00Z"
@@ -162,6 +166,7 @@ final class TerminalDaemonTicketServiceTests: XCTestCase {
                 {
                   "ticket": "ticket-2",
                   "direct_url": "tls://cmux-macmini:9443",
+                  "direct_tls_pins": [],
                   "session_id": "sess-1",
                   "attachment_id": "att-1",
                   "expires_at": "2023-11-14T22:30:00Z"

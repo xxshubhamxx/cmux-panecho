@@ -8,6 +8,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
                 TerminalDaemonTicket(
                     ticket: "ticket-123",
                     directURL: try XCTUnwrap(URL(string: "tls://cmux.dev:9443")),
+                    directTLSPins: [" sha256:ticket-pin ", "", "sha256:ticket-pin"],
                     sessionID: "sess-1",
                     attachmentID: "att-1",
                     expiresAt: Date(timeIntervalSince1970: 1_800_000_000)
@@ -31,7 +32,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
                 transportPreference: .remoteDaemon,
                 teamID: "team-1",
                 serverID: "cmux-macmini",
-                directTLSPins: ["sha256:pin-a"]
+                directTLSPins: ["sha256:host-pin"]
             ),
             credentials: TerminalSSHCredentials(password: "secret", privateKey: nil),
             sessionName: "cmux-dev",
@@ -52,7 +53,7 @@ final class TerminalDirectDaemonTransportTests: XCTestCase {
         XCTAssertEqual(firstRequest?.serverID, "cmux-macmini")
         XCTAssertEqual(firstRequest?.capabilities, ["session.open"])
         XCTAssertEqual(connectCallCount, 1)
-        XCTAssertEqual(certificatePins, ["sha256:pin-a"])
+        XCTAssertEqual(certificatePins, ["sha256:ticket-pin"])
         XCTAssertEqual(directSessionTransport.connectCallCount, 1)
         XCTAssertEqual(fallbackTransport.connectCallCount, 0)
     }
