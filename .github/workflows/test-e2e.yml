@@ -108,6 +108,7 @@ jobs:
           fi
 
       - name: Create virtual display
+        if: ${{ inputs.test_filter != 'DisplayResolutionRegressionUITests' }}
         run: |
           set -euo pipefail
           echo "=== Display before ==="
@@ -206,33 +207,6 @@ jobs:
           ONLY_TESTING="-only-testing:cmuxUITests/$TEST_FILTER"
           DISPLAY_ENV_PREFIX=()
 
-          # Start recording right before the test (after build/resolve)
-          if [ "$RECORD_VIDEO" = "true" ]; then
-            DEVLIST=$( ffmpeg -f avfoundation -list_devices true -i "" 2>&1 || true )
-            echo "Available devices:"
-            echo "$DEVLIST" | grep -E "AVFoundation|Capture screen"
-
-            SCREEN_INDEX=$( echo "$DEVLIST" | grep "Capture screen" | head -1 \
-              | sed 's/.*\[\([0-9]*\)\].*/\1/' )
-            SCREEN_INDEX="${SCREEN_INDEX:-0}"
-            echo "Using screen device index: $SCREEN_INDEX"
-
-            ffmpeg -f avfoundation -framerate 10 -capture_cursor 1 \
-              -i "${SCREEN_INDEX}:none" \
-              -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
-              /tmp/test-recording-raw.mp4 </dev/null >/tmp/ffmpeg.log 2>&1 &
-            RECORD_PID=$!
-            echo "RECORD_PID=$RECORD_PID" >> "$GITHUB_ENV"
-            sleep 2
-
-            if kill -0 "$RECORD_PID" 2>/dev/null; then
-              echo "Recording started (PID $RECORD_PID)"
-            else
-              echo "::warning::ffmpeg screen recording failed to start"
-              cat /tmp/ffmpeg.log
-            fi
-          fi
-
           if [ "$TEST_FILTER" = "DisplayResolutionRegressionUITests" ]; then
             PREFIX="/tmp/cmux-display-churn-${{ github.run_id }}-${{ github.run_attempt }}"
             READY_PATH="${PREFIX}.ready"
@@ -282,6 +256,35 @@ jobs:
               CMUX_UI_TEST_DISPLAY_DONE_PATH="$DONE_PATH"
               CMUX_UI_TEST_DISPLAY_LOG_PATH="$LOG_PATH"
             )
+          fi
+
+          # Start recording right before the test (after build/resolve).
+          # The display churn regression creates its own virtual display above,
+          # so recording must start after that harness is ready.
+          if [ "$RECORD_VIDEO" = "true" ]; then
+            DEVLIST=$( ffmpeg -f avfoundation -list_devices true -i "" 2>&1 || true )
+            echo "Available devices:"
+            echo "$DEVLIST" | grep -E "AVFoundation|Capture screen"
+
+            SCREEN_INDEX=$( echo "$DEVLIST" | grep "Capture screen" | head -1 \
+              | sed 's/.*\[\([0-9]*\)\].*/\1/' )
+            SCREEN_INDEX="${SCREEN_INDEX:-0}"
+            echo "Using screen device index: $SCREEN_INDEX"
+
+            ffmpeg -f avfoundation -framerate 10 -capture_cursor 1 \
+              -i "${SCREEN_INDEX}:none" \
+              -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+              /tmp/test-recording-raw.mp4 </dev/null >/tmp/ffmpeg.log 2>&1 &
+            RECORD_PID=$!
+            echo "RECORD_PID=$RECORD_PID" >> "$GITHUB_ENV"
+            sleep 2
+
+            if kill -0 "$RECORD_PID" 2>/dev/null; then
+              echo "Recording started (PID $RECORD_PID)"
+            else
+              echo "::warning::ffmpeg screen recording failed to start"
+              cat /tmp/ffmpeg.log
+            fi
           fi
 
           set +e
