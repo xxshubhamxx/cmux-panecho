@@ -1,6 +1,23 @@
 import XCTest
 import Foundation
 
+private func paneStripPollUntil(
+    timeout: TimeInterval,
+    pollInterval: TimeInterval = 0.05,
+    condition: () -> Bool
+) -> Bool {
+    let start = ProcessInfo.processInfo.systemUptime
+    while true {
+        if condition() {
+            return true
+        }
+        if (ProcessInfo.processInfo.systemUptime - start) >= timeout {
+            return false
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(pollInterval))
+    }
+}
+
 final class PaneStripUITests: XCTestCase {
     override func setUp() {
         super.setUp()
@@ -38,7 +55,8 @@ final class PaneStripUITests: XCTestCase {
         app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_PATH"] = dataPath
         app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_SCENARIO"] = scenario
         app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_FRAME_COUNT"] = String(frameCount)
-        app.launch()
+        app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_QUIT_WHEN_DONE"] = "1"
+        launchAndActivate(app)
         defer {
             if app.state != .notRunning {
                 app.terminate()
@@ -95,5 +113,23 @@ final class PaneStripUITests: XCTestCase {
             return nil
         }
         return object
+    }
+
+    private func launchAndActivate(_ app: XCUIApplication, activateTimeout: TimeInterval = 2.0) {
+        app.launch()
+        let activated = paneStripPollUntil(timeout: activateTimeout) {
+            guard app.state != .runningForeground else {
+                return true
+            }
+            app.activate()
+            return app.state == .runningForeground
+        }
+        if !activated {
+            app.activate()
+        }
+        XCTAssertTrue(
+            paneStripPollUntil(timeout: 2.0) { app.state == .runningForeground || app.state == .notRunning },
+            "App did not reach runningForeground before pane-strip capture"
+        )
     }
 }
