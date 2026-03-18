@@ -125,21 +125,15 @@ protocol TerminalRemoteWorkspaceReadMarking {
 }
 
 @MainActor
-struct ConvexTerminalRemoteWorkspaceReadMarker: TerminalRemoteWorkspaceReadMarking {
-    func markRead(item: UnifiedInboxItem) async throws {
-        guard let teamID = item.teamID,
-              let workspaceID = item.workspaceID else {
-            return
-        }
+struct LiveTerminalRemoteWorkspaceReadMarker: TerminalRemoteWorkspaceReadMarking {
+    private let routeClient: MobileWorkspaceReadRouteClient
 
-        let _: String = try await ConvexClientManager.shared.client.mutation(
-            "mobileWorkspaces:markRead",
-            with: [
-                "teamSlugOrId": teamID,
-                "workspaceId": workspaceID,
-                "latestEventSeq": item.latestEventSeq,
-            ]
-        )
+    init(routeClient: MobileWorkspaceReadRouteClient? = nil) {
+        self.routeClient = routeClient ?? MobileWorkspaceReadRouteClient()
+    }
+
+    func markRead(item: UnifiedInboxItem) async throws {
+        try await routeClient.markRead(item: item)
     }
 }
 
@@ -186,7 +180,7 @@ final class TerminalSidebarStore: ObservableObject {
         self.workspaceMetadataService = workspaceMetadataService ?? TerminalConvexWorkspaceMetadataService()
         self.serverDiscovery = serverDiscovery
         self.networkPathMonitor = networkPathMonitor
-        self.remoteWorkspaceReadMarker = remoteWorkspaceReadMarker ?? ConvexTerminalRemoteWorkspaceReadMarker()
+        self.remoteWorkspaceReadMarker = remoteWorkspaceReadMarker ?? LiveTerminalRemoteWorkspaceReadMarker()
         self.eagerlyRestoreSessions = eagerlyRestoreSessions
         self.controllerFactory = controllerFactory ?? { workspace, host, credentialsStore, transportFactory in
             TerminalSessionController(

@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import UserNotifications
-import ConvexMobile
 
 @MainActor
 protocol NotificationPushSyncing {
@@ -9,7 +8,7 @@ protocol NotificationPushSyncing {
     func sendTestPush(title: String, body: String) async throws
     func upsertPushToken(
         token: String,
-        environment: PushTokensUpsertArgsEnvironmentEnum,
+        environment: MobilePushEnvironment,
         platform: String,
         bundleId: String,
         deviceId: String?
@@ -19,46 +18,44 @@ protocol NotificationPushSyncing {
 
 @MainActor
 struct LiveNotificationPushSyncer: NotificationPushSyncing {
-    private let convex = ConvexClientManager.shared
+    private let authManager: AuthManager
+    private let routeClient: MobilePushRouteClient
+
+    init(
+        authManager: AuthManager? = nil,
+        routeClient: MobilePushRouteClient? = nil
+    ) {
+        let resolvedAuthManager = authManager ?? AuthManager.shared
+        self.authManager = resolvedAuthManager
+        self.routeClient = routeClient ?? MobilePushRouteClient(authManager: resolvedAuthManager)
+    }
 
     var isAuthenticated: Bool {
-        convex.isAuthenticated
+        authManager.isAuthenticated
     }
 
     func sendTestPush(title: String, body: String) async throws {
-        let args = PushTokensSendTestArgs(title: title, body: body)
-        let _: PushTokensSendTestReturn = try await convex.client.mutation(
-            "pushTokens:sendTest",
-            with: args.asDictionary()
-        )
+        _ = try await routeClient.sendTestPush(title: title, body: body)
     }
 
     func upsertPushToken(
         token: String,
-        environment: PushTokensUpsertArgsEnvironmentEnum,
+        environment: MobilePushEnvironment,
         platform: String,
         bundleId: String,
         deviceId: String?
     ) async throws {
-        let args = PushTokensUpsertArgs(
-            deviceId: deviceId,
+        try await routeClient.upsertPushToken(
             token: token,
             environment: environment,
             platform: platform,
-            bundleId: bundleId
-        )
-        let _: PushTokensUpsertReturn = try await convex.client.mutation(
-            "pushTokens:upsert",
-            with: args.asDictionary()
+            bundleId: bundleId,
+            deviceId: deviceId
         )
     }
 
     func removePushToken(token: String) async throws {
-        let args = PushTokensRemoveArgs(token: token)
-        let _: PushTokensRemoveReturn = try await convex.client.mutation(
-            "pushTokens:remove",
-            with: args.asDictionary()
-        )
+        try await routeClient.removePushToken(token: token)
     }
 }
 
@@ -308,7 +305,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             return
         }
 
-        let environment: PushTokensUpsertArgsEnvironmentEnum = Environment.current == .development
+        let environment: MobilePushEnvironment = Environment.current == .development
             ? .development
             : .production
         let deviceId = deviceInfo.vendorIdentifier

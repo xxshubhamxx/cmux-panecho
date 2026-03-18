@@ -59,6 +59,7 @@
 		6D697DF3D11308026F0F628D /* TerminalHomeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB6598621689AE13A02FE2B9 /* TerminalHomeUITests.swift */; };
 		6DAA11BC61CC059E80AE3598 /* AuthPresentationContextProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 194FA6A3C28159BD0744F6F5 /* AuthPresentationContextProvider.swift */; };
 		6ED3832765AAB169F7254054 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B8CDE2F6CDCAB37E3107C76 /* ContentView.swift */; };
+		701B64FEFB47C1D82F44CDBE /* MobileContractModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AC726D3FC8D35E5F9D5ACD2 /* MobileContractModels.swift */; };
 		70A45D6AC127FEFAC106706A /* NIOCore in Frameworks */ = {isa = PBXBuildFile; productRef = 5A0190878FCF3FB8AC238548 /* NIOCore */; };
 		7113C9A8A0721FEEF9858291 /* TerminalDaemonTicketServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A23F39B8D1A3374D480D74CC /* TerminalDaemonTicketServiceTests.swift */; };
 		7A7007C7A17622511B851653 /* TerminalRemoteDaemonSessionTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F75715CFD1F6CCF89AA43D4F /* TerminalRemoteDaemonSessionTransport.swift */; };
@@ -177,6 +178,7 @@
 		263881D640CF9D1EEC1D093E /* AuthError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthError.swift; sourceTree = "<group>"; };
 		28D639E6992408AFD926D7AD /* TerminalTextInputPipelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTextInputPipelineTests.swift; sourceTree = "<group>"; };
 		298CBAF0C277F506858D625E /* CodexOAuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexOAuthView.swift; sourceTree = "<group>"; };
+		2AC726D3FC8D35E5F9D5ACD2 /* MobileContractModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileContractModels.swift; sourceTree = "<group>"; };
 		2B426546C011580A0014F89F /* ToolCallFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallFormattingTests.swift; sourceTree = "<group>"; };
 		2F94540C907EB9AC1DCCD6DD /* ConvexApiTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConvexApiTypes.swift; sourceTree = "<group>"; };
 		38A50394379F40101C8A95FC /* ChatFix1_ContentInsetNever.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatFix1_ContentInsetNever.swift; sourceTree = "<group>"; };
@@ -541,6 +543,7 @@
 			isa = PBXGroup;
 			children = (
 				9774A2FB02CE54197BE7433D /* ConvexWorkspaceLiveSync.swift */,
+				2AC726D3FC8D35E5F9D5ACD2 /* MobileContractModels.swift */,
 			);
 			path = Mobile;
 			sourceTree = "<group>";
@@ -824,6 +827,7 @@
 				926513A46F037E74CC8BA9B6 /* InboxCacheRepository.swift in Sources */,
 				B6A62131AD984521B5A6B183 /* InputStrategyLabView.swift in Sources */,
 				65E76B2DE8870BF62C89A260 /* MarkdownDebugView.swift in Sources */,
+				701B64FEFB47C1D82F44CDBE /* MobileContractModels.swift in Sources */,
 				361B05C412BFA1E44BDCAD39 /* Models.swift in Sources */,
 				93FED7D20FA11DDB6B9201CA /* NotificationManager.swift in Sources */,
 				1E375F56DD54DEFCE45E3D37 /* NotificationRouteStore.swift in Sources */,

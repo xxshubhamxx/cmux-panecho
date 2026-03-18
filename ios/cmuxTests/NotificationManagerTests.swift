@@ -76,7 +76,7 @@ final class NotificationManagerTests: XCTestCase {
 private final class StubNotificationPushSyncer: NotificationPushSyncing {
     struct UpsertCall: Equatable {
         let token: String
-        let environment: PushTokensUpsertArgsEnvironmentEnum
+        let environment: MobilePushEnvironment
         let platform: String
         let bundleId: String
         let deviceId: String?
@@ -93,7 +93,7 @@ private final class StubNotificationPushSyncer: NotificationPushSyncing {
 
     func upsertPushToken(
         token: String,
-        environment: PushTokensUpsertArgsEnvironmentEnum,
+        environment: MobilePushEnvironment,
         platform: String,
         bundleId: String,
         deviceId: String?
