@@ -2024,6 +2024,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var didSetupGotoSplitUITest = false
     private var gotoSplitUITestObservers: [NSObjectProtocol] = []
     private var didSetupMultiWindowNotificationsUITest = false
+    private var didSetupDisplayResolutionUITestDiagnostics = false
+    private var displayResolutionUITestObservers: [NSObjectProtocol] = []
+    private struct UITestRenderDiagnosticsSnapshot {
+        let panelId: UUID
+        let drawCount: Int
+        let presentCount: Int
+        let lastPresentTime: Double
+        let windowVisible: Bool
+        let appIsActive: Bool
+        let desiredFocus: Bool
+        let isFirstResponder: Bool
+    }
     var debugCloseMainWindowConfirmationHandler: ((NSWindow) -> Bool)?
     // Keep debug-only windows alive when tests intentionally inject key mismatches.
     private var debugDetachedContextWindows: [NSWindow] = []
@@ -2343,6 +2355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             payload["targetDisplayPresent"] = screenPresent ? "1" : "0"
             payload["targetDisplayMoveSucceeded"] = movedWindow ? "1" : "0"
         }
+        appendUITestRenderDiagnosticsIfNeeded(&payload, environment: env)
         appendUITestSocketDiagnosticsIfNeeded(&payload, environment: env)
 
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
@@ -2396,6 +2409,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         payload["socketPathMatches"] = health.socketPathMatches ? "1" : "0"
         payload["socketPathExists"] = health.socketPathExists ? "1" : "0"
         payload["socketFailureSignals"] = failureSignals.joined(separator: ",")
+    }
+
+    private func appendUITestRenderDiagnosticsIfNeeded(
+        _ payload: inout [String: String],
+        environment env: [String: String]
+    ) {
+        guard env["CMUX_UI_TEST_DISPLAY_RENDER_STATS"] == "1" else { return }
+
+        guard let renderState = currentUITestRenderDiagnostics() else {
+            payload["renderStatsAvailable"] = "0"
+            payload["renderPanelId"] = ""
+            payload["renderDrawCount"] = ""
+            payload["renderPresentCount"] = ""
+            payload["renderLastPresentTime"] = ""
+            payload["renderWindowVisible"] = ""
+            payload["renderAppIsActive"] = ""
+            payload["renderDesiredFocus"] = ""
+            payload["renderIsFirstResponder"] = ""
+            payload["renderDiagnosticsUpdatedAt"] = String(format: "%.6f", ProcessInfo.processInfo.systemUptime)
+            return
+        }
+
+        payload["renderStatsAvailable"] = "1"
+        payload["renderPanelId"] = renderState.panelId.uuidString
+        payload["renderDrawCount"] = String(renderState.drawCount)
+        payload["renderPresentCount"] = String(renderState.presentCount)
+        payload["renderLastPresentTime"] = String(format: "%.6f", renderState.lastPresentTime)
+        payload["renderWindowVisible"] = renderState.windowVisible ? "1" : "0"
+        payload["renderAppIsActive"] = renderState.appIsActive ? "1" : "0"
+        payload["renderDesiredFocus"] = renderState.desiredFocus ? "1" : "0"
+        payload["renderIsFirstResponder"] = renderState.isFirstResponder ? "1" : "0"
+        payload["renderDiagnosticsUpdatedAt"] = String(format: "%.6f", ProcessInfo.processInfo.systemUptime)
+    }
+
+    private func currentUITestRenderDiagnostics() -> UITestRenderDiagnosticsSnapshot? {
+        guard let tabManager,
+              let tabId = tabManager.selectedTabId,
+              let workspace = tabManager.tabs.first(where: { $0.id == tabId }) else {
+            return nil
+        }
+
+        let terminalPanel: TerminalPanel? = {
+            if let focusedPanelId = workspace.focusedPanelId,
+               let terminalPanel = workspace.terminalPanel(for: focusedPanelId) {
+                return terminalPanel
+            }
+            if let focusedTerminalPanel = workspace.focusedTerminalPanel {
+                return focusedTerminalPanel
+            }
+            return workspace.panels.values.compactMap { $0 as? TerminalPanel }.first
+        }()
+
+        guard let terminalPanel else { return nil }
+        let stats = terminalPanel.hostedView.debugRenderStats()
+        return UITestRenderDiagnosticsSnapshot(
+            panelId: terminalPanel.id,
+            drawCount: stats.drawCount,
+            presentCount: stats.presentCount,
+            lastPresentTime: stats.lastPresentTime,
+            windowVisible: stats.windowOcclusionVisible,
+            appIsActive: stats.appIsActive,
+            desiredFocus: stats.desiredFocus,
+            isFirstResponder: stats.isFirstResponder
+        )
     }
 
     private func moveUITestWindowToTargetDisplayIfNeeded(attempt: Int = 0) {
@@ -2512,6 +2589,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         setupJumpUnreadUITestIfNeeded()
         setupGotoSplitUITestIfNeeded()
         setupMultiWindowNotificationsUITestIfNeeded()
+        setupDisplayResolutionUITestDiagnosticsIfNeeded()
 
         // UI tests sometimes don't run SwiftUI `.onAppear` soon enough (or at all) on the VM.
         // The automation socket is a core testing primitive, so ensure it's started here when
@@ -2563,6 +2641,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 self?.writeUITestDiagnosticsIfNeeded(stage: "socketSanityPostRestart")
             }
         }
+    }
+
+    private func setupDisplayResolutionUITestDiagnosticsIfNeeded() {
+        let env = ProcessInfo.processInfo.environment
+        guard env["CMUX_UI_TEST_DISPLAY_RENDER_STATS"] == "1" else { return }
+        guard !didSetupDisplayResolutionUITestDiagnostics else { return }
+        didSetupDisplayResolutionUITestDiagnostics = true
+
+        let center = NotificationCenter.default
+        let observe: (Notification.Name, String) -> Void = { [weak self] name, stage in
+            guard let self else { return }
+            let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.writeUITestDiagnosticsIfNeeded(stage: stage)
+                }
+            }
+            self.displayResolutionUITestObservers.append(observer)
+        }
+
+        observe(NSWindow.didResizeNotification, "displayUITest.windowDidResize")
+        observe(NSWindow.didMoveNotification, "displayUITest.windowDidMove")
+        observe(NSWindow.didChangeScreenNotification, "displayUITest.windowDidChangeScreen")
+        observe(NSWindow.didChangeBackingPropertiesNotification, "displayUITest.windowDidChangeBacking")
+        observe(.terminalSurfaceDidBecomeReady, "displayUITest.terminalSurfaceDidBecomeReady")
+        observe(.terminalPortalVisibilityDidChange, "displayUITest.terminalPortalVisibilityDidChange")
+
+        writeUITestDiagnosticsIfNeeded(stage: "displayUITest.setup")
     }
 #endif
 

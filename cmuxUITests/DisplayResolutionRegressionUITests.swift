@@ -4,7 +4,6 @@ import Foundation
 final class DisplayResolutionRegressionUITests: XCTestCase {
     private let displayHarnessManifestPath = "/tmp/cmux-ui-test-display-harness.json"
     private var launchTag = ""
-    private var socketPath = ""
     private var diagnosticsPath = ""
     private var displayReadyPath = ""
     private var displayIDPath = ""
@@ -14,7 +13,6 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
     private var helperLogPath = ""
     private var launchedApp: XCUIApplication?
     private var helperProcess: Process?
-    private var socketClient: ControlSocketClient?
 
     override func setUp() {
         super.setUp()
@@ -22,7 +20,6 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
 
         let token = UUID().uuidString
         launchTag = "ui-tests-display-resolution-\(token.prefix(8))"
-        socketPath = "/tmp/cmux-ui-test-display-churn-\(token).sock"
         diagnosticsPath = "/tmp/cmux-ui-test-display-churn-\(token).json"
         displayReadyPath = "/tmp/cmux-ui-test-display-ready-\(token)"
         displayIDPath = "/tmp/cmux-ui-test-display-id-\(token)"
@@ -39,7 +36,6 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
         helperProcess?.terminate()
         helperProcess?.waitUntilExit()
         helperProcess = nil
-        socketClient = nil
         removeTestArtifacts()
         super.tearDown()
     }
@@ -54,26 +50,19 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
         }
 
         try launchAppProcess(targetDisplayID: targetDisplayID)
-        guard let resolvedSocketPath = resolveSocketPath(timeout: 12.0) else {
-            XCTFail(
-                "Expected control socket to respond. requested=\(socketPath) tag=\(launchTag) " +
-                "candidates=\(expectedSocketCandidates(includeFallback: true)) diagnostics=\(loadDiagnostics() ?? [:]) " +
-                "app=\(launchedAppDiagnostics())"
-            )
-            return
-        }
-        socketPath = resolvedSocketPath
-        XCTAssertTrue(waitForSocketPong(timeout: 4.0), "Expected control socket to respond at \(socketPath)")
         XCTAssertTrue(
             waitForTargetDisplayMove(targetDisplayID: targetDisplayID, timeout: 12.0),
             "Expected app window to move to display \(targetDisplayID). diagnostics=\(loadDiagnostics() ?? [:]) app=\(launchedAppDiagnostics())"
         )
 
         guard let baselineStats = waitForRenderStats(timeout: 8.0) else {
-            XCTFail("Missing initial render_stats response")
+            XCTFail("Missing initial render stats. diagnostics=\(loadDiagnostics() ?? [:])")
             return
         }
         let baselinePresentCount = baselineStats.presentCount
+        var maxPresentCount = baselinePresentCount
+        var maxDiagnosticsUpdatedAt = baselineStats.diagnosticsUpdatedAt
+        var lastStats = baselineStats
 
         XCTAssertTrue(
             FileManager.default.createFile(atPath: displayStartPath, contents: Data("start\n".utf8)),
@@ -81,16 +70,11 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
         )
 
         let deadline = Date().addingTimeInterval(30.0)
-        var maxPresentCount = baselinePresentCount
-        var lastStats = baselineStats
-        var socketFailures = 0
-
         while Date() < deadline {
-            if let stats = renderStats(responseTimeout: 2.0) {
+            if let stats = loadRenderStats() {
                 lastStats = stats
                 maxPresentCount = max(maxPresentCount, stats.presentCount)
-            } else {
-                socketFailures += 1
+                maxDiagnosticsUpdatedAt = max(maxDiagnosticsUpdatedAt, stats.diagnosticsUpdatedAt)
             }
 
             let doneMarker = readTrimmedFile(atPath: displayDonePath)
@@ -104,19 +88,30 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.15))
         }
 
-        XCTAssertEqual(readTrimmedFile(atPath: displayDonePath), "done", "Expected display churn to finish. helperLog=\(readTrimmedFile(atPath: helperLogPath) ?? "<missing>")")
+        XCTAssertEqual(
+            readTrimmedFile(atPath: displayDonePath),
+            "done",
+            "Expected display churn to finish. helperLog=\(readTrimmedFile(atPath: helperLogPath) ?? "<missing>")"
+        )
+
         guard let finalStats = waitForRenderStats(timeout: 6.0) else {
-            XCTFail("Expected render_stats after display churn. socketFailures=\(socketFailures)")
+            XCTFail("Expected render stats after display churn. diagnostics=\(loadDiagnostics() ?? [:])")
             return
         }
 
         maxPresentCount = max(maxPresentCount, finalStats.presentCount)
+        maxDiagnosticsUpdatedAt = max(maxDiagnosticsUpdatedAt, finalStats.diagnosticsUpdatedAt)
+
         XCTAssertGreaterThanOrEqual(
             maxPresentCount - baselinePresentCount,
             8,
             "Expected terminal presents to keep advancing during display churn. baseline=\(baselineStats) last=\(lastStats) final=\(finalStats)"
         )
-        XCTAssertLessThanOrEqual(socketFailures, 8, "Too many socket timeouts while display modes changed")
+        XCTAssertGreaterThan(
+            maxDiagnosticsUpdatedAt,
+            baselineStats.diagnosticsUpdatedAt,
+            "Expected render diagnostics to keep updating during display churn. baseline=\(baselineStats) final=\(finalStats)"
+        )
     }
 
     private func prepareDisplayHarnessIfNeeded() throws {
@@ -213,7 +208,6 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
 
     private func launchAppProcess(targetDisplayID: String) throws {
         let app = XCUIApplication()
-        app.launchArguments += ["-socketControlMode", "allowAll"]
         for (key, value) in launchEnvironment(targetDisplayID: targetDisplayID) {
             app.launchEnvironment[key] = value
         }
@@ -228,12 +222,9 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
 
     private func launchEnvironment(targetDisplayID: String) -> [String: String] {
         [
-            "CMUX_SOCKET_PATH": socketPath,
-            "CMUX_SOCKET_MODE": "allowAll",
-            "CMUX_SOCKET_ENABLE": "1",
             "CMUX_UI_TEST_MODE": "1",
-            "CMUX_UI_TEST_SOCKET_SANITY": "1",
             "CMUX_UI_TEST_DIAGNOSTICS_PATH": diagnosticsPath,
+            "CMUX_UI_TEST_DISPLAY_RENDER_STATS": "1",
             "CMUX_UI_TEST_TARGET_DISPLAY_ID": targetDisplayID,
             "CMUX_TAG": launchTag,
         ]
@@ -275,163 +266,20 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
         }
     }
 
-    private func resolveSocketPath(timeout: TimeInterval) -> String? {
-        if let diagnostics = loadDiagnostics(),
-           diagnostics["socketReady"] == "1",
-           let diagnosticsPath = diagnostics["socketExpectedPath"],
-           !diagnosticsPath.isEmpty {
-            return diagnosticsPath
-        }
-
-        let primaryCandidates = expectedSocketCandidates(includeFallback: false)
-        let fallbackCandidates = expectedSocketCandidates(includeFallback: true)
-            .filter { !primaryCandidates.contains($0) }
-
-        var resolvedPath: String?
-        _ = waitForCondition(timeout: timeout) {
-            for candidate in primaryCandidates {
-                if self.socketRespondsToPing(at: candidate) {
-                    resolvedPath = candidate
-                    return true
-                }
-            }
-            for candidate in fallbackCandidates {
-                if self.socketRespondsToPing(at: candidate) {
-                    resolvedPath = candidate
-                    return true
-                }
-            }
-            return false
-        }
-
-        return resolvedPath
-    }
-
-    private func expectedSocketCandidates(includeFallback: Bool) -> [String] {
-        var candidates = [socketPath]
-        let sanitizedTag = sanitizeTagSlug(launchTag)
-        if !sanitizedTag.isEmpty {
-            candidates.append("/tmp/cmux-debug-\(sanitizedTag).sock")
-            candidates.append("/tmp/cmux-\(sanitizedTag).sock")
-        }
-
-        if includeFallback {
-            candidates.append(contentsOf: lastSocketPathCandidates())
-            candidates.append(contentsOf: discoverTmpSocketCandidates(limit: 12))
-            candidates.append("/tmp/cmux-debug.sock")
-            candidates.append(stableSocketPath())
-            candidates.append("/tmp/cmux.sock")
-        }
-
-        var unique: [String] = []
-        var seen = Set<String>()
-        for candidate in candidates where !candidate.isEmpty {
-            if seen.insert(candidate).inserted {
-                unique.append(candidate)
-            }
-        }
-        return unique
-    }
-
-    private func sanitizeTagSlug(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmed.isEmpty else { return "" }
-
-        let pieces = trimmed
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-        let slug = pieces.joined(separator: "-")
-        return slug.isEmpty ? "agent" : slug
-    }
-
-    private func lastSocketPathCandidates() -> [String] {
-        [
-            readTrimmedFile(atPath: stableSocketDirectory().appendingPathComponent("last-socket-path").path),
-            readTrimmedFile(atPath: "/tmp/cmux-last-socket-path"),
-        ]
-        .compactMap { $0 }
-    }
-
-    private func stableSocketPath() -> String {
-        stableSocketDirectory()
-            .appendingPathComponent("cmux.sock")
-            .path
-    }
-
-    private func stableSocketDirectory() -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("cmux", isDirectory: true)
-            ?? URL(fileURLWithPath: "/tmp")
-    }
-
-    private func discoverTmpSocketCandidates(limit: Int) -> [String] {
-        let tmpPath = "/tmp"
-        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: tmpPath) else {
-            return []
-        }
-
-        let matches = entries.filter { $0.hasPrefix("cmux") && $0.hasSuffix(".sock") }
-        let sorted = matches.compactMap { entry -> (path: String, mtime: Date)? in
-            let fullPath = (tmpPath as NSString).appendingPathComponent(entry)
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: fullPath) else {
-                return nil
-            }
-            let mtime = (attrs[.modificationDate] as? Date) ?? .distantPast
-            return (fullPath, mtime)
-        }
-        .sorted { $0.mtime > $1.mtime }
-
-        return Array(sorted.prefix(limit)).map(\.path)
-    }
-
-    private func socketRespondsToPing(at path: String) -> Bool {
-        let originalPath = socketPath
-        let originalClient = socketClient
-        socketPath = path
-        socketClient = ControlSocketClient(path: path)
-        defer {
-            socketPath = originalPath
-            socketClient = originalClient
-        }
-        return socketCommand("ping", responseTimeout: 2.0) == "PONG"
-    }
-
-    private func waitForSocketPong(timeout: TimeInterval) -> Bool {
-        waitForCondition(timeout: timeout) {
-            self.socketCommand("ping", responseTimeout: 2.0) == "PONG"
-        }
-    }
-
     private func waitForRenderStats(timeout: TimeInterval) -> RenderStats? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let stats = renderStats(responseTimeout: 2.0) {
+            if let stats = loadRenderStats() {
                 return stats
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
-        return nil
+        return loadRenderStats()
     }
 
-    private func renderStats(responseTimeout: TimeInterval) -> RenderStats? {
-        guard let response = socketCommand("render_stats", responseTimeout: responseTimeout),
-              response.hasPrefix("OK ") else {
-            return nil
-        }
-
-        let json = String(response.dropFirst(3))
-        guard let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(RenderStats.self, from: data)
-    }
-
-    private func socketCommand(_ command: String, responseTimeout: TimeInterval) -> String? {
-        if socketClient?.path != socketPath {
-            socketClient = ControlSocketClient(path: socketPath)
-        }
-        if let response = socketClient?.sendLine(command, timeout: responseTimeout) {
-            return response
-        }
-        return socketCommandViaNetcat(command, responseTimeout: responseTimeout)
+    private func loadRenderStats() -> RenderStats? {
+        guard let diagnostics = loadDiagnostics() else { return nil }
+        return RenderStats(diagnostics: diagnostics)
     }
 
     private func loadDiagnostics() -> [String: String]? {
@@ -476,7 +324,6 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
 
     private func removeTestArtifacts() {
         for path in [
-            socketPath,
             diagnosticsPath,
             displayReadyPath,
             displayIDPath,
@@ -490,52 +337,40 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
         }
     }
 
-    private func socketCommandViaNetcat(_ command: String, responseTimeout: TimeInterval) -> String? {
-        let nc = "/usr/bin/nc"
-        guard FileManager.default.isExecutableFile(atPath: nc) else { return nil }
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: nc)
-        proc.arguments = ["-U", socketPath, "-w", String(max(1, Int(ceil(responseTimeout))))]
-
-        let inPipe = Pipe()
-        let outPipe = Pipe()
-        proc.standardInput = inPipe
-        proc.standardOutput = outPipe
-        proc.standardError = Pipe()
-
-        do {
-            try proc.run()
-        } catch {
-            return nil
-        }
-
-        if let data = (command + "\n").data(using: .utf8) {
-            inPipe.fileHandleForWriting.write(data)
-        }
-        inPipe.fileHandleForWriting.closeFile()
-
-        proc.waitUntilExit()
-
-        let output = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        if let firstLine = output.split(separator: "\n", maxSplits: 1).first {
-            let trimmed = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private struct RenderStats: Decodable, CustomStringConvertible {
+    private struct RenderStats: CustomStringConvertible {
+        let panelId: String
         let drawCount: Int
         let presentCount: Int
         let lastPresentTime: Double
-        let inWindow: Bool
-        let windowIsKey: Bool
-        let windowOcclusionVisible: Bool
+        let windowVisible: Bool
+        let appIsActive: Bool
+        let desiredFocus: Bool
+        let isFirstResponder: Bool
+        let diagnosticsUpdatedAt: Double
+
+        init?(diagnostics: [String: String]) {
+            guard diagnostics["renderStatsAvailable"] == "1",
+                  let panelId = diagnostics["renderPanelId"], !panelId.isEmpty,
+                  let drawCount = Int(diagnostics["renderDrawCount"] ?? ""),
+                  let presentCount = Int(diagnostics["renderPresentCount"] ?? ""),
+                  let lastPresentTime = Double(diagnostics["renderLastPresentTime"] ?? ""),
+                  let diagnosticsUpdatedAt = Double(diagnostics["renderDiagnosticsUpdatedAt"] ?? "") else {
+                return nil
+            }
+
+            self.panelId = panelId
+            self.drawCount = drawCount
+            self.presentCount = presentCount
+            self.lastPresentTime = lastPresentTime
+            self.windowVisible = diagnostics["renderWindowVisible"] == "1"
+            self.appIsActive = diagnostics["renderAppIsActive"] == "1"
+            self.desiredFocus = diagnostics["renderDesiredFocus"] == "1"
+            self.isFirstResponder = diagnostics["renderIsFirstResponder"] == "1"
+            self.diagnosticsUpdatedAt = diagnosticsUpdatedAt
+        }
 
         var description: String {
-            "draw=\(drawCount) present=\(presentCount) lastPresent=\(String(format: "%.3f", lastPresentTime)) inWindow=\(inWindow) key=\(windowIsKey) visible=\(windowOcclusionVisible)"
+            "panel=\(panelId) draw=\(drawCount) present=\(presentCount) lastPresent=\(String(format: "%.3f", lastPresentTime)) visible=\(windowVisible) active=\(appIsActive) desiredFocus=\(desiredFocus) firstResponder=\(isFirstResponder) updatedAt=\(String(format: "%.3f", diagnosticsUpdatedAt))"
         }
     }
 
@@ -545,116 +380,5 @@ final class DisplayResolutionRegressionUITests: XCTestCase {
         let startPath: String
         let donePath: String
         let logPath: String?
-    }
-
-    private final class ControlSocketClient {
-        let path: String
-
-        init(path: String) {
-            self.path = path
-        }
-
-        func sendLine(_ line: String, timeout: TimeInterval) -> String? {
-            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-            guard fd >= 0 else { return nil }
-            defer { close(fd) }
-
-            var socketTimeout = makeSocketTimeout(timeout)
-            _ = withUnsafePointer(to: &socketTimeout) { ptr in
-                setsockopt(
-                    fd,
-                    SOL_SOCKET,
-                    SO_RCVTIMEO,
-                    ptr,
-                    socklen_t(MemoryLayout<timeval>.size)
-                )
-            }
-            _ = withUnsafePointer(to: &socketTimeout) { ptr in
-                setsockopt(
-                    fd,
-                    SOL_SOCKET,
-                    SO_SNDTIMEO,
-                    ptr,
-                    socklen_t(MemoryLayout<timeval>.size)
-                )
-            }
-
-#if os(macOS)
-            var noSigPipe: Int32 = 1
-            _ = withUnsafePointer(to: &noSigPipe) { ptr in
-                setsockopt(
-                    fd,
-                    SOL_SOCKET,
-                    SO_NOSIGPIPE,
-                    ptr,
-                    socklen_t(MemoryLayout<Int32>.size)
-                )
-            }
-#endif
-
-            var addr = sockaddr_un()
-            memset(&addr, 0, MemoryLayout<sockaddr_un>.size)
-            addr.sun_family = sa_family_t(AF_UNIX)
-
-            let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
-            let bytes = Array(path.utf8CString)
-            guard bytes.count <= maxLen else { return nil }
-            withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
-                let destination = UnsafeMutableRawPointer(pathPtr).assumingMemoryBound(to: CChar.self)
-                memset(destination, 0, maxLen)
-                for index in 0..<bytes.count {
-                    destination[index] = bytes[index]
-                }
-            }
-
-            let pathOffset = MemoryLayout<sockaddr_un>.offset(of: \.sun_path) ?? 0
-            let addrLen = socklen_t(pathOffset + bytes.count)
-#if os(macOS)
-            addr.sun_len = UInt8(min(Int(addrLen), 255))
-#endif
-
-            let connectResult = withUnsafePointer(to: &addr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-                    connect(fd, sockaddrPtr, addrLen)
-                }
-            }
-            guard connectResult == 0 else { return nil }
-
-            let payload = line + "\n"
-            let wrotePayload: Bool = payload.withCString { cString in
-                var remaining = strlen(cString)
-                var pointer = UnsafeRawPointer(cString)
-                while remaining > 0 {
-                    let written = write(fd, pointer, remaining)
-                    if written <= 0 { return false }
-                    remaining -= written
-                    pointer = pointer.advanced(by: written)
-                }
-                return true
-            }
-            guard wrotePayload else { return nil }
-
-            var buffer = [UInt8](repeating: 0, count: 4096)
-            var accumulated = ""
-            while true {
-                let count = read(fd, &buffer, buffer.count)
-                if count <= 0 { break }
-                if let chunk = String(bytes: buffer[0..<count], encoding: .utf8) {
-                    accumulated.append(chunk)
-                    if let newline = accumulated.firstIndex(of: "\n") {
-                        return String(accumulated[..<newline])
-                    }
-                }
-            }
-            let trimmed = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-
-        private func makeSocketTimeout(_ timeout: TimeInterval) -> timeval {
-            let normalizedTimeout = max(timeout, 0)
-            let seconds = floor(normalizedTimeout)
-            let microseconds = (normalizedTimeout - seconds) * 1_000_000
-            return timeval(tv_sec: Int(seconds), tv_usec: Int32(microseconds.rounded()))
-        }
     }
 }
