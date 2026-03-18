@@ -4506,11 +4506,32 @@ enum SidebarPullRequestStatus: String {
     case closed
 }
 
+enum SidebarPullRequestChecksStatus: String {
+    case pass
+    case fail
+    case pending
+}
+
 struct SidebarPullRequestState: Equatable {
     let number: Int
     let label: String
     let url: URL
     let status: SidebarPullRequestStatus
+    let checks: SidebarPullRequestChecksStatus?
+
+    init(
+        number: Int,
+        label: String,
+        url: URL,
+        status: SidebarPullRequestStatus,
+        checks: SidebarPullRequestChecksStatus? = nil
+    ) {
+        self.number = number
+        self.label = label
+        self.url = url
+        self.status = status
+        self.checks = checks
+    }
 }
 
 enum SidebarBranchOrdering {
@@ -5686,9 +5707,16 @@ final class Workspace: Identifiable, ObservableObject {
         number: Int,
         label: String,
         url: URL,
-        status: SidebarPullRequestStatus
+        status: SidebarPullRequestStatus,
+        checks: SidebarPullRequestChecksStatus? = nil
     ) {
-        let state = SidebarPullRequestState(number: number, label: label, url: url, status: status)
+        let state = SidebarPullRequestState(
+            number: number,
+            label: label,
+            url: url,
+            status: status,
+            checks: checks
+        )
         let existing = panelPullRequests[panelId]
         if existing != state {
             panelPullRequests[panelId] = state
