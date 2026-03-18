@@ -190,28 +190,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify unit test shard passed
         run: |
-          set -euo pipefail
-
-          ATTEMPT_1_RESULT="${{ needs.tests-shard-1-attempt-1.result }}"
-          ATTEMPT_1_TEST_STARTED="${{ needs.tests-shard-1-attempt-1.outputs.test_started }}"
-          ATTEMPT_1_COMPLETED="${{ needs.tests-shard-1-attempt-1.outputs.completed }}"
-          ATTEMPT_1_PASSED="${{ needs.tests-shard-1-attempt-1.outputs.passed }}"
-          ATTEMPT_2_RESULT="${{ needs.tests-shard-1-attempt-2.result }}"
-          ATTEMPT_2_TEST_STARTED="${{ needs.tests-shard-1-attempt-2.outputs.test_started }}"
-          ATTEMPT_2_COMPLETED="${{ needs.tests-shard-1-attempt-2.outputs.completed }}"
-          ATTEMPT_2_PASSED="${{ needs.tests-shard-1-attempt-2.outputs.passed }}"
-
-          if [ "$ATTEMPT_1_PASSED" = "true" ] || [ "$ATTEMPT_2_PASSED" = "true" ]; then
-            echo "Unit test shard passed."
-            exit 0
-          fi
-
-          echo "Unit test shard did not pass." >&2
-          echo "Attempt 1: result=$ATTEMPT_1_RESULT, test_started=${ATTEMPT_1_TEST_STARTED:-<unset>}, completed=${ATTEMPT_1_COMPLETED:-<unset>}, passed=${ATTEMPT_1_PASSED:-<unset>}" >&2
-          echo "Attempt 2: result=$ATTEMPT_2_RESULT, test_started=${ATTEMPT_2_TEST_STARTED:-<unset>}, completed=${ATTEMPT_2_COMPLETED:-<unset>}, passed=${ATTEMPT_2_PASSED:-<unset>}" >&2
-          exit 1
+          scripts/verify_retry_result.sh \
+            "Unit test shard" \
+            "${{ needs.tests-shard-1-attempt-1.result }}" \
+            "${{ needs.tests-shard-1-attempt-1.outputs.completed }}" \
+            "${{ needs.tests-shard-1-attempt-1.outputs.passed }}" \
+            "${{ needs.tests-shard-1-attempt-2.result }}" \
+            "${{ needs.tests-shard-1-attempt-2.outputs.completed }}" \
+            "${{ needs.tests-shard-1-attempt-2.outputs.passed }}"
 
   tests-shard-2-attempt-1:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -265,28 +255,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify unit test shard passed
         run: |
-          set -euo pipefail
-
-          ATTEMPT_1_RESULT="${{ needs.tests-shard-2-attempt-1.result }}"
-          ATTEMPT_1_TEST_STARTED="${{ needs.tests-shard-2-attempt-1.outputs.test_started }}"
-          ATTEMPT_1_COMPLETED="${{ needs.tests-shard-2-attempt-1.outputs.completed }}"
-          ATTEMPT_1_PASSED="${{ needs.tests-shard-2-attempt-1.outputs.passed }}"
-          ATTEMPT_2_RESULT="${{ needs.tests-shard-2-attempt-2.result }}"
-          ATTEMPT_2_TEST_STARTED="${{ needs.tests-shard-2-attempt-2.outputs.test_started }}"
-          ATTEMPT_2_COMPLETED="${{ needs.tests-shard-2-attempt-2.outputs.completed }}"
-          ATTEMPT_2_PASSED="${{ needs.tests-shard-2-attempt-2.outputs.passed }}"
-
-          if [ "$ATTEMPT_1_PASSED" = "true" ] || [ "$ATTEMPT_2_PASSED" = "true" ]; then
-            echo "Unit test shard passed."
-            exit 0
-          fi
-
-          echo "Unit test shard did not pass." >&2
-          echo "Attempt 1: result=$ATTEMPT_1_RESULT, test_started=${ATTEMPT_1_TEST_STARTED:-<unset>}, completed=${ATTEMPT_1_COMPLETED:-<unset>}, passed=${ATTEMPT_1_PASSED:-<unset>}" >&2
-          echo "Attempt 2: result=$ATTEMPT_2_RESULT, test_started=${ATTEMPT_2_TEST_STARTED:-<unset>}, completed=${ATTEMPT_2_COMPLETED:-<unset>}, passed=${ATTEMPT_2_PASSED:-<unset>}" >&2
-          exit 1
+          scripts/verify_retry_result.sh \
+            "Unit test shard" \
+            "${{ needs.tests-shard-2-attempt-1.result }}" \
+            "${{ needs.tests-shard-2-attempt-1.outputs.completed }}" \
+            "${{ needs.tests-shard-2-attempt-1.outputs.passed }}" \
+            "${{ needs.tests-shard-2-attempt-2.result }}" \
+            "${{ needs.tests-shard-2-attempt-2.outputs.completed }}" \
+            "${{ needs.tests-shard-2-attempt-2.outputs.passed }}"
 
   tests-shard-3-attempt-1:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -340,28 +320,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify unit test shard passed
         run: |
-          set -euo pipefail
-
-          ATTEMPT_1_RESULT="${{ needs.tests-shard-3-attempt-1.result }}"
-          ATTEMPT_1_TEST_STARTED="${{ needs.tests-shard-3-attempt-1.outputs.test_started }}"
-          ATTEMPT_1_COMPLETED="${{ needs.tests-shard-3-attempt-1.outputs.completed }}"
-          ATTEMPT_1_PASSED="${{ needs.tests-shard-3-attempt-1.outputs.passed }}"
-          ATTEMPT_2_RESULT="${{ needs.tests-shard-3-attempt-2.result }}"
-          ATTEMPT_2_TEST_STARTED="${{ needs.tests-shard-3-attempt-2.outputs.test_started }}"
-          ATTEMPT_2_COMPLETED="${{ needs.tests-shard-3-attempt-2.outputs.completed }}"
-          ATTEMPT_2_PASSED="${{ needs.tests-shard-3-attempt-2.outputs.passed }}"
-
-          if [ "$ATTEMPT_1_PASSED" = "true" ] || [ "$ATTEMPT_2_PASSED" = "true" ]; then
-            echo "Unit test shard passed."
-            exit 0
-          fi
-
-          echo "Unit test shard did not pass." >&2
-          echo "Attempt 1: result=$ATTEMPT_1_RESULT, test_started=${ATTEMPT_1_TEST_STARTED:-<unset>}, completed=${ATTEMPT_1_COMPLETED:-<unset>}, passed=${ATTEMPT_1_PASSED:-<unset>}" >&2
-          echo "Attempt 2: result=$ATTEMPT_2_RESULT, test_started=${ATTEMPT_2_TEST_STARTED:-<unset>}, completed=${ATTEMPT_2_COMPLETED:-<unset>}, passed=${ATTEMPT_2_PASSED:-<unset>}" >&2
-          exit 1
+          scripts/verify_retry_result.sh \
+            "Unit test shard" \
+            "${{ needs.tests-shard-3-attempt-1.result }}" \
+            "${{ needs.tests-shard-3-attempt-1.outputs.completed }}" \
+            "${{ needs.tests-shard-3-attempt-1.outputs.passed }}" \
+            "${{ needs.tests-shard-3-attempt-2.result }}" \
+            "${{ needs.tests-shard-3-attempt-2.outputs.completed }}" \
+            "${{ needs.tests-shard-3-attempt-2.outputs.passed }}"
 
   tests-shard-4-attempt-1:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -415,28 +385,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify unit test shard passed
         run: |
-          set -euo pipefail
-
-          ATTEMPT_1_RESULT="${{ needs.tests-shard-4-attempt-1.result }}"
-          ATTEMPT_1_TEST_STARTED="${{ needs.tests-shard-4-attempt-1.outputs.test_started }}"
-          ATTEMPT_1_COMPLETED="${{ needs.tests-shard-4-attempt-1.outputs.completed }}"
-          ATTEMPT_1_PASSED="${{ needs.tests-shard-4-attempt-1.outputs.passed }}"
-          ATTEMPT_2_RESULT="${{ needs.tests-shard-4-attempt-2.result }}"
-          ATTEMPT_2_TEST_STARTED="${{ needs.tests-shard-4-attempt-2.outputs.test_started }}"
-          ATTEMPT_2_COMPLETED="${{ needs.tests-shard-4-attempt-2.outputs.completed }}"
-          ATTEMPT_2_PASSED="${{ needs.tests-shard-4-attempt-2.outputs.passed }}"
-
-          if [ "$ATTEMPT_1_PASSED" = "true" ] || [ "$ATTEMPT_2_PASSED" = "true" ]; then
-            echo "Unit test shard passed."
-            exit 0
-          fi
-
-          echo "Unit test shard did not pass." >&2
-          echo "Attempt 1: result=$ATTEMPT_1_RESULT, test_started=${ATTEMPT_1_TEST_STARTED:-<unset>}, completed=${ATTEMPT_1_COMPLETED:-<unset>}, passed=${ATTEMPT_1_PASSED:-<unset>}" >&2
-          echo "Attempt 2: result=$ATTEMPT_2_RESULT, test_started=${ATTEMPT_2_TEST_STARTED:-<unset>}, completed=${ATTEMPT_2_COMPLETED:-<unset>}, passed=${ATTEMPT_2_PASSED:-<unset>}" >&2
-          exit 1
+          scripts/verify_retry_result.sh \
+            "Unit test shard" \
+            "${{ needs.tests-shard-4-attempt-1.result }}" \
+            "${{ needs.tests-shard-4-attempt-1.outputs.completed }}" \
+            "${{ needs.tests-shard-4-attempt-1.outputs.passed }}" \
+            "${{ needs.tests-shard-4-attempt-2.result }}" \
+            "${{ needs.tests-shard-4-attempt-2.outputs.completed }}" \
+            "${{ needs.tests-shard-4-attempt-2.outputs.passed }}"
 
   tests-shard-5-attempt-1:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -490,28 +450,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify unit test shard passed
         run: |
-          set -euo pipefail
-
-          ATTEMPT_1_RESULT="${{ needs.tests-shard-5-attempt-1.result }}"
-          ATTEMPT_1_TEST_STARTED="${{ needs.tests-shard-5-attempt-1.outputs.test_started }}"
-          ATTEMPT_1_COMPLETED="${{ needs.tests-shard-5-attempt-1.outputs.completed }}"
-          ATTEMPT_1_PASSED="${{ needs.tests-shard-5-attempt-1.outputs.passed }}"
-          ATTEMPT_2_RESULT="${{ needs.tests-shard-5-attempt-2.result }}"
-          ATTEMPT_2_TEST_STARTED="${{ needs.tests-shard-5-attempt-2.outputs.test_started }}"
-          ATTEMPT_2_COMPLETED="${{ needs.tests-shard-5-attempt-2.outputs.completed }}"
-          ATTEMPT_2_PASSED="${{ needs.tests-shard-5-attempt-2.outputs.passed }}"
-
-          if [ "$ATTEMPT_1_PASSED" = "true" ] || [ "$ATTEMPT_2_PASSED" = "true" ]; then
-            echo "Unit test shard passed."
-            exit 0
-          fi
-
-          echo "Unit test shard did not pass." >&2
-          echo "Attempt 1: result=$ATTEMPT_1_RESULT, test_started=${ATTEMPT_1_TEST_STARTED:-<unset>}, completed=${ATTEMPT_1_COMPLETED:-<unset>}, passed=${ATTEMPT_1_PASSED:-<unset>}" >&2
-          echo "Attempt 2: result=$ATTEMPT_2_RESULT, test_started=${ATTEMPT_2_TEST_STARTED:-<unset>}, completed=${ATTEMPT_2_COMPLETED:-<unset>}, passed=${ATTEMPT_2_PASSED:-<unset>}" >&2
-          exit 1
+          scripts/verify_retry_result.sh \
+            "Unit test shard" \
+            "${{ needs.tests-shard-5-attempt-1.result }}" \
+            "${{ needs.tests-shard-5-attempt-1.outputs.completed }}" \
+            "${{ needs.tests-shard-5-attempt-1.outputs.passed }}" \
+            "${{ needs.tests-shard-5-attempt-2.result }}" \
+            "${{ needs.tests-shard-5-attempt-2.outputs.completed }}" \
+            "${{ needs.tests-shard-5-attempt-2.outputs.passed }}"
 
   tests-shard-6-attempt-1:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -565,28 +515,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify unit test shard passed
         run: |
-          set -euo pipefail
-
-          ATTEMPT_1_RESULT="${{ needs.tests-shard-6-attempt-1.result }}"
-          ATTEMPT_1_TEST_STARTED="${{ needs.tests-shard-6-attempt-1.outputs.test_started }}"
-          ATTEMPT_1_COMPLETED="${{ needs.tests-shard-6-attempt-1.outputs.completed }}"
-          ATTEMPT_1_PASSED="${{ needs.tests-shard-6-attempt-1.outputs.passed }}"
-          ATTEMPT_2_RESULT="${{ needs.tests-shard-6-attempt-2.result }}"
-          ATTEMPT_2_TEST_STARTED="${{ needs.tests-shard-6-attempt-2.outputs.test_started }}"
-          ATTEMPT_2_COMPLETED="${{ needs.tests-shard-6-attempt-2.outputs.completed }}"
-          ATTEMPT_2_PASSED="${{ needs.tests-shard-6-attempt-2.outputs.passed }}"
-
-          if [ "$ATTEMPT_1_PASSED" = "true" ] || [ "$ATTEMPT_2_PASSED" = "true" ]; then
-            echo "Unit test shard passed."
-            exit 0
-          fi
-
-          echo "Unit test shard did not pass." >&2
-          echo "Attempt 1: result=$ATTEMPT_1_RESULT, test_started=${ATTEMPT_1_TEST_STARTED:-<unset>}, completed=${ATTEMPT_1_COMPLETED:-<unset>}, passed=${ATTEMPT_1_PASSED:-<unset>}" >&2
-          echo "Attempt 2: result=$ATTEMPT_2_RESULT, test_started=${ATTEMPT_2_TEST_STARTED:-<unset>}, completed=${ATTEMPT_2_COMPLETED:-<unset>}, passed=${ATTEMPT_2_PASSED:-<unset>}" >&2
-          exit 1
+          scripts/verify_retry_result.sh \
+            "Unit test shard" \
+            "${{ needs.tests-shard-6-attempt-1.result }}" \
+            "${{ needs.tests-shard-6-attempt-1.outputs.completed }}" \
+            "${{ needs.tests-shard-6-attempt-1.outputs.passed }}" \
+            "${{ needs.tests-shard-6-attempt-2.result }}" \
+            "${{ needs.tests-shard-6-attempt-2.outputs.completed }}" \
+            "${{ needs.tests-shard-6-attempt-2.outputs.passed }}"
 
   tests:
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
@@ -680,28 +620,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify lag regression result
         run: |
-          set -euo pipefail
-
-          ATTEMPT_1_RESULT="${{ needs.tests-build-and-lag-attempt-1.result }}"
-          ATTEMPT_1_TEST_STARTED="${{ needs.tests-build-and-lag-attempt-1.outputs.test_started }}"
-          ATTEMPT_1_COMPLETED="${{ needs.tests-build-and-lag-attempt-1.outputs.completed }}"
-          ATTEMPT_1_PASSED="${{ needs.tests-build-and-lag-attempt-1.outputs.passed }}"
-          ATTEMPT_2_RESULT="${{ needs.tests-build-and-lag-attempt-2.result }}"
-          ATTEMPT_2_TEST_STARTED="${{ needs.tests-build-and-lag-attempt-2.outputs.test_started }}"
-          ATTEMPT_2_COMPLETED="${{ needs.tests-build-and-lag-attempt-2.outputs.completed }}"
-          ATTEMPT_2_PASSED="${{ needs.tests-build-and-lag-attempt-2.outputs.passed }}"
-
-          if [ "$ATTEMPT_1_PASSED" = "true" ] || [ "$ATTEMPT_2_PASSED" = "true" ]; then
-            echo "Lag regression passed."
-            exit 0
-          fi
-
-          echo "Lag regression did not pass." >&2
-          echo "Attempt 1: result=$ATTEMPT_1_RESULT, test_started=${ATTEMPT_1_TEST_STARTED:-<unset>}, completed=${ATTEMPT_1_COMPLETED:-<unset>}, passed=${ATTEMPT_1_PASSED:-<unset>}" >&2
-          echo "Attempt 2: result=$ATTEMPT_2_RESULT, test_started=${ATTEMPT_2_TEST_STARTED:-<unset>}, completed=${ATTEMPT_2_COMPLETED:-<unset>}, passed=${ATTEMPT_2_PASSED:-<unset>}" >&2
-          exit 1
+          scripts/verify_retry_result.sh \
+            "Lag regression" \
+            "${{ needs.tests-build-and-lag-attempt-1.result }}" \
+            "${{ needs.tests-build-and-lag-attempt-1.outputs.completed }}" \
+            "${{ needs.tests-build-and-lag-attempt-1.outputs.passed }}" \
+            "${{ needs.tests-build-and-lag-attempt-2.result }}" \
+            "${{ needs.tests-build-and-lag-attempt-2.outputs.completed }}" \
+            "${{ needs.tests-build-and-lag-attempt-2.outputs.passed }}"
 
   ui-display-resolution-regression-attempt-1:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -749,25 +679,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify at least one display regression attempt passed
         run: |
-          set -euo pipefail
-
-          ATTEMPT_1_RESULT="${{ needs.ui-display-resolution-regression-attempt-1.result }}"
-          ATTEMPT_1_TEST_STARTED="${{ needs.ui-display-resolution-regression-attempt-1.outputs.test_started }}"
-          ATTEMPT_1_COMPLETED="${{ needs.ui-display-resolution-regression-attempt-1.outputs.completed }}"
-          ATTEMPT_1_PASSED="${{ needs.ui-display-resolution-regression-attempt-1.outputs.passed }}"
-          ATTEMPT_2_RESULT="${{ needs.ui-display-resolution-regression-attempt-2.result }}"
-          ATTEMPT_2_TEST_STARTED="${{ needs.ui-display-resolution-regression-attempt-2.outputs.test_started }}"
-          ATTEMPT_2_COMPLETED="${{ needs.ui-display-resolution-regression-attempt-2.outputs.completed }}"
-          ATTEMPT_2_PASSED="${{ needs.ui-display-resolution-regression-attempt-2.outputs.passed }}"
-
-          if [ "$ATTEMPT_1_PASSED" = "true" ] || [ "$ATTEMPT_2_PASSED" = "true" ]; then
-            echo "Display resolution regression passed."
-            exit 0
-          fi
-
-          echo "Display resolution regression did not pass in either WarpBuild attempt." >&2
-          echo "Attempt 1: result=$ATTEMPT_1_RESULT, test_started=${ATTEMPT_1_TEST_STARTED:-<unset>}, completed=${ATTEMPT_1_COMPLETED:-<unset>}, passed=${ATTEMPT_1_PASSED:-<unset>}" >&2
-          echo "Attempt 2: result=$ATTEMPT_2_RESULT, test_started=${ATTEMPT_2_TEST_STARTED:-<unset>}, completed=${ATTEMPT_2_COMPLETED:-<unset>}, passed=${ATTEMPT_2_PASSED:-<unset>}" >&2
-          exit 1
+          scripts/verify_retry_result.sh \
+            "Display resolution regression" \
+            "${{ needs.ui-display-resolution-regression-attempt-1.result }}" \
+            "${{ needs.ui-display-resolution-regression-attempt-1.outputs.completed }}" \
+            "${{ needs.ui-display-resolution-regression-attempt-1.outputs.passed }}" \
+            "${{ needs.ui-display-resolution-regression-attempt-2.result }}" \
+            "${{ needs.ui-display-resolution-regression-attempt-2.outputs.completed }}" \
+            "${{ needs.ui-display-resolution-regression-attempt-2.outputs.passed }}"

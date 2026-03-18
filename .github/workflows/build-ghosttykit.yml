@@ -214,25 +214,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify GhosttyKit build passed
         run: |
-          set -euo pipefail
-
-          ATTEMPT_1_RESULT="${{ needs.build-ghosttykit-attempt-1.result }}"
-          ATTEMPT_1_BUILD_STARTED="${{ needs.build-ghosttykit-attempt-1.outputs.build_started }}"
-          ATTEMPT_1_COMPLETED="${{ needs.build-ghosttykit-attempt-1.outputs.completed }}"
-          ATTEMPT_1_PASSED="${{ needs.build-ghosttykit-attempt-1.outputs.passed }}"
-          ATTEMPT_2_RESULT="${{ needs.build-ghosttykit-attempt-2.result }}"
-          ATTEMPT_2_BUILD_STARTED="${{ needs.build-ghosttykit-attempt-2.outputs.build_started }}"
-          ATTEMPT_2_COMPLETED="${{ needs.build-ghosttykit-attempt-2.outputs.completed }}"
-          ATTEMPT_2_PASSED="${{ needs.build-ghosttykit-attempt-2.outputs.passed }}"
-
-          if [ "$ATTEMPT_1_PASSED" = "true" ] || [ "$ATTEMPT_2_PASSED" = "true" ]; then
-            echo "GhosttyKit build passed."
-            exit 0
-          fi
-
-          echo "GhosttyKit build did not pass." >&2
-          echo "Attempt 1: result=$ATTEMPT_1_RESULT, build_started=${ATTEMPT_1_BUILD_STARTED:-<unset>}, completed=${ATTEMPT_1_COMPLETED:-<unset>}, passed=${ATTEMPT_1_PASSED:-<unset>}" >&2
-          echo "Attempt 2: result=$ATTEMPT_2_RESULT, build_started=${ATTEMPT_2_BUILD_STARTED:-<unset>}, completed=${ATTEMPT_2_COMPLETED:-<unset>}, passed=${ATTEMPT_2_PASSED:-<unset>}" >&2
-          exit 1
+          scripts/verify_retry_result.sh \
+            "GhosttyKit build" \
+            "${{ needs.build-ghosttykit-attempt-1.result }}" \
+            "${{ needs.build-ghosttykit-attempt-1.outputs.completed }}" \
+            "${{ needs.build-ghosttykit-attempt-1.outputs.passed }}" \
+            "${{ needs.build-ghosttykit-attempt-2.result }}" \
+            "${{ needs.build-ghosttykit-attempt-2.outputs.completed }}" \
+            "${{ needs.build-ghosttykit-attempt-2.outputs.passed }}"

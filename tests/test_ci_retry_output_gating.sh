@@ -117,19 +117,43 @@ for shard in 1 2 3 4 5 6; do
   assert_retry_guard_uses_completed_output \
     "$CI_WORKFLOW_FILE" \
     "tests-shard-${shard}-attempt-2"
+
+  assert_job_block_contains \
+    "$CI_WORKFLOW_FILE" \
+    "tests-shard-${shard}" \
+    'scripts/verify_retry_result.sh' \
+    "tests-shard-${shard} wrapper must use the shared retry-result verifier"
 done
 
 assert_retry_guard_uses_completed_output \
   "$CI_WORKFLOW_FILE" \
   "tests-build-and-lag-attempt-2"
 
+assert_job_block_contains \
+  "$CI_WORKFLOW_FILE" \
+  "tests-build-and-lag" \
+  'scripts/verify_retry_result.sh' \
+  "tests-build-and-lag wrapper must use the shared retry-result verifier"
+
 assert_retry_guard_uses_completed_output \
   "$CI_WORKFLOW_FILE" \
   "ui-display-resolution-regression-attempt-2"
 
+assert_job_block_contains \
+  "$CI_WORKFLOW_FILE" \
+  "ui-display-resolution-regression" \
+  'scripts/verify_retry_result.sh' \
+  "ui-display-resolution-regression wrapper must use the shared retry-result verifier"
+
 assert_retry_guard_uses_completed_output \
   "$BUILD_WORKFLOW_FILE" \
   "build-ghosttykit-attempt-2"
+
+assert_job_block_contains \
+  "$BUILD_WORKFLOW_FILE" \
+  "build-ghosttykit" \
+  'scripts/verify_retry_result.sh' \
+  "build-ghosttykit wrapper must use the shared retry-result verifier"
 
 assert_retry_guard_uses_completed_output \
   "$COMPAT_WORKFLOW_FILE" \
