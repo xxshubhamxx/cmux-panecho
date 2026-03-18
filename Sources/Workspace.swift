@@ -5430,6 +5430,11 @@ extension Workspace: BonsplitDelegate {
         // with their animated pane anchors. Do one immediate pass so a newly inserted pane does
         // not spend a visible frame at stale geometry, then keep deferred passes for follow-up
         // settles while SwiftUI animation and AppKit layout continue to tick.
+        for window in NSApp.windows {
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        CATransaction.flush()
         TerminalWindowPortalRegistry.synchronizeExternalGeometryForAllWindowsNow()
         TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronizeForAllWindows()
         scheduleTerminalGeometryReconcile()

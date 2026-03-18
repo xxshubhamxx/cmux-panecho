@@ -8414,8 +8414,22 @@ struct GhosttyTerminalView: NSViewRepresentable {
             hostedView.setDropZoneOverlay(zone: forwardedDropZone)
         }
 
+        func releaseStalePortalHostLeaseIfNeeded(for host: HostContainerView) {
+            let hostId = ObjectIdentifier(host)
+            guard let previousHostId = coordinator.lastBoundHostId,
+                  previousHostId != hostId else { return }
+            hostedView.releaseOwnedPortalHost(
+                hostId: previousHostId,
+                reason: "swiftuiHostChanged"
+            )
+        }
+
         coordinator.attachGeneration += 1
         let generation = coordinator.attachGeneration
+
+        func synchronizeAllPortalsAfterBind() {
+            TerminalWindowPortalRegistry.synchronizeExternalGeometryForAllWindowsNow()
+        }
 
         if let host = hostContainer {
             host.onDidMoveToWindow = { [weak host, weak hostedView, weak coordinator] in
@@ -8428,6 +8442,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
                     reason: "didMoveToWindow"
                 ) else { return }
                 guard host.window != nil else { return }
+                releaseStalePortalHostLeaseIfNeeded(for: host)
                 TerminalWindowPortalRegistry.bind(
                     hostedView: hostedView,
                     to: host,
@@ -8438,6 +8453,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
                 )
                 coordinator.lastBoundHostId = ObjectIdentifier(host)
                 coordinator.lastSynchronizedHostGeometryRevision = host.geometryRevision
+                synchronizeAllPortalsAfterBind()
                 hostedView.setVisibleInUI(coordinator.desiredIsVisibleInUI)
                 hostedView.setActive(coordinator.desiredIsActive)
                 hostedView.setNotificationRing(visible: coordinator.desiredShowsUnreadNotificationRing)
@@ -8459,9 +8475,10 @@ struct GhosttyTerminalView: NSViewRepresentable {
                     dlog(
                         "ws.hostState.rebindOnGeometry surface=\(terminalSurface.id.uuidString.prefix(5)) " +
                         "reason=portalEntryMissing visible=\(coordinator.desiredIsVisibleInUI ? 1 : 0) " +
-                        "active=\(coordinator.desiredIsActive ? 1 : 0) z=\(coordinator.desiredPortalZPriority)"
+                            "active=\(coordinator.desiredIsActive ? 1 : 0) z=\(coordinator.desiredPortalZPriority)"
                     )
 #endif
+                    releaseStalePortalHostLeaseIfNeeded(for: host)
                     TerminalWindowPortalRegistry.bind(
                         hostedView: hostedView,
                         to: host,
@@ -8471,6 +8488,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
                         expectedGeneration: portalExpectedGeneration
                     )
                     coordinator.lastBoundHostId = hostId
+                    synchronizeAllPortalsAfterBind()
                     hostedView.setVisibleInUI(coordinator.desiredIsVisibleInUI)
                     hostedView.setActive(coordinator.desiredIsActive)
                     hostedView.setNotificationRing(visible: coordinator.desiredShowsUnreadNotificationRing)
@@ -8500,6 +8518,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
                         )
                     }
 #endif
+                    releaseStalePortalHostLeaseIfNeeded(for: host)
                     TerminalWindowPortalRegistry.bind(
                         hostedView: hostedView,
                         to: host,
@@ -8510,6 +8529,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
                     )
                     coordinator.lastBoundHostId = hostId
                     coordinator.lastSynchronizedHostGeometryRevision = geometryRevision
+                    synchronizeAllPortalsAfterBind()
                 } else if coordinator.lastSynchronizedHostGeometryRevision != geometryRevision {
                     TerminalWindowPortalRegistry.synchronizeForAnchor(host)
                     coordinator.lastSynchronizedHostGeometryRevision = geometryRevision

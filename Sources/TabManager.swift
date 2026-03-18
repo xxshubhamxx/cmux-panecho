@@ -4151,13 +4151,9 @@ class TabManager: ObservableObject {
                 fail("Failed to create right pane for focus reveal")
                 return
             }
-            guard await primeAndWaitForVisibleTerminalContent(rightPanel.id, label: "RIGHT") else {
-                fail(
-                    "Right pane did not paint visible content for focus reveal",
-                    extra: terminalVisibilityDebugInfo(for: rightPanel.id)
-                )
-                return
-            }
+            // Under CI the newly created right pane can remain offscreen until the reveal action.
+            // Prime terminal output now, then require non-blank content during the captured reveal.
+            primeTerminalContent(rightPanel.id, label: "RIGHT")
 
             result = await capturePaneStripMotionTimeline(
                 frameCount: frameCount,
@@ -4195,13 +4191,9 @@ class TabManager: ObservableObject {
                 fail("Failed to create right pane for viewport pan")
                 return
             }
-            guard await primeAndWaitForVisibleTerminalContent(rightPanel.id, label: "RIGHT") else {
-                fail(
-                    "Right pane did not paint visible content for viewport pan",
-                    extra: terminalVisibilityDebugInfo(for: rightPanel.id)
-                )
-                return
-            }
+            // Under CI the newly created right pane can remain offscreen until the viewport shift.
+            // Prime terminal output now, then require non-blank content during the captured pan.
+            primeTerminalContent(rightPanel.id, label: "RIGHT")
 
             result = await capturePaneStripMotionTimeline(
                 frameCount: frameCount,

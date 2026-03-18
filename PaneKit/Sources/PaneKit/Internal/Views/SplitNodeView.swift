@@ -58,31 +58,18 @@ struct SinglePaneWrapper<Content: View, EmptyContent: View>: NSViewRepresentable
     var contentViewLifecycle: ContentViewLifecycle = .recreateOnSwitch
 
     func makeNSView(context: Context) -> NSView {
-        let paneView = PaneContainerView(
-            pane: pane,
+        let containerView = PaneDragContainerView()
+        containerView.wantsLayer = true
+        containerView.layer?.masksToBounds = true
+        context.coordinator.installHostingController(
+            for: pane,
             controller: controller,
             contentBuilder: contentBuilder,
             emptyPaneBuilder: emptyPaneBuilder,
             showSplitButtons: showSplitButtons,
-            contentViewLifecycle: contentViewLifecycle
+            contentViewLifecycle: contentViewLifecycle,
+            in: containerView
         )
-        let hostingController = NSHostingController(rootView: paneView)
-        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-
-        let containerView = PaneDragContainerView()
-        containerView.wantsLayer = true
-        containerView.layer?.masksToBounds = true
-        containerView.addSubview(hostingController.view)
-
-        NSLayoutConstraint.activate([
-            hostingController.view.topAnchor.constraint(equalTo: containerView.topAnchor),
-            hostingController.view.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
-            hostingController.view.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
-            hostingController.view.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
-        ])
-
-        // Store hosting controller to keep it alive
-        context.coordinator.hostingController = hostingController
 
         return containerView
     }
@@ -102,7 +89,19 @@ struct SinglePaneWrapper<Content: View, EmptyContent: View>: NSViewRepresentable
             showSplitButtons: showSplitButtons,
             contentViewLifecycle: contentViewLifecycle
         )
-        context.coordinator.hostingController?.rootView = paneView
+        if context.coordinator.paneId != pane.id {
+            context.coordinator.installHostingController(
+                for: pane,
+                controller: controller,
+                contentBuilder: contentBuilder,
+                emptyPaneBuilder: emptyPaneBuilder,
+                showSplitButtons: showSplitButtons,
+                contentViewLifecycle: contentViewLifecycle,
+                in: nsView
+            )
+        } else {
+            context.coordinator.hostingController?.rootView = paneView
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -110,6 +109,41 @@ struct SinglePaneWrapper<Content: View, EmptyContent: View>: NSViewRepresentable
     }
 
     class Coordinator {
+        var paneId: PaneID?
         var hostingController: NSHostingController<PaneContainerView<Content, EmptyContent>>?
+
+        func installHostingController(
+            for pane: PaneState,
+            controller: SplitViewController,
+            contentBuilder: @escaping (TabItem, PaneID) -> Content,
+            emptyPaneBuilder: @escaping (PaneID) -> EmptyContent,
+            showSplitButtons: Bool,
+            contentViewLifecycle: ContentViewLifecycle,
+            in containerView: NSView
+        ) {
+            hostingController?.view.removeFromSuperview()
+
+            let paneView = PaneContainerView(
+                pane: pane,
+                controller: controller,
+                contentBuilder: contentBuilder,
+                emptyPaneBuilder: emptyPaneBuilder,
+                showSplitButtons: showSplitButtons,
+                contentViewLifecycle: contentViewLifecycle
+            )
+            let nextHostingController = NSHostingController(rootView: paneView)
+            nextHostingController.view.translatesAutoresizingMaskIntoConstraints = false
+            containerView.addSubview(nextHostingController.view)
+
+            NSLayoutConstraint.activate([
+                nextHostingController.view.topAnchor.constraint(equalTo: containerView.topAnchor),
+                nextHostingController.view.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+                nextHostingController.view.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+                nextHostingController.view.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
+            ])
+
+            paneId = pane.id
+            hostingController = nextHostingController
+        }
     }
 }

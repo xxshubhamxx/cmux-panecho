@@ -718,7 +718,9 @@ final class WindowTerminalPortal: NSObject {
               let reference = installedReferenceView else {
             return false
         }
-        let frameInContainer = container.convert(reference.bounds, from: reference)
+        let referenceFrameInWindow = presentationFrameInWindow(for: reference)
+        let frameInContainerRaw = container.convert(referenceFrameInWindow, from: nil)
+        let frameInContainer = Self.pixelSnappedRect(frameInContainerRaw, in: container)
         let hasFiniteFrame =
             frameInContainer.origin.x.isFinite &&
             frameInContainer.origin.y.isFinite &&

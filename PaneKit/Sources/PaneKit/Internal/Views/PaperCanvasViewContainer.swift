@@ -40,10 +40,14 @@ struct PaperCanvasViewContainer<Content: View, EmptyContent: View>: View {
                         showSplitButtons: showSplitButtons,
                         contentViewLifecycle: contentViewLifecycle
                     )
+                    .id(placement.pane.id.id)
                     .frame(width: geometry.size.width, height: geometry.size.height)
                 } else {
                     ZStack(alignment: .topLeading) {
-                        ForEach(controller.paperCanvas?.panes ?? []) { placement in
+                        ForEach(
+                            controller.paperCanvas?.panes ?? [],
+                            id: \.pane.id.id
+                        ) { placement in
                             SinglePaneWrapper(
                                 pane: placement.pane,
                                 contentBuilder: contentBuilder,
@@ -51,6 +55,7 @@ struct PaperCanvasViewContainer<Content: View, EmptyContent: View>: View {
                                 showSplitButtons: showSplitButtons,
                                 contentViewLifecycle: contentViewLifecycle
                             )
+                            .id(placement.pane.id.id)
                             .frame(width: placement.frame.width, height: placement.frame.height)
                             .offset(x: placement.frame.minX, y: placement.frame.minY)
                             .animation(nil, value: placement.frame)
