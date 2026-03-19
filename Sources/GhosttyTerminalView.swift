@@ -3148,8 +3148,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
         // Kick an initial draw after creation/size setup. On some startup paths Ghostty can
         // miss the first vsync callback and sit on a blank frame until another focus/visibility
         // transition nudges the renderer.
-        view.forceRefreshSurface()
-        ghostty_surface_refresh(createdSurface)
+        forceBootstrapRefresh(reason: "surface.create")
 
 #if DEBUG
         let runtimeFontText = cmuxCurrentSurfaceFontSizePoints(createdSurface).map {
@@ -3251,6 +3250,56 @@ final class TerminalSurface: Identifiable, ObservableObject {
         view.forceRefreshSurface()
         guard let surface = self.surface else { return }
         ghostty_surface_refresh(surface)
+    }
+
+    /// Reassert app focus, surface focus, display id, and geometry for visible blank surfaces.
+    /// This is stronger than a normal refresh and is only used when the hosted view has
+    /// no renderable contents yet even though it is onscreen and expected to paint.
+    func forceBootstrapRefresh(reason: String = "unspecified") {
+        guard let view = attachedView,
+              let window = view.window,
+              view.bounds.width > 0,
+              view.bounds.height > 0,
+              let currentSurface = self.surface else {
+            return
+        }
+
+        if let app = GhosttyApp.shared.app {
+            let appShouldBeFocused = NSApp.isActive || window.isKeyWindow
+            ghostty_app_set_focus(app, appShouldBeFocused)
+        }
+
+        if let displayID = (window.screen ?? NSScreen.main)?.displayID,
+           displayID != 0 {
+            ghostty_surface_set_display_id(currentSurface, displayID)
+        }
+
+        let firstResponderOwnsSurface: Bool = {
+            guard let responder = window.firstResponder as? NSView else { return false }
+            return responder === view || responder.isDescendant(of: view)
+        }()
+        ghostty_surface_set_focus(currentSurface, view.desiredFocus || firstResponderOwnsSurface)
+
+        window.contentView?.layoutSubtreeIfNeeded()
+        view.superview?.layoutSubtreeIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        view.forceRefreshSurface()
+        view.displayIfNeeded()
+        window.contentView?.displayIfNeeded()
+        window.displayIfNeeded()
+        CATransaction.flush()
+
+        guard let refreshedSurface = self.surface else { return }
+        ghostty_surface_refresh(refreshedSurface)
+        CATransaction.flush()
+
+#if DEBUG
+        dlog(
+            "forceBootstrapRefresh: \(id) reason=\(reason) " +
+            "app=\(NSApp.isActive ? 1 : 0) key=\(window.isKeyWindow ? 1 : 0) " +
+            "focused=\((view.desiredFocus || firstResponderOwnsSurface) ? 1 : 0)"
+        )
+#endif
     }
 
     func applyWindowBackgroundIfActive() {
@@ -6266,7 +6315,17 @@ final class GhosttySurfaceScrollView: NSView {
     /// Request an immediate terminal redraw after geometry updates so stale IOSurface
     /// contents do not remain stretched during live resize churn.
     func refreshSurfaceNow(reason: String = "portal.refreshSurfaceNow") {
-        surfaceView.terminalSurface?.forceRefresh(reason: reason)
+        guard let terminalSurface = surfaceView.terminalSurface else { return }
+        let shouldUseBootstrapRefresh =
+            window != nil &&
+            surfaceView.isVisibleInUI &&
+            !isHiddenOrHasHiddenAncestor &&
+            !hasRenderableSurfaceContentsForReveal()
+        if shouldUseBootstrapRefresh {
+            terminalSurface.forceBootstrapRefresh(reason: reason)
+        } else {
+            terminalSurface.forceRefresh(reason: reason)
+        }
     }
 
     /// Detect whether the terminal layer already has usable contents for an initial reveal.
@@ -6475,6 +6534,7 @@ final class GhosttySurfaceScrollView: NSView {
             dlog("find.window.didBecomeKey surface=\(self.surfaceView.terminalSurface?.id.uuidString.prefix(5) ?? "nil") searchActive=\(searchActive) focusTarget=\(self.searchFocusTarget) firstResponder=\(String(describing: self.window?.firstResponder))")
 #endif
             self.applyFirstResponderIfNeeded()
+            self.refreshSurfaceNow(reason: "window.didBecomeKey")
         })
         windowObservers.append(NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification,
@@ -6497,7 +6557,10 @@ final class GhosttySurfaceScrollView: NSView {
 #endif
             }
         })
-        if window.isKeyWindow { applyFirstResponderIfNeeded() }
+        if window.isKeyWindow {
+            applyFirstResponderIfNeeded()
+            refreshSurfaceNow(reason: "viewDidMoveToWindow")
+        }
     }
 
     func attachSurface(_ terminalSurface: TerminalSurface) {
@@ -7313,8 +7376,7 @@ final class GhosttySurfaceScrollView: NSView {
     }
 
     private func refreshSurfaceAfterFocusIfNeeded(reason: String) {
-        guard let terminalSurface = surfaceView.terminalSurface,
-              isActive,
+        guard isActive,
               let window,
               window.isKeyWindow,
               surfaceView.isVisibleInUI else { return }
@@ -7325,9 +7387,9 @@ final class GhosttySurfaceScrollView: NSView {
         }
         lastFocusRefreshAt = now
 #if DEBUG
-        dlog("focus.surface.refresh surface=\(terminalSurface.id.uuidString.prefix(5)) reason=\(reason)")
+        dlog("focus.surface.refresh surface=\(surfaceView.terminalSurface?.id.uuidString.prefix(5) ?? "nil") reason=\(reason)")
 #endif
-        terminalSurface.forceRefresh(reason: "focus.surface.\(reason)")
+        refreshSurfaceNow(reason: "focus.surface.\(reason)")
     }
 
     private func applyFirstResponderIfNeeded() {
