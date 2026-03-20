@@ -4368,6 +4368,7 @@ class TabManager: ObservableObject {
         }
 
         let shouldDelayInitialActivation = launchMode == "background_then_activate"
+        let useWindowHideForLateActivation = launchMode == "hide_then_reactivate"
         let requiresPrePaintedInitialTerminal = scenario != "initial_terminal_recovers_after_late_activation"
 
         if let window {
@@ -4689,9 +4690,18 @@ class TabManager: ObservableObject {
                 actions: [
                     (frame: 0, action: {
                         guard shouldHideOnFirstFrame else { return }
-                        NSApp.hide(nil)
+                        if useWindowHideForLateActivation {
+                            self.window?.orderOut(nil)
+                        } else {
+                            NSApp.hide(nil)
+                        }
                     }),
                     (frame: actionFrame, action: {
+                        if useWindowHideForLateActivation {
+                            self.window?.orderFrontRegardless()
+                        } else {
+                            NSApp.unhide(nil)
+                        }
                         reassertPaneStripMotionTestWindow()
                     }),
                 ]

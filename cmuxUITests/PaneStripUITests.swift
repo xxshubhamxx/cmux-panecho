@@ -73,6 +73,9 @@ final class PaneStripUITests: XCTestCase {
         app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_PATH"] = dataPath
         app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_SCENARIO"] = scenario
         app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_MOTION_FRAME_COUNT"] = String(frameCount)
+        if scenario == "initial_terminal_recovers_after_late_activation" {
+            app.launchEnvironment["CMUX_UI_TEST_PANE_STRIP_LAUNCH_MODE"] = "hide_then_reactivate"
+        }
         launchAndActivate(app)
         defer {
             if app.state != .notRunning {

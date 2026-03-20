@@ -124,7 +124,13 @@ def activate_app_bundle(bundle: Path) -> None:
 def run_scenario(binary: Path, scenario: str, frame_count: int) -> tuple[bool, str]:
     persisted_output = output_path_for(scenario)
     bundle = resolve_cmux_bundle_for_binary(binary)
-    launch_mode = os.environ.get("CMUX_PANE_STRIP_LAUNCH_MODE", "direct")
+    launch_mode = os.environ.get("CMUX_PANE_STRIP_LAUNCH_MODE")
+    if not launch_mode:
+        launch_mode = (
+            "background_then_activate"
+            if scenario == "initial_terminal_recovers_after_late_activation"
+            else "direct"
+        )
     kill_existing_binary_processes(binary)
     with tempfile.TemporaryDirectory(prefix="cmux-pane-strip-motion-") as temp_dir:
         data_path = Path(temp_dir) / f"{scenario}.json"
