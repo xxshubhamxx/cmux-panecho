@@ -8,6 +8,10 @@ final class AutomationSocketUITests: XCTestCase {
         let stderr: String
     }
 
+    private struct SocketSurface {
+        let id: String
+    }
+
     private var socketPath = ""
     private var diagnosticsPath = ""
     private var ensureTerminalSurfaceFailure = ""
@@ -90,45 +94,24 @@ final class AutomationSocketUITests: XCTestCase {
 
         for iteration in 1...8 {
             XCTAssertEqual(
-                runCmuxCommand(arguments: ["ping"], responseTimeoutSeconds: 1.5).stdout,
+                socketCommand("ping", responseTimeout: 1.5),
                 "PONG",
                 "Expected ping before send_key on iteration \(iteration)"
             )
 
-            XCTAssertNotNil(
-                runCmuxJSON(
-                    arguments: [
-                        "--window",
-                        target.windowId,
-                        "send-key",
-                        "--workspace",
-                        target.workspaceId,
-                        "--surface",
-                        target.surfaceId,
-                        "enter",
-                    ],
-                    responseTimeoutSeconds: 4.0
-                )?.payload,
+            XCTAssertEqual(
+                socketCommand("send_key_surface \(target.surfaceId) enter", responseTimeout: 4.0),
+                "OK",
                 "Expected surface.send_key to succeed on iteration \(iteration)"
             )
 
             XCTAssertEqual(
-                runCmuxCommand(arguments: ["ping"], responseTimeoutSeconds: 1.5).stdout,
+                socketCommand("ping", responseTimeout: 1.5),
                 "PONG",
                 "Expected ping after send_key on iteration \(iteration)"
             )
 
-            guard let payload = runCmuxJSON(
-                arguments: [
-                    "--window",
-                    target.windowId,
-                    "list-panels",
-                    "--workspace",
-                    target.workspaceId,
-                ],
-                responseTimeoutSeconds: 4.0
-            )?.payload,
-                  let surfaces = payload["surfaces"] as? [[String: Any]] else {
+            guard let surfaces = listSurfaces(workspaceId: target.workspaceId) else {
                 XCTFail("Expected surface.list to respond after send_key on iteration \(iteration)")
                 return
             }
@@ -192,86 +175,107 @@ final class AutomationSocketUITests: XCTestCase {
         return socketPath
     }
 
-    private func ensureTerminalSurface(timeout: TimeInterval) -> (windowId: String, workspaceId: String, surfaceId: String)? {
-        ensureTerminalSurfaceFailure = ""
-        let windowsResult = runCmuxJSON(arguments: ["list-windows"], responseTimeoutSeconds: 4.0)
-        let initialWindowId = resolvedWindowId(from: windowsResult?.payload)
-        var traceParts: [String] = [
-            "list-windows=\(describeCommandResult(windowsResult))",
-            "list-workspaces.initial=\(describeCommandResult(workspaceList(windowId: initialWindowId)))",
-            "list-panels.initial=\(describeCommandResult(panelList(windowId: initialWindowId, workspaceId: nil)))",
-        ]
-        guard let initialWindowId else {
-            ensureTerminalSurfaceFailure = traceParts.joined(separator: " | ")
+    private func currentWorkspaceId() -> String? {
+        guard let response = socketCommand("current_workspace", responseTimeout: 4.0)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              UUID(uuidString: response) != nil else {
             return nil
         }
-
-        if let target = terminalSurface(windowId: initialWindowId) {
-            ensureTerminalSurfaceFailure = traceParts.joined(separator: " | ")
-            return (windowId: initialWindowId, workspaceId: target.workspaceId, surfaceId: target.surfaceId)
-        }
-
-        let workspaceCreateResult = runCmuxJSON(
-            arguments: [
-                "--window",
-                initialWindowId,
-                "new-workspace",
-            ],
-            responseTimeoutSeconds: 4.0
-        )
-        traceParts.append("new-workspace=\(describeCommandResult(workspaceCreateResult))")
-        guard let workspacePayload = workspaceCreateResult?.payload,
-              let workspaceId = workspacePayload["workspace_id"] as? String else {
-            ensureTerminalSurfaceFailure = traceParts.joined(separator: " | ")
-            return nil
-        }
-        let workspaceSelectResult = runCmuxJSON(
-            arguments: [
-                "--window",
-                initialWindowId,
-                "select-workspace",
-                "--workspace",
-                workspaceId,
-            ],
-            responseTimeoutSeconds: 4.0
-        )
-        traceParts.append("select-workspace=\(describeCommandResult(workspaceSelectResult))")
-
-        let ready = waitForCondition(timeout: timeout) {
-            self.terminalSurface(windowId: initialWindowId, workspaceId: workspaceId) != nil
-        }
-        traceParts.append(
-            "list-workspaces.created=\(describeCommandResult(self.workspaceList(windowId: initialWindowId)))"
-        )
-        traceParts.append(
-            "list-panels.created=\(describeCommandResult(self.panelList(windowId: initialWindowId, workspaceId: workspaceId)))"
-        )
-        ensureTerminalSurfaceFailure = traceParts.joined(separator: " | ")
-        guard ready else { return nil }
-        guard let target = terminalSurface(windowId: initialWindowId, workspaceId: workspaceId) else {
-            return nil
-        }
-        return (windowId: initialWindowId, workspaceId: target.workspaceId, surfaceId: target.surfaceId)
+        return response
     }
 
-    private func terminalSurface(
-        windowId: String? = nil,
-        workspaceId: String? = nil
-    ) -> (workspaceId: String, surfaceId: String)? {
-        guard let payload = panelList(windowId: windowId, workspaceId: workspaceId)?.payload,
-              let resolvedWorkspaceId = payload["workspace_id"] as? String,
-              let surfaces = payload["surfaces"] as? [[String: Any]],
-              let surface = surfaces.first(where: { surface in
-                  guard let surfaceId = surface["id"] as? String, !surfaceId.isEmpty else {
-                      return false
-                  }
-                  let type = surface["type"] as? String
-                  return type == nil || type == "terminal"
-              }),
-              let surfaceId = surface["id"] as? String else {
+    private func listSurfaces(workspaceId: String?) -> [SocketSurface]? {
+        let command: String
+        if let workspaceId, !workspaceId.isEmpty {
+            command = "list_surfaces \(workspaceId)"
+        } else {
+            command = "list_surfaces"
+        }
+        guard let response = socketCommand(command, responseTimeout: 4.0) else {
             return nil
         }
-        return (workspaceId: resolvedWorkspaceId, surfaceId: surfaceId)
+        if response == "No surfaces" {
+            return []
+        }
+        return parseSocketList(response).map { SocketSurface(id: $0.id) }
+    }
+
+    private func parseSocketList(_ response: String) -> [(id: String, isSelected: Bool)] {
+        response
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { rawLine in
+                var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty else { return nil }
+                let isSelected = line.hasPrefix("*")
+                if line.hasPrefix("* ") || line.hasPrefix("  ") {
+                    line = String(line.dropFirst(2))
+                }
+                let parts = line.split(whereSeparator: \.isWhitespace)
+                guard parts.count >= 2 else { return nil }
+                let id = String(parts[1])
+                guard UUID(uuidString: id) != nil else { return nil }
+                return (id: id, isSelected: isSelected)
+            }
+    }
+
+    private func okUUID(from response: String?) -> String? {
+        guard let response else { return nil }
+        let parts = response.split(whereSeparator: \.isWhitespace)
+        guard parts.count >= 2, parts[0] == "OK" else { return nil }
+        let id = String(parts[1])
+        guard UUID(uuidString: id) != nil else { return nil }
+        return id
+    }
+
+    private func socketCommand(_ command: String, responseTimeout: TimeInterval = 2.0) -> String? {
+        ControlSocketClient(path: socketPath, responseTimeout: responseTimeout).sendLine(command)
+    }
+
+    private func ensureTerminalSurface(timeout: TimeInterval) -> (workspaceId: String, surfaceId: String)? {
+        ensureTerminalSurfaceFailure = ""
+        var traceParts: [String] = [
+            "current-window=\(socketCommand("current_window", responseTimeout: 4.0) ?? "<nil>")",
+            "current-workspace=\(socketCommand("current_workspace", responseTimeout: 4.0) ?? "<nil>")",
+            "list-workspaces.initial=\(socketCommand("list_workspaces", responseTimeout: 4.0) ?? "<nil>")",
+            "list-surfaces.initial=\(socketCommand("list_surfaces", responseTimeout: 4.0) ?? "<nil>")",
+        ]
+
+        if let target = terminalSurface() {
+            ensureTerminalSurfaceFailure = traceParts.joined(separator: " | ")
+            return target
+        }
+
+        let workspaceCreateResult = socketCommand("new_workspace", responseTimeout: 4.0)
+        traceParts.append("new-workspace=\(workspaceCreateResult ?? "<nil>")")
+        guard let workspaceId = okUUID(from: workspaceCreateResult) else {
+            ensureTerminalSurfaceFailure = traceParts.joined(separator: " | ")
+            return nil
+        }
+
+        let workspaceSelectResult = socketCommand("select_workspace \(workspaceId)", responseTimeout: 4.0)
+        traceParts.append("select-workspace=\(workspaceSelectResult ?? "<nil>")")
+        guard workspaceSelectResult == "OK" else {
+            ensureTerminalSurfaceFailure = traceParts.joined(separator: " | ")
+            return nil
+        }
+
+        let ready = waitForCondition(timeout: timeout) {
+            self.terminalSurface(workspaceId: workspaceId) != nil
+        }
+        traceParts.append("list-workspaces.created=\(self.socketCommand("list_workspaces", responseTimeout: 4.0) ?? "<nil>")")
+        traceParts.append("list-surfaces.created=\(self.socketCommand("list_surfaces \(workspaceId)", responseTimeout: 4.0) ?? "<nil>")")
+        ensureTerminalSurfaceFailure = traceParts.joined(separator: " | ")
+        guard ready else { return nil }
+        return terminalSurface(workspaceId: workspaceId)
+    }
+
+    private func terminalSurface(workspaceId: String? = nil) -> (workspaceId: String, surfaceId: String)? {
+        guard let resolvedWorkspaceId = workspaceId ?? currentWorkspaceId(),
+              let surfaces = listSurfaces(workspaceId: resolvedWorkspaceId),
+              let surface = surfaces.first else {
+            return nil
+        }
+        return (workspaceId: resolvedWorkspaceId, surfaceId: surface.id)
     }
 
     private func resolvedWindowId(from payload: [String: Any]?) -> String? {
@@ -528,6 +532,95 @@ final class AutomationSocketUITests: XCTestCase {
             }
         }
         return unique
+    }
+
+    private final class ControlSocketClient {
+        private let path: String
+        private let responseTimeout: TimeInterval
+
+        init(path: String, responseTimeout: TimeInterval) {
+            self.path = path
+            self.responseTimeout = responseTimeout
+        }
+
+        func sendLine(_ line: String) -> String? {
+            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            guard fd >= 0 else { return nil }
+            defer { close(fd) }
+
+#if os(macOS)
+            var noSigPipe: Int32 = 1
+            _ = withUnsafePointer(to: &noSigPipe) { ptr in
+                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, ptr, socklen_t(MemoryLayout<Int32>.size))
+            }
+#endif
+
+            var addr = sockaddr_un()
+            memset(&addr, 0, MemoryLayout<sockaddr_un>.size)
+            addr.sun_family = sa_family_t(AF_UNIX)
+
+            let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
+            let bytes = Array(path.utf8CString)
+            guard bytes.count <= maxLen else { return nil }
+            withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
+                let raw = UnsafeMutableRawPointer(ptr).assumingMemoryBound(to: CChar.self)
+                memset(raw, 0, maxLen)
+                for index in 0..<bytes.count {
+                    raw[index] = bytes[index]
+                }
+            }
+
+            let pathOffset = MemoryLayout<sockaddr_un>.offset(of: \.sun_path) ?? 0
+            let addrLen = socklen_t(pathOffset + bytes.count)
+#if os(macOS)
+            addr.sun_len = UInt8(min(Int(addrLen), 255))
+#endif
+
+            let connected = withUnsafePointer(to: &addr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    connect(fd, sa, addrLen)
+                }
+            }
+            guard connected == 0 else { return nil }
+
+            let payload = line + "\n"
+            let wrote: Bool = payload.withCString { cString in
+                var remaining = strlen(cString)
+                var pointer = UnsafeRawPointer(cString)
+                while remaining > 0 {
+                    let written = write(fd, pointer, remaining)
+                    if written <= 0 { return false }
+                    remaining -= written
+                    pointer = pointer.advanced(by: written)
+                }
+                return true
+            }
+            guard wrote else { return nil }
+
+            let deadline = Date().addingTimeInterval(responseTimeout)
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            var accumulator = ""
+            while Date() < deadline {
+                var pollDescriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let ready = poll(&pollDescriptor, 1, 100)
+                if ready < 0 {
+                    return nil
+                }
+                if ready == 0 {
+                    continue
+                }
+                let count = read(fd, &buffer, buffer.count)
+                if count <= 0 { break }
+                if let chunk = String(bytes: buffer[0..<count], encoding: .utf8) {
+                    accumulator.append(chunk)
+                    if let newline = accumulator.firstIndex(of: "\n") {
+                        return String(accumulator[..<newline])
+                    }
+                }
+            }
+
+            return accumulator.isEmpty ? nil : accumulator.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     private func resetSocketDefaults() {
