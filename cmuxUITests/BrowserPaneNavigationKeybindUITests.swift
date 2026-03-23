@@ -1484,6 +1484,10 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
             app.typeKey(XCUIKeyboardKey.downArrow.rawValue, modifierFlags: [])
         case "up":
             app.typeKey(XCUIKeyboardKey.upArrow.rawValue, modifierFlags: [])
+        case "cmdShiftDown":
+            app.typeKey(XCUIKeyboardKey.downArrow.rawValue, modifierFlags: [.command, .shift])
+        case "cmdShiftUp":
+            app.typeKey(XCUIKeyboardKey.upArrow.rawValue, modifierFlags: [.command, .shift])
         default:
             XCTFail("Unsupported test shortcut combo \(combo)")
         }
