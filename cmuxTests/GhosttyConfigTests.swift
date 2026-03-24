@@ -1004,6 +1004,48 @@ final class GhosttyTerminalStartupEnvironmentTests: XCTestCase {
 }
 
 @MainActor
+final class BrowserPanelPopupContextTests: XCTestCase {
+    func testFloatingPopupInheritsOpenerBrowserContext() throws {
+        let panel = BrowserPanel(workspaceId: UUID(), isRemoteWorkspace: false)
+        let popupWebView = try XCTUnwrap(
+            panel.createFloatingPopup(
+                configuration: WKWebViewConfiguration(),
+                windowFeatures: WKWindowFeatures()
+            )
+        )
+        defer { popupWebView.window?.close() }
+
+        XCTAssertTrue(
+            popupWebView.configuration.processPool === panel.webView.configuration.processPool
+        )
+        XCTAssertTrue(
+            popupWebView.configuration.websiteDataStore === panel.webView.configuration.websiteDataStore
+        )
+    }
+
+    func testFloatingPopupInheritsRemoteWorkspaceWebsiteDataStore() throws {
+        let remoteWorkspaceId = UUID()
+        let panel = BrowserPanel(
+            workspaceId: remoteWorkspaceId,
+            isRemoteWorkspace: true,
+            remoteWebsiteDataStoreIdentifier: remoteWorkspaceId
+        )
+        let popupWebView = try XCTUnwrap(
+            panel.createFloatingPopup(
+                configuration: WKWebViewConfiguration(),
+                windowFeatures: WKWindowFeatures()
+            )
+        )
+        defer { popupWebView.window?.close() }
+
+        XCTAssertTrue(
+            popupWebView.configuration.websiteDataStore === panel.webView.configuration.websiteDataStore
+        )
+        XCTAssertFalse(popupWebView.configuration.websiteDataStore === WKWebsiteDataStore.default())
+    }
+}
+
+@MainActor
 final class BrowserPanelRemoteStoreTests: XCTestCase {
     func testRemoteWorkspacePanelsShareWorkspaceScopedWebsiteDataStore() {
         let localPanel = BrowserPanel(workspaceId: UUID(), isRemoteWorkspace: false)
@@ -2016,16 +2058,10 @@ final class GhosttyMouseFocusTests: XCTestCase {
         XCTAssertFalse(ranges.contains("U+AC00-U+D7AF"), "Should NOT include Hangul")
     }
 
-    func testCJKFontMappingsReturnsAppleSDGothicNeoWithHangulForKorean() {
-        let mappings = GhosttyApp.cjkFontMappings(preferredLanguages: ["ko-KR"])!
-        let fonts = Set(mappings.map(\.1))
-        let ranges = mappings.map(\.0)
-
-        XCTAssertTrue(fonts.contains("Apple SD Gothic Neo"))
-        XCTAssertTrue(ranges.contains("U+AC00-U+D7AF"), "Should include Hangul Syllables")
-        XCTAssertTrue(ranges.contains("U+1100-U+11FF"), "Should include Hangul Jamo")
-        XCTAssertTrue(ranges.contains("U+4E00-U+9FFF"), "Should include CJK Ideographs")
-        XCTAssertFalse(ranges.contains("U+3040-U+309F"), "Should NOT include Hiragana")
+    func testCJKFontMappingsReturnsNilForKoreanOnly() {
+        // Korean is not auto-mapped — Ghostty's native CTFontCreateForString
+        // fallback selects a better-matching font for Hangul.
+        XCTAssertNil(GhosttyApp.cjkFontMappings(preferredLanguages: ["ko-KR"]))
     }
 
     func testCJKFontMappingsReturnsPingFangForChinese() {
@@ -2044,15 +2080,16 @@ final class GhosttyMouseFocusTests: XCTestCase {
         XCTAssertNil(GhosttyApp.cjkFontMappings(preferredLanguages: []))
     }
 
-    func testCJKFontMappingsMultiLanguageMapsScriptSpecificRanges() {
+    func testCJKFontMappingsMultiLanguageSkipsKorean() {
+        // When both ja and ko are preferred, only Japanese mappings are generated.
+        // Korean is left to Ghostty's native CTFontCreateForString fallback.
         let mappings = GhosttyApp.cjkFontMappings(preferredLanguages: ["ja-JP", "ko-KR"])!
 
         let hiraginoRanges = mappings.filter { $0.1 == "Hiragino Sans" }.map(\.0)
-        let sdGothicRanges = mappings.filter { $0.1 == "Apple SD Gothic Neo" }.map(\.0)
 
         XCTAssertTrue(hiraginoRanges.contains("U+3040-U+309F"), "Hiragana → Hiragino")
         XCTAssertTrue(hiraginoRanges.contains("U+4E00-U+9FFF"), "Shared CJK → first lang font")
-        XCTAssertTrue(sdGothicRanges.contains("U+AC00-U+D7AF"), "Hangul → Apple SD Gothic Neo")
+        XCTAssertFalse(mappings.contains { $0.1 == "Apple SD Gothic Neo" }, "No Korean font mapping")
         XCTAssertFalse(hiraginoRanges.contains("U+AC00-U+D7AF"), "Hangul NOT in Hiragino")
     }
 
@@ -2351,6 +2388,161 @@ final class ZshShellIntegrationHandoffTests: XCTestCase {
         XCTAssertEqual(output, "BEFORE\nAFTER", output)
     }
 
+    func testShellIntegrationPublishesOnlyWorkspaceScopedCmuxEnvironmentToTmuxServerAutomatically() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("cmux-zsh-tmux-publish-\(UUID().uuidString)")
+        let binDir = root.appendingPathComponent("bin", isDirectory: true)
+        let logPath = root.appendingPathComponent("tmux.log", isDirectory: false)
+
+        try fileManager.createDirectory(at: binDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        try writeExecutableScript(
+            at: binDir.appendingPathComponent("tmux", isDirectory: false),
+            contents: """
+            #!/bin/sh
+            if [ "$1" = "show-environment" ] && [ "$2" = "-g" ]; then
+              exit 0
+            fi
+            printf '%s\\n' "$*" >> "\(logPath.path)"
+            exit 0
+            """
+        )
+
+        _ = try runInteractiveZsh(
+            cmuxLoadGhosttyIntegration: false,
+            cmuxLoadShellIntegration: true,
+            command: "_cmux_preexec tmux; print -r -- READY",
+            extraEnvironment: [
+                "PATH": "\(binDir.path):/usr/bin:/bin:/usr/sbin:/sbin",
+                "CMUX_SOCKET_PATH": "/tmp/cmux-current.sock",
+                "CMUX_TAG": "feat-tmux-notification-attention-state",
+                "CMUX_WORKSPACE_ID": "11111111-1111-1111-1111-111111111111",
+                "CMUX_SURFACE_ID": "22222222-2222-2222-2222-222222222222",
+                "CMUX_TAB_ID": "11111111-1111-1111-1111-111111111111",
+                "CMUX_PANEL_ID": "22222222-2222-2222-2222-222222222222",
+            ]
+        )
+
+        let log = (try? String(contentsOf: logPath, encoding: .utf8)) ?? ""
+        XCTAssertTrue(log.contains("set-environment -g CMUX_TAG feat-tmux-notification-attention-state"), log)
+        XCTAssertTrue(log.contains("set-environment -g CMUX_SOCKET_PATH /tmp/cmux-current.sock"), log)
+        XCTAssertTrue(log.contains("set-environment -g CMUX_WORKSPACE_ID 11111111-1111-1111-1111-111111111111"), log)
+        XCTAssertFalse(log.contains("set-environment -g CMUX_SURFACE_ID"), log)
+        XCTAssertFalse(log.contains("set-environment -g CMUX_PANEL_ID"), log)
+    }
+
+    func testShellIntegrationClearsStaleSurfaceScopedTmuxEnvironmentAutomatically() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("cmux-zsh-tmux-clear-\(UUID().uuidString)")
+        let binDir = root.appendingPathComponent("bin", isDirectory: true)
+        let logPath = root.appendingPathComponent("tmux.log", isDirectory: false)
+
+        try fileManager.createDirectory(at: binDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        try writeExecutableScript(
+            at: binDir.appendingPathComponent("tmux", isDirectory: false),
+            contents: """
+            #!/bin/sh
+            if [ "$1" = "show-environment" ] && [ "$2" = "-g" ]; then
+              printf '%s\\n' 'CMUX_SURFACE_ID=99999999-9999-9999-9999-999999999999'
+              printf '%s\\n' 'CMUX_PANEL_ID=99999999-9999-9999-9999-999999999999'
+              exit 0
+            fi
+            printf '%s\\n' "$*" >> "\(logPath.path)"
+            exit 0
+            """
+        )
+
+        _ = try runInteractiveZsh(
+            cmuxLoadGhosttyIntegration: false,
+            cmuxLoadShellIntegration: true,
+            command: "_cmux_preexec tmux; print -r -- READY",
+            extraEnvironment: [
+                "PATH": "\(binDir.path):/usr/bin:/bin:/usr/sbin:/sbin",
+                "CMUX_SOCKET_PATH": "/tmp/cmux-current.sock",
+                "CMUX_TAG": "feat-tmux-notification-attention-state",
+                "CMUX_WORKSPACE_ID": "11111111-1111-1111-1111-111111111111",
+                "CMUX_SURFACE_ID": "22222222-2222-2222-2222-222222222222",
+                "CMUX_TAB_ID": "11111111-1111-1111-1111-111111111111",
+                "CMUX_PANEL_ID": "22222222-2222-2222-2222-222222222222",
+            ]
+        )
+
+        let log = (try? String(contentsOf: logPath, encoding: .utf8)) ?? ""
+        XCTAssertTrue(log.contains("set-environment -gu CMUX_SURFACE_ID"), log)
+        XCTAssertTrue(log.contains("set-environment -gu CMUX_PANEL_ID"), log)
+    }
+
+    func testShellIntegrationRefreshesWorkspaceScopedCmuxEnvironmentFromTmuxWithoutOverwritingSurfaceScope() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("cmux-zsh-tmux-refresh-\(UUID().uuidString)")
+        let binDir = root.appendingPathComponent("bin", isDirectory: true)
+
+        try fileManager.createDirectory(at: binDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        try writeExecutableScript(
+            at: binDir.appendingPathComponent("tmux", isDirectory: false),
+            contents: """
+            #!/bin/sh
+            if [ "$1" = "show-environment" ] && [ "$2" = "-g" ]; then
+              printf '%s\\n' 'CMUX_SOCKET_PATH=/tmp/cmux-current.sock'
+              printf '%s\\n' 'CMUX_TAG=feat-tmux-notification-attention-state'
+              printf '%s\\n' 'CMUX_WORKSPACE_ID=11111111-1111-1111-1111-111111111111'
+              printf '%s\\n' 'CMUX_SURFACE_ID=99999999-9999-9999-9999-999999999999'
+              printf '%s\\n' 'CMUX_TAB_ID=11111111-1111-1111-1111-111111111111'
+              printf '%s\\n' 'CMUX_PANEL_ID=99999999-9999-9999-9999-999999999999'
+              exit 0
+            fi
+            exit 0
+            """
+        )
+
+        let output = try runInteractiveZsh(
+            cmuxLoadGhosttyIntegration: false,
+            cmuxLoadShellIntegration: true,
+            command: "_cmux_precmd; print -r -- \"$CMUX_TAG|$CMUX_SOCKET_PATH|$CMUX_WORKSPACE_ID|$CMUX_SURFACE_ID|$CMUX_PANEL_ID\"",
+            extraEnvironment: [
+                "PATH": "\(binDir.path):/usr/bin:/bin:/usr/sbin:/sbin",
+                "TMUX": "/tmp/tmux-stale,123,0",
+                "CMUX_SOCKET_PATH": "/tmp/cmux-stale.sock",
+                "CMUX_TAG": "feat-tmux-integration-experiments",
+                "CMUX_WORKSPACE_ID": "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+                "CMUX_SURFACE_ID": "22222222-2222-2222-2222-222222222222",
+                "CMUX_TAB_ID": "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+                "CMUX_PANEL_ID": "22222222-2222-2222-2222-222222222222",
+            ]
+        )
+
+        XCTAssertEqual(
+            output,
+            "feat-tmux-notification-attention-state|/tmp/cmux-current.sock|11111111-1111-1111-1111-111111111111|22222222-2222-2222-2222-222222222222|22222222-2222-2222-2222-222222222222"
+        )
+    }
+
+    func testShellIntegrationReportsTTYFromTmuxWithoutUsingPanelScope() throws {
+        let output = try runInteractiveZsh(
+            cmuxLoadGhosttyIntegration: false,
+            cmuxLoadShellIntegration: true,
+            command: """
+            _CMUX_TTY_NAME=ttys999
+            print -r -- "$(_cmux_report_tty_payload)"
+            """,
+            extraEnvironment: [
+                "TMUX": "/tmp/tmux-current,123,0",
+                "CMUX_TAB_ID": "11111111-1111-1111-1111-111111111111",
+                "CMUX_PANEL_ID": "99999999-9999-9999-9999-999999999999",
+            ]
+        )
+
+        XCTAssertEqual(output, "report_tty ttys999 --tab=11111111-1111-1111-1111-111111111111")
+    }
+
     private func runInteractiveZsh(cmuxLoadGhosttyIntegration: Bool) throws -> String {
         try runInteractiveZsh(
             cmuxLoadGhosttyIntegration: cmuxLoadGhosttyIntegration,
@@ -2364,7 +2556,8 @@ final class ZshShellIntegrationHandoffTests: XCTestCase {
     private func runInteractiveZsh(
         cmuxLoadGhosttyIntegration: Bool,
         cmuxLoadShellIntegration: Bool,
-        command: String
+        command: String,
+        extraEnvironment: [String: String] = [:]
     ) throws -> String {
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory
@@ -2374,7 +2567,18 @@ final class ZshShellIntegrationHandoffTests: XCTestCase {
 
         let userZdotdir = root.appendingPathComponent("zdotdir")
         try fileManager.createDirectory(at: userZdotdir, withIntermediateDirectories: true)
-        try "\n".write(to: userZdotdir.appendingPathComponent(".zshenv"), atomically: true, encoding: .utf8)
+        let userZshEnvContents: String = {
+            if let path = extraEnvironment["PATH"] {
+                let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
+                return "export PATH=\"\(escaped)\"\n"
+            }
+            return "\n"
+        }()
+        try userZshEnvContents.write(
+            to: userZdotdir.appendingPathComponent(".zshenv"),
+            atomically: true,
+            encoding: .utf8
+        )
 
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -2408,6 +2612,9 @@ final class ZshShellIntegrationHandoffTests: XCTestCase {
             process.environment?["CMUX_TAB_ID"] = "tab-test"
             process.environment?["CMUX_PANEL_ID"] = "panel-test"
         }
+        for (key, value) in extraEnvironment {
+            process.environment?[key] = value
+        }
 
         let stdout = Pipe()
         let stderr = Pipe()
@@ -2430,6 +2637,61 @@ final class ZshShellIntegrationHandoffTests: XCTestCase {
 
         XCTAssertEqual(process.terminationStatus, 0, error)
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func writeExecutableScript(at url: URL, contents: String) throws {
+        try contents.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private func bindUnixSocket(at path: String) throws -> Int32 {
+        unlink(path)
+
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(errno),
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create Unix socket"]
+            )
+        }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let maxPathLength = MemoryLayout.size(ofValue: addr.sun_path)
+        path.withCString { ptr in
+            withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
+                let pathBuf = UnsafeMutableRawPointer(pathPtr).assumingMemoryBound(to: CChar.self)
+                strncpy(pathBuf, ptr, maxPathLength - 1)
+            }
+        }
+
+        let bindResult = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
+                Darwin.bind(fd, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            let code = Int(errno)
+            Darwin.close(fd)
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: code,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to bind Unix socket"]
+            )
+        }
+
+        guard Darwin.listen(fd, 1) == 0 else {
+            let code = Int(errno)
+            Darwin.close(fd)
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: code,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to listen on Unix socket"]
+            )
+        }
+
+        return fd
     }
 }
 

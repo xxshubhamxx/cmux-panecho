@@ -198,16 +198,16 @@ final class WorkspaceRenameShortcutDefaultsTests: XCTestCase {
 
 final class WorkspaceShortcutMapperTests: XCTestCase {
     func testCommandNineMapsToLastWorkspaceIndex() {
-        XCTAssertEqual(WorkspaceShortcutMapper.workspaceIndex(forCommandDigit: 9, workspaceCount: 1), 0)
-        XCTAssertEqual(WorkspaceShortcutMapper.workspaceIndex(forCommandDigit: 9, workspaceCount: 4), 3)
-        XCTAssertEqual(WorkspaceShortcutMapper.workspaceIndex(forCommandDigit: 9, workspaceCount: 12), 11)
+        XCTAssertEqual(WorkspaceShortcutMapper.workspaceIndex(forDigit: 9, workspaceCount: 1), 0)
+        XCTAssertEqual(WorkspaceShortcutMapper.workspaceIndex(forDigit: 9, workspaceCount: 4), 3)
+        XCTAssertEqual(WorkspaceShortcutMapper.workspaceIndex(forDigit: 9, workspaceCount: 12), 11)
     }
 
     func testCommandDigitBadgesUseNineForLastWorkspaceWhenNeeded() {
-        XCTAssertEqual(WorkspaceShortcutMapper.commandDigitForWorkspace(at: 0, workspaceCount: 12), 1)
-        XCTAssertEqual(WorkspaceShortcutMapper.commandDigitForWorkspace(at: 7, workspaceCount: 12), 8)
-        XCTAssertEqual(WorkspaceShortcutMapper.commandDigitForWorkspace(at: 11, workspaceCount: 12), 9)
-        XCTAssertNil(WorkspaceShortcutMapper.commandDigitForWorkspace(at: 8, workspaceCount: 12))
+        XCTAssertEqual(WorkspaceShortcutMapper.digitForWorkspace(at: 0, workspaceCount: 12), 1)
+        XCTAssertEqual(WorkspaceShortcutMapper.digitForWorkspace(at: 7, workspaceCount: 12), 8)
+        XCTAssertEqual(WorkspaceShortcutMapper.digitForWorkspace(at: 11, workspaceCount: 12), 9)
+        XCTAssertNil(WorkspaceShortcutMapper.digitForWorkspace(at: 8, workspaceCount: 12))
     }
 }
 
@@ -1072,6 +1072,134 @@ final class WorkspaceTerminalConfigInheritanceSelectionTests: XCTestCase {
 
 
 @MainActor
+final class WorkspaceAttentionFlashTests: XCTestCase {
+    func testMoveFocusDoesNotTriggerWholePaneFlashTokenWhenWholePaneModeEnabled() {
+        let defaults = UserDefaults.standard
+        let originalExperimentEnabled = defaults.object(forKey: TmuxOverlayExperimentSettings.enabledKey)
+        let originalExperimentTarget = defaults.object(forKey: TmuxOverlayExperimentSettings.targetKey)
+
+        defer {
+            if let originalExperimentEnabled {
+                defaults.set(originalExperimentEnabled, forKey: TmuxOverlayExperimentSettings.enabledKey)
+            } else {
+                defaults.removeObject(forKey: TmuxOverlayExperimentSettings.enabledKey)
+            }
+            if let originalExperimentTarget {
+                defaults.set(originalExperimentTarget, forKey: TmuxOverlayExperimentSettings.targetKey)
+            } else {
+                defaults.removeObject(forKey: TmuxOverlayExperimentSettings.targetKey)
+            }
+        }
+
+        defaults.set(true, forKey: TmuxOverlayExperimentSettings.enabledKey)
+        defaults.set(TmuxOverlayExperimentTarget.bonsplitPane.rawValue, forKey: TmuxOverlayExperimentSettings.targetKey)
+
+        let manager = TabManager()
+        guard let workspace = manager.selectedWorkspace,
+              let leftPanelId = workspace.focusedPanelId,
+              let rightPanel = workspace.newTerminalSplit(from: leftPanelId, orientation: .horizontal) else {
+            XCTFail("Expected split terminal panels")
+            return
+        }
+
+        XCTAssertEqual(workspace.focusedPanelId, rightPanel.id)
+        XCTAssertEqual(workspace.tmuxWorkspaceFlashToken, 0)
+        XCTAssertNil(workspace.tmuxWorkspaceFlashPanelId)
+
+        workspace.moveFocus(direction: .left)
+
+        XCTAssertEqual(workspace.focusedPanelId, leftPanelId)
+        XCTAssertEqual(
+            workspace.tmuxWorkspaceFlashToken,
+            0,
+            "Expected moving focus left to avoid any workspace-pane flash"
+        )
+        XCTAssertNil(workspace.tmuxWorkspaceFlashPanelId)
+
+        workspace.moveFocus(direction: .right)
+
+        XCTAssertEqual(workspace.focusedPanelId, rightPanel.id)
+        XCTAssertEqual(
+            workspace.tmuxWorkspaceFlashToken,
+            0,
+            "Expected moving focus right to avoid any workspace-pane flash"
+        )
+        XCTAssertNil(workspace.tmuxWorkspaceFlashPanelId)
+    }
+
+    func testMoveFocusSuppressesWorkspacePaneFlashWhenAnotherPaneOwnsUnreadAttention() {
+        let appDelegate = AppDelegate.shared ?? AppDelegate()
+        let manager = TabManager()
+        let notificationStore = TerminalNotificationStore.shared
+        let defaults = UserDefaults.standard
+        let originalTabManager = appDelegate.tabManager
+        let originalNotificationStore = appDelegate.notificationStore
+        let originalExperimentEnabled = defaults.object(forKey: TmuxOverlayExperimentSettings.enabledKey)
+        let originalExperimentTarget = defaults.object(forKey: TmuxOverlayExperimentSettings.targetKey)
+        let originalAppFocusOverride = AppFocusState.overrideIsFocused
+        defer {
+            notificationStore.replaceNotificationsForTesting([])
+            notificationStore.resetNotificationDeliveryHandlerForTesting()
+            appDelegate.tabManager = originalTabManager
+            appDelegate.notificationStore = originalNotificationStore
+            AppFocusState.overrideIsFocused = originalAppFocusOverride
+            if let originalExperimentEnabled {
+                defaults.set(originalExperimentEnabled, forKey: TmuxOverlayExperimentSettings.enabledKey)
+            } else {
+                defaults.removeObject(forKey: TmuxOverlayExperimentSettings.enabledKey)
+            }
+            if let originalExperimentTarget {
+                defaults.set(originalExperimentTarget, forKey: TmuxOverlayExperimentSettings.targetKey)
+            } else {
+                defaults.removeObject(forKey: TmuxOverlayExperimentSettings.targetKey)
+            }
+        }
+
+        notificationStore.replaceNotificationsForTesting([])
+        notificationStore.configureNotificationDeliveryHandlerForTesting { _, _ in }
+        appDelegate.tabManager = manager
+        appDelegate.notificationStore = notificationStore
+        AppFocusState.overrideIsFocused = true
+        defaults.set(true, forKey: TmuxOverlayExperimentSettings.enabledKey)
+        defaults.set(TmuxOverlayExperimentTarget.bonsplitPane.rawValue, forKey: TmuxOverlayExperimentSettings.targetKey)
+
+        guard let workspace = manager.selectedWorkspace,
+              let leftPanelId = workspace.focusedPanelId,
+              let rightPanel = workspace.newTerminalSplit(from: leftPanelId, orientation: .horizontal) else {
+            XCTFail("Expected split terminal panels")
+            return
+        }
+
+        workspace.moveFocus(direction: .left)
+
+        notificationStore.addNotification(
+            tabId: workspace.id,
+            surfaceId: leftPanelId,
+            title: "Unread",
+            subtitle: "",
+            body: "Left pane owns notification attention"
+        )
+
+        XCTAssertTrue(
+            notificationStore.hasVisibleNotificationIndicator(forTabId: workspace.id, surfaceId: leftPanelId),
+            "Expected the left pane to own visible notification attention before moving focus"
+        )
+
+        let flashTokenBeforeNavigation = workspace.tmuxWorkspaceFlashToken
+
+        workspace.moveFocus(direction: .right)
+
+        XCTAssertEqual(workspace.focusedPanelId, rightPanel.id)
+        XCTAssertEqual(
+            workspace.tmuxWorkspaceFlashToken,
+            flashTokenBeforeNavigation,
+            "Expected navigation flash to be suppressed while another pane owns notification attention"
+        )
+    }
+}
+
+
+@MainActor
 final class WorkspaceBrowserProfileSelectionTests: XCTestCase {
     private final class RejectingCreateTabDelegate: BonsplitDelegate {
         func splitTabBar(_ controller: BonsplitController, shouldCreateTab tab: Bonsplit.Tab, inPane pane: PaneID) -> Bool {
@@ -1627,6 +1755,106 @@ final class WorkspacePanelGitBranchTests: XCTestCase {
         let branches = workspace.sidebarGitBranchesInDisplayOrder()
         XCTAssertEqual(branches.map(\.branch), ["main", "feature/left", "feature/right"])
         XCTAssertEqual(branches.map(\.isDirty), [true, false, false])
+    }
+
+    func testSidebarBranchDirectoryEntriesStayStableAcrossFocusedSplitChanges() {
+        let workspace = Workspace()
+        let leftLiveDirectory = "/repo/left/live"
+        let rightFocusedDirectory = "/repo/right/focused"
+        let leftFocusedDirectory = "/repo/left/focused"
+        let rightRequestedDirectory = "/repo/right/requested"
+
+        guard let leftPanelId = workspace.focusedPanelId else {
+            XCTFail("Expected initial focused panel")
+            return
+        }
+
+        workspace.updatePanelDirectory(panelId: leftPanelId, directory: leftLiveDirectory)
+
+        guard let rightSplitPanel = workspace.newTerminalSplit(
+            from: leftPanelId,
+            orientation: .horizontal,
+            focus: false
+        ),
+        let rightPaneId = workspace.paneId(forPanelId: rightSplitPanel.id),
+        let rightRequestedPanel = workspace.newTerminalSurface(
+            inPane: rightPaneId,
+            focus: false,
+            workingDirectory: rightRequestedDirectory
+        ) else {
+            XCTFail("Expected right split panes for sidebar directory ordering test")
+            return
+        }
+
+        let orderedPanelIds = workspace.sidebarOrderedPanelIds()
+        XCTAssertEqual(orderedPanelIds, [leftPanelId, rightSplitPanel.id, rightRequestedPanel.id])
+
+        workspace.currentDirectory = rightFocusedDirectory
+        let entriesWhenRightLooksFocused = workspace.sidebarBranchDirectoryEntriesInDisplayOrder(
+            orderedPanelIds: orderedPanelIds
+        )
+
+        workspace.currentDirectory = leftFocusedDirectory
+        let entriesWhenLeftLooksFocused = workspace.sidebarBranchDirectoryEntriesInDisplayOrder(
+            orderedPanelIds: orderedPanelIds
+        )
+
+        XCTAssertEqual(
+            entriesWhenRightLooksFocused,
+            entriesWhenLeftLooksFocused,
+            "Expected sidebar directory ordering to ignore focused-workspace cwd churn when panel-specific directories are available"
+        )
+        XCTAssertEqual(
+            entriesWhenRightLooksFocused.map(\.directory),
+            [leftLiveDirectory, rightRequestedDirectory]
+        )
+    }
+
+    func testRemoteSidebarDirectoryCanonicalizationDedupesTildeAndAbsoluteHomePaths() {
+        let workspace = Workspace()
+        workspace.configureRemoteConnection(
+            WorkspaceRemoteConfiguration(
+                destination: "cmux-macmini",
+                port: nil,
+                identityFile: nil,
+                sshOptions: [],
+                localProxyPort: nil,
+                relayPort: 64007,
+                relayID: String(repeating: "a", count: 16),
+                relayToken: String(repeating: "b", count: 64),
+                localSocketPath: "/tmp/cmux-debug-test.sock",
+                terminalStartupCommand: "ssh cmux-macmini"
+            ),
+            autoConnect: false
+        )
+
+        let liveDirectory = "/home/remoteuser/project"
+        let requestedDirectory = "~/project"
+
+        guard let firstPanelId = workspace.focusedPanelId,
+              let paneId = workspace.paneId(forPanelId: firstPanelId),
+              let requestedPanel = workspace.newTerminalSurface(
+                  inPane: paneId,
+                  focus: false,
+                  workingDirectory: requestedDirectory
+              ) else {
+            XCTFail("Expected remote panels for sidebar directory canonicalization test")
+            return
+        }
+
+        workspace.updatePanelDirectory(panelId: firstPanelId, directory: liveDirectory)
+
+        let orderedPanelIds = workspace.sidebarOrderedPanelIds()
+        XCTAssertEqual(orderedPanelIds, [firstPanelId, requestedPanel.id])
+
+        XCTAssertEqual(
+            workspace.sidebarDirectoriesInDisplayOrder(orderedPanelIds: orderedPanelIds),
+            [liveDirectory]
+        )
+        XCTAssertEqual(
+            workspace.sidebarBranchDirectoryEntriesInDisplayOrder(orderedPanelIds: orderedPanelIds).map(\.directory),
+            [liveDirectory]
+        )
     }
 
     func testSidebarDerivedCollectionsMatchWhenUsingPrecomputedPanelOrder() {

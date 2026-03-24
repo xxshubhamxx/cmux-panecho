@@ -26,6 +26,18 @@ func cmuxCurrentSurfaceFontSizePoints(_ surface: ghostty_surface_t) -> Float? {
         return nil
     }
 
+    // Best-effort check: reject pointers that are not the start of a live
+    // malloc allocation. ghostty_surface_quicklook_font returns an unretained
+    // pointer whose lifetime is managed by Ghostty; on Intel Macs the pointer
+    // can become stale after the internal font is freed (#1496, #1870).
+    // malloc_size is safe to call with any address (returns 0 for non-malloc
+    // pointers without dereferencing them). This does not guarantee the memory
+    // still contains a valid CTFont, but it catches the common case of
+    // fully-freed or unmapped allocations that would otherwise SIGSEGV.
+    guard malloc_size(quicklookFont) > 0 else {
+        return nil
+    }
+
     let ctFont = Unmanaged<CTFont>.fromOpaque(quicklookFont).takeUnretainedValue()
     let points = Float(CTFontGetSize(ctFont))
     guard points > 0 else { return nil }
@@ -105,6 +117,35 @@ enum SidebarMetadataFormat: String {
 private struct SessionPaneRestoreEntry {
     let paneId: PaneID
     let snapshot: SessionPaneLayoutSnapshot
+}
+
+private enum RemoteDropUploadError: LocalizedError {
+    case unavailable
+    case invalidFileURL
+    case uploadFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            String(
+                localized: "error.remoteDrop.unavailable",
+                defaultValue: "Remote drop is unavailable."
+            )
+        case .invalidFileURL:
+            String(
+                localized: "error.remoteDrop.invalidFileURL",
+                defaultValue: "Dropped item is not a file URL."
+            )
+        case .uploadFailed(let detail):
+            String.localizedStringWithFormat(
+                String(
+                    localized: "error.remoteDrop.uploadFailed",
+                    defaultValue: "Failed to upload dropped file: %@"
+                ),
+                detail
+            )
+        }
+    }
 }
 
 struct WorkspaceRemoteDaemonManifest: Decodable, Equatable {
@@ -2945,6 +2986,58 @@ final class WorkspaceRemoteSessionController {
         }
     }
 
+    func uploadDroppedFiles(
+        _ fileURLs: [URL],
+        operation: TerminalImageTransferOperation,
+        completion: @escaping (Result<[String], Error>) -> Void
+    ) {
+        queue.async { [weak self] in
+            guard let self else {
+                DispatchQueue.main.async {
+                    completion(.failure(RemoteDropUploadError.unavailable))
+                }
+                return
+            }
+
+            do {
+                try operation.throwIfCancelled()
+                let remotePaths = try self.uploadDroppedFilesLocked(fileURLs, operation: operation)
+                try operation.throwIfCancelled()
+                DispatchQueue.main.async { [weak self] in
+                    if operation.isCancelled {
+                        guard let self else {
+                            completion(.failure(TerminalImageTransferExecutionError.cancelled))
+                            return
+                        }
+                        self.queue.async { [weak self] in
+                            self?.cleanupUploadedRemotePaths(remotePaths)
+                            DispatchQueue.main.async {
+                                completion(.failure(TerminalImageTransferExecutionError.cancelled))
+                            }
+                        }
+                    } else {
+                        completion(.success(remotePaths))
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    func uploadDroppedFiles(
+        _ fileURLs: [URL],
+        completion: @escaping (Result<[String], Error>) -> Void
+    ) {
+        uploadDroppedFiles(
+            fileURLs,
+            operation: TerminalImageTransferOperation(),
+            completion: completion
+        )
+    }
+
     private func stopAllLocked() {
         debugLog("remote.session.stop \(debugConfigSummary())")
         isStopping = true
@@ -3442,12 +3535,17 @@ final class WorkspaceRemoteSessionController {
         )
     }
 
-    private func scpExec(arguments: [String], timeout: TimeInterval = 30) throws -> CommandResult {
+    private func scpExec(
+        arguments: [String],
+        timeout: TimeInterval = 30,
+        operation: TerminalImageTransferOperation? = nil
+    ) throws -> CommandResult {
         try runProcess(
             executable: "/usr/bin/scp",
             arguments: arguments,
             stdin: nil,
-            timeout: timeout
+            timeout: timeout,
+            operation: operation
         )
     }
 
@@ -3457,7 +3555,8 @@ final class WorkspaceRemoteSessionController {
         environment: [String: String]? = nil,
         currentDirectory: URL? = nil,
         stdin: Data?,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        operation: TerminalImageTransferOperation? = nil
     ) throws -> CommandResult {
         debugLog(
             "remote.proc.start exec=\(URL(fileURLWithPath: executable).lastPathComponent) " +
@@ -3512,6 +3611,7 @@ final class WorkspaceRemoteSessionController {
         }
 
         do {
+            try operation?.throwIfCancelled()
             try process.run()
         } catch {
             try? stdoutPipe.fileHandleForWriting.close()
@@ -3526,20 +3626,34 @@ final class WorkspaceRemoteSessionController {
         }
         try? stdoutPipe.fileHandleForWriting.close()
         try? stderrPipe.fileHandleForWriting.close()
+        operation?.installCancellationHandler {
+            if process.isRunning {
+                process.terminate()
+            }
+        }
+        defer { operation?.clearCancellationHandler() }
 
         if let stdin, let pipe = process.standardInput as? Pipe {
             pipe.fileHandleForWriting.write(stdin)
             try? pipe.fileHandleForWriting.close()
         }
 
-        let didExitBeforeTimeout = exitSemaphore.wait(timeout: .now() + max(0, timeout)) == .success
-        if !didExitBeforeTimeout, process.isRunning {
+        func terminateProcessAndWait() {
             process.terminate()
             let terminatedGracefully = exitSemaphore.wait(timeout: .now() + 2.0) == .success
             if !terminatedGracefully, process.isRunning {
                 _ = Darwin.kill(process.processIdentifier, SIGKILL)
                 process.waitUntilExit()
             }
+        }
+
+        let didExitBeforeTimeout = exitSemaphore.wait(timeout: .now() + max(0, timeout)) == .success
+        if !didExitBeforeTimeout, process.isRunning {
+            if operation?.isCancelled == true {
+                terminateProcessAndWait()
+                throw TerminalImageTransferExecutionError.cancelled
+            }
+            terminateProcessAndWait()
             debugLog(
                 "remote.proc.timeout exec=\(URL(fileURLWithPath: executable).lastPathComponent) " +
                 "timeout=\(Int(timeout)) args=\(debugShellCommand(executable: executable, arguments: arguments))"
@@ -3554,6 +3668,9 @@ final class WorkspaceRemoteSessionController {
         try? stderrHandle.close()
         let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
         let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+        if operation?.isCancelled == true {
+            throw TerminalImageTransferExecutionError.cancelled
+        }
         debugLog(
             "remote.proc.end exec=\(URL(fileURLWithPath: executable).lastPathComponent) " +
             "status=\(process.terminationStatus) stdout=\(Self.debugLogSnippet(stdout)) " +
@@ -4003,6 +4120,70 @@ final class WorkspaceRemoteSessionController {
                 NSLocalizedDescriptionKey: "failed to install remote daemon binary: \(detail)",
             ])
         }
+    }
+
+    private func uploadDroppedFilesLocked(
+        _ fileURLs: [URL],
+        operation: TerminalImageTransferOperation
+    ) throws -> [String] {
+        guard !fileURLs.isEmpty else { return [] }
+
+        let scpSSHOptions = backgroundSSHOptions(configuration.sshOptions)
+        var uploadedRemotePaths: [String] = []
+        do {
+            for localURL in fileURLs {
+                try operation.throwIfCancelled()
+                let normalizedLocalURL = localURL.standardizedFileURL
+                guard normalizedLocalURL.isFileURL else {
+                    throw RemoteDropUploadError.invalidFileURL
+                }
+
+                let remotePath = Self.remoteDropPath(for: normalizedLocalURL)
+                uploadedRemotePaths.append(remotePath)
+                var scpArgs: [String] = ["-q", "-o", "ControlMaster=no"]
+                if !hasSSHOptionKey(scpSSHOptions, key: "StrictHostKeyChecking") {
+                    scpArgs += ["-o", "StrictHostKeyChecking=accept-new"]
+                }
+                if let port = configuration.port {
+                    scpArgs += ["-P", String(port)]
+                }
+                if let identityFile = configuration.identityFile,
+                   !identityFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    scpArgs += ["-i", identityFile]
+                }
+                for option in scpSSHOptions {
+                    scpArgs += ["-o", option]
+                }
+                scpArgs += [normalizedLocalURL.path, "\(configuration.destination):\(remotePath)"]
+
+                let scpResult = try scpExec(arguments: scpArgs, timeout: 45, operation: operation)
+                guard scpResult.status == 0 else {
+                    let detail = Self.bestErrorLine(stderr: scpResult.stderr, stdout: scpResult.stdout) ??
+                        "scp exited \(scpResult.status)"
+                    throw RemoteDropUploadError.uploadFailed(detail)
+                }
+            }
+            return uploadedRemotePaths
+        } catch {
+            cleanupUploadedRemotePaths(uploadedRemotePaths)
+            throw error
+        }
+    }
+
+    static func remoteDropPath(for fileURL: URL, uuid: UUID = UUID()) -> String {
+        let extensionSuffix = fileURL.pathExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercasedSuffix = extensionSuffix.isEmpty ? "" : ".\(extensionSuffix.lowercased())"
+        return "/tmp/cmux-drop-\(uuid.uuidString.lowercased())\(lowercasedSuffix)"
+    }
+
+    private func cleanupUploadedRemotePaths(_ remotePaths: [String]) {
+        guard !remotePaths.isEmpty else { return }
+        let cleanupScript = "rm -f -- " + remotePaths.map(Self.shellSingleQuoted).joined(separator: " ")
+        let cleanupCommand = "sh -c \(Self.shellSingleQuoted(cleanupScript))"
+        _ = try? sshExec(
+            arguments: sshCommonArguments(batchMode: true) + [configuration.destination, cleanupCommand],
+            timeout: 8
+        )
     }
 
     private func helloRemoteDaemonLocked(remotePath: String) throws -> DaemonHello {
@@ -4555,6 +4736,154 @@ enum SidebarBranchOrdering {
         let directory: String?
     }
 
+    fileprivate static func normalizedDirectory(_ text: String?) -> String? {
+        guard let text else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func relativePathFromTilde(_ directory: String) -> String? {
+        let normalized = normalizedDirectory(directory)
+        switch normalized {
+        case "~":
+            return ""
+        case let path? where path.hasPrefix("~/"):
+            return String(path.dropFirst(2))
+        default:
+            return nil
+        }
+    }
+
+    private static func commonHomeDirectoryPrefix(from absoluteDirectory: String) -> String? {
+        guard let normalized = normalizedDirectory(absoluteDirectory) else { return nil }
+        let standardized = NSString(string: normalized).standardizingPath
+        if standardized == "/root" || standardized.hasPrefix("/root/") {
+            return "/root"
+        }
+
+        let components = NSString(string: standardized).pathComponents
+        if components.count >= 3, components[0] == "/", components[1] == "Users" {
+            return NSString.path(withComponents: Array(components.prefix(3)))
+        }
+        if components.count >= 3, components[0] == "/", components[1] == "home" {
+            return NSString.path(withComponents: Array(components.prefix(3)))
+        }
+        if components.count >= 4, components[0] == "/", components[1] == "var", components[2] == "home" {
+            return NSString.path(withComponents: Array(components.prefix(4)))
+        }
+
+        return nil
+    }
+
+    private static func inferredHomeDirectory(
+        matchingTildeDirectory tildeDirectory: String,
+        absoluteDirectory: String
+    ) -> String? {
+        guard let relativePath = relativePathFromTilde(tildeDirectory),
+              let normalizedAbsolute = normalizedDirectory(absoluteDirectory) else { return nil }
+        let standardizedAbsolute = NSString(string: normalizedAbsolute).standardizingPath
+        let homeDirectory: String
+        if relativePath.isEmpty {
+            homeDirectory = standardizedAbsolute
+        } else {
+            let suffix = "/" + relativePath
+            guard standardizedAbsolute.hasSuffix(suffix) else { return nil }
+            homeDirectory = String(standardizedAbsolute.dropLast(suffix.count))
+        }
+
+        guard commonHomeDirectoryPrefix(from: homeDirectory) == homeDirectory else { return nil }
+        return homeDirectory
+    }
+
+    fileprivate static func inferredRemoteHomeDirectory(
+        from directories: [String],
+        fallbackDirectory: String?
+    ) -> String? {
+        let candidates = directories + [fallbackDirectory].compactMap { $0 }
+        let tildeDirectories = candidates.compactMap { directory -> String? in
+            guard let normalized = normalizedDirectory(directory),
+                  relativePathFromTilde(normalized) != nil else { return nil }
+            return normalized
+        }
+        let absoluteDirectories = candidates.compactMap { directory -> String? in
+            guard let normalized = normalizedDirectory(directory), normalized.hasPrefix("/") else { return nil }
+            return NSString(string: normalized).standardizingPath
+        }
+
+        let inferredHomes = Set(
+            tildeDirectories.flatMap { tildeDirectory in
+                absoluteDirectories.compactMap { absoluteDirectory in
+                    inferredHomeDirectory(
+                        matchingTildeDirectory: tildeDirectory,
+                        absoluteDirectory: absoluteDirectory
+                    )
+                }
+            }
+        )
+
+        if inferredHomes.count == 1 {
+            return inferredHomes.first
+        }
+        if !inferredHomes.isEmpty {
+            return nil
+        }
+
+        return absoluteDirectories.lazy.compactMap(commonHomeDirectoryPrefix(from:)).first
+    }
+
+    private static func expandedTildePath(
+        _ directory: String,
+        homeDirectoryForTildeExpansion: String?
+    ) -> String {
+        guard let relativePath = relativePathFromTilde(directory),
+              let homeDirectory = normalizedDirectory(homeDirectoryForTildeExpansion) else {
+            return directory
+        }
+        if relativePath.isEmpty {
+            return homeDirectory
+        }
+        return NSString(string: homeDirectory).appendingPathComponent(relativePath)
+    }
+
+    fileprivate static func canonicalDirectoryKey(
+        _ directory: String?,
+        homeDirectoryForTildeExpansion: String?
+    ) -> String? {
+        guard let directory = normalizedDirectory(directory) else { return nil }
+        let expanded = expandedTildePath(
+            directory,
+            homeDirectoryForTildeExpansion: homeDirectoryForTildeExpansion
+        )
+        let standardized = NSString(string: expanded).standardizingPath
+        let cleaned = standardized.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
+    private static func preferredDisplayedDirectory(
+        existing: String?,
+        replacement: String?,
+        homeDirectoryForTildeExpansion: String?
+    ) -> String? {
+        guard let replacement = normalizedDirectory(replacement) else { return existing }
+        guard let existing = normalizedDirectory(existing) else { return replacement }
+
+        let existingUsesTilde = relativePathFromTilde(existing) != nil
+        let replacementUsesTilde = relativePathFromTilde(replacement) != nil
+        if existingUsesTilde != replacementUsesTilde {
+            return replacementUsesTilde ? existing : replacement
+        }
+
+        if canonicalDirectoryKey(existing, homeDirectoryForTildeExpansion: homeDirectoryForTildeExpansion)
+            == canonicalDirectoryKey(
+                replacement,
+                homeDirectoryForTildeExpansion: homeDirectoryForTildeExpansion
+            ) {
+            return existing
+        }
+
+        return replacement
+    }
+
     static func orderedPaneIds(tree: ExternalTreeNode) -> [String] {
         switch tree {
         case .pane(let pane):
@@ -4699,6 +5028,7 @@ enum SidebarBranchOrdering {
         panelBranches: [UUID: SidebarGitBranchState],
         panelDirectories: [UUID: String],
         defaultDirectory: String?,
+        homeDirectoryForTildeExpansion: String?,
         fallbackBranch: SidebarGitBranchState?
     ) -> [BranchDirectoryEntry] {
         struct EntryKey: Hashable {
@@ -4712,20 +5042,7 @@ enum SidebarBranchOrdering {
             var directory: String?
         }
 
-        func normalized(_ text: String?) -> String? {
-            guard let text else { return nil }
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-
-        func canonicalDirectoryKey(_ directory: String?) -> String? {
-            guard let directory = normalized(directory) else { return nil }
-            let expanded = NSString(string: directory).expandingTildeInPath
-            let standardized = NSString(string: expanded).standardizingPath
-            let cleaned = standardized.trimmingCharacters(in: .whitespacesAndNewlines)
-            return cleaned.isEmpty ? nil : cleaned
-        }
-
+        let normalized = normalizedDirectory
         let normalizedFallbackBranch = normalized(fallbackBranch?.branch)
         let shouldUseFallbackBranchPerPanel = !orderedPanelIds.contains {
             normalized(panelBranches[$0]?.branch) != nil
@@ -4739,7 +5056,7 @@ enum SidebarBranchOrdering {
         for panelId in orderedPanelIds {
             let panelBranch = normalized(panelBranches[panelId]?.branch)
             let branch = panelBranch ?? defaultBranchForPanels
-            let directory = normalized(panelDirectories[panelId] ?? defaultDirectory)
+            let directory = normalized(panelDirectories[panelId])
             guard branch != nil || directory != nil else { continue }
 
             let panelDirty = panelBranch != nil
@@ -4747,7 +5064,10 @@ enum SidebarBranchOrdering {
                 : defaultBranchDirty
 
             let key: EntryKey
-            if let directoryKey = canonicalDirectoryKey(directory) {
+            if let directoryKey = canonicalDirectoryKey(
+                directory,
+                homeDirectoryForTildeExpansion: homeDirectoryForTildeExpansion
+            ) {
                 // Keep one line per directory and allow the latest branch state to overwrite.
                 key = EntryKey(directory: directoryKey, branch: nil)
             } else {
@@ -4764,9 +5084,11 @@ enum SidebarBranchOrdering {
                     } else if existing.branch == nil {
                         existing.isDirty = panelDirty
                     }
-                    if let directory {
-                        existing.directory = directory
-                    }
+                    existing.directory = preferredDisplayedDirectory(
+                        existing: existing.directory,
+                        replacement: directory,
+                        homeDirectoryForTildeExpansion: homeDirectoryForTildeExpansion
+                    )
                     entries[key] = existing
                 } else if panelDirty {
                     existing.isDirty = true
@@ -4891,6 +5213,10 @@ final class Workspace: Identifiable, ObservableObject {
     @Published private(set) var panelCustomTitles: [UUID: String] = [:]
     @Published private(set) var pinnedPanelIds: Set<UUID> = []
     @Published private(set) var manualUnreadPanelIds: Set<UUID> = []
+    @Published private(set) var tmuxLayoutSnapshot: LayoutSnapshot?
+    @Published private(set) var tmuxWorkspaceFlashPanelId: UUID?
+    @Published private(set) var tmuxWorkspaceFlashReason: WorkspaceAttentionFlashReason?
+    @Published private(set) var tmuxWorkspaceFlashToken: UInt64 = 0
     private var manualUnreadMarkedAt: [UUID: Date] = [:]
     nonisolated private static let manualUnreadFocusGraceInterval: TimeInterval = 0.2
     nonisolated private static let manualUnreadClearDelayAfterFocusFlash: TimeInterval = 0.2
@@ -5127,6 +5453,7 @@ final class Workspace: Identifiable, ObservableObject {
             initialCommand: initialTerminalCommand,
             initialEnvironmentOverrides: initialTerminalEnvironment
         )
+        configureTerminalPanel(terminalPanel)
         panels[terminalPanel.id] = terminalPanel
         panelTitles[terminalPanel.id] = terminalPanel.displayTitle
         seedTerminalInheritanceFontPoints(panelId: terminalPanel.id, configTemplate: configTemplate)
@@ -5177,6 +5504,7 @@ final class Workspace: Identifiable, ObservableObject {
             }
             bonsplitController.selectTab(initialTabId)
         }
+        tmuxLayoutSnapshot = bonsplitController.layoutSnapshot()
     }
 
     deinit {
@@ -5266,9 +5594,12 @@ final class Workspace: Identifiable, ObservableObject {
         let isLoading: Bool
         let isPinned: Bool
         let directory: String?
+        let ttyName: String?
         let cachedTitle: String?
         let customTitle: String?
         let manuallyUnread: Bool
+        let isRemoteTerminal: Bool
+        let remoteRelayPort: Int?
     }
 
     private var detachingTabIds: Set<TabID> = []
@@ -5293,6 +5624,19 @@ final class Workspace: Identifiable, ObservableObject {
 
     func surfaceIdFromPanelId(_ panelId: UUID) -> TabID? {
         surfaceIdToPanelId.first { $0.value == panelId }?.key
+    }
+
+    private func configureTerminalPanel(_ terminalPanel: TerminalPanel) {
+        terminalPanel.onRequestWorkspacePaneFlash = { [weak self, weak terminalPanel] reason in
+            guard let self, let terminalPanel else { return }
+            self.triggerWorkspacePaneFlash(panelId: terminalPanel.id, reason: reason)
+        }
+    }
+
+    private func triggerWorkspacePaneFlash(panelId: UUID, reason: WorkspaceAttentionFlashReason) {
+        tmuxWorkspaceFlashPanelId = panelId
+        tmuxWorkspaceFlashReason = reason
+        tmuxWorkspaceFlashToken &+= 1
     }
 
 
@@ -5456,7 +5800,31 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     private func hasUnreadNotification(panelId: UUID) -> Bool {
-        AppDelegate.shared?.notificationStore?.hasUnreadNotification(forTabId: id, surfaceId: panelId) ?? false
+        AppDelegate.shared?.notificationStore?.hasVisibleNotificationIndicator(forTabId: id, surfaceId: panelId) ?? false
+    }
+
+    private func attentionPersistentState() -> WorkspaceAttentionPersistentState {
+        let notificationStore = AppDelegate.shared?.notificationStore
+        let unreadPanelIDs = Set(
+            panels.keys.filter {
+                notificationStore?.hasUnreadNotification(forTabId: id, surfaceId: $0) ?? false
+            }
+        )
+        return WorkspaceAttentionPersistentState(
+            unreadPanelIDs: unreadPanelIDs,
+            focusedReadPanelID: notificationStore?.focusedReadIndicatorSurfaceId(forTabId: id),
+            manualUnreadPanelIDs: manualUnreadPanelIds
+        )
+    }
+
+    private func requestAttentionFlash(panelId: UUID, reason: WorkspaceAttentionFlashReason) {
+        let decision = WorkspaceAttentionCoordinator.decideFlash(
+            targetPanelID: panelId,
+            reason: reason,
+            persistentState: attentionPersistentState()
+        )
+        guard decision.isAllowed else { return }
+        panels[panelId]?.triggerFlash(reason: reason)
     }
 
     private func syncUnreadBadgeStateForPanel(_ panelId: UUID) {
@@ -5933,6 +6301,77 @@ final class Workspace: Identifiable, ObservableObject {
         )
     }
 
+    private func normalizedSidebarDirectory(_ directory: String?) -> String? {
+        guard let directory else { return nil }
+        let trimmed = directory.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func sidebarHomeDirectoryForCanonicalization(
+        resolvedPanelDirectories: [UUID: String]
+    ) -> String? {
+        if isRemoteWorkspace {
+            return SidebarBranchOrdering.inferredRemoteHomeDirectory(
+                from: Array(resolvedPanelDirectories.values),
+                fallbackDirectory: normalizedSidebarDirectory(currentDirectory)
+            )
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.path
+    }
+
+    private func sidebarResolvedDirectory(for panelId: UUID) -> String? {
+        if let directory = normalizedSidebarDirectory(panelDirectories[panelId]) {
+            return directory
+        }
+        if let requestedDirectory = normalizedSidebarDirectory(
+            terminalPanel(for: panelId)?.requestedWorkingDirectory
+        ) {
+            return requestedDirectory
+        }
+        guard panelId == focusedPanelId else { return nil }
+        return normalizedSidebarDirectory(currentDirectory)
+    }
+
+    private func sidebarResolvedPanelDirectories(orderedPanelIds: [UUID]) -> [UUID: String] {
+        var resolved: [UUID: String] = [:]
+        for panelId in orderedPanelIds {
+            if let directory = sidebarResolvedDirectory(for: panelId) {
+                resolved[panelId] = directory
+            }
+        }
+        return resolved
+    }
+
+    func sidebarDirectoriesInDisplayOrder(orderedPanelIds: [UUID]) -> [String] {
+        let resolvedDirectories = sidebarResolvedPanelDirectories(orderedPanelIds: orderedPanelIds)
+        let homeDirectoryForCanonicalization = sidebarHomeDirectoryForCanonicalization(
+            resolvedPanelDirectories: resolvedDirectories
+        )
+        var ordered: [String] = []
+        var seen: Set<String> = []
+
+        for panelId in orderedPanelIds {
+            guard let directory = resolvedDirectories[panelId],
+                  let key = SidebarBranchOrdering.canonicalDirectoryKey(
+                      directory,
+                      homeDirectoryForTildeExpansion: homeDirectoryForCanonicalization
+                  ) else { continue }
+            if seen.insert(key).inserted {
+                ordered.append(directory)
+            }
+        }
+
+        if ordered.isEmpty, let fallbackDirectory = normalizedSidebarDirectory(currentDirectory) {
+            return [fallbackDirectory]
+        }
+
+        return ordered
+    }
+
+    func sidebarDirectoriesInDisplayOrder() -> [String] {
+        sidebarDirectoriesInDisplayOrder(orderedPanelIds: sidebarOrderedPanelIds())
+    }
+
     func sidebarGitBranchesInDisplayOrder(orderedPanelIds: [UUID]) -> [SidebarGitBranchState] {
         SidebarBranchOrdering
             .orderedUniqueBranches(
@@ -5950,11 +6389,15 @@ final class Workspace: Identifiable, ObservableObject {
     func sidebarBranchDirectoryEntriesInDisplayOrder(
         orderedPanelIds: [UUID]
     ) -> [SidebarBranchOrdering.BranchDirectoryEntry] {
-        SidebarBranchOrdering.orderedUniqueBranchDirectoryEntries(
+        let resolvedDirectories = sidebarResolvedPanelDirectories(orderedPanelIds: orderedPanelIds)
+        return SidebarBranchOrdering.orderedUniqueBranchDirectoryEntries(
             orderedPanelIds: orderedPanelIds,
             panelBranches: panelGitBranches,
-            panelDirectories: panelDirectories,
-            defaultDirectory: currentDirectory,
+            panelDirectories: resolvedDirectories,
+            defaultDirectory: normalizedSidebarDirectory(currentDirectory),
+            homeDirectoryForTildeExpansion: sidebarHomeDirectoryForCanonicalization(
+                resolvedPanelDirectories: resolvedDirectories
+            ),
             fallbackBranch: gitBranch
         )
     }
@@ -6001,12 +6444,42 @@ final class Workspace: Identifiable, ObservableObject {
         remoteConfiguration != nil
     }
 
+    @MainActor
+    func isRemoteTerminalSurface(_ panelId: UUID) -> Bool {
+        activeRemoteTerminalSurfaceIds.contains(panelId)
+    }
+
     var remoteDisplayTarget: String? {
         remoteConfiguration?.displayTarget
     }
 
     var hasActiveRemoteTerminalSessions: Bool {
         activeRemoteTerminalSessionCount > 0
+    }
+
+    @MainActor
+    func uploadDroppedFilesForRemoteTerminal(
+        _ fileURLs: [URL],
+        operation: TerminalImageTransferOperation,
+        completion: @escaping (Result<[String], Error>) -> Void
+    ) {
+        guard let controller = remoteSessionController else {
+            completion(.failure(RemoteDropUploadError.unavailable))
+            return
+        }
+        controller.uploadDroppedFiles(fileURLs, operation: operation, completion: completion)
+    }
+
+    @MainActor
+    func uploadDroppedFilesForRemoteTerminal(
+        _ fileURLs: [URL],
+        completion: @escaping (Result<[String], Error>) -> Void
+    ) {
+        uploadDroppedFilesForRemoteTerminal(
+            fileURLs,
+            operation: TerminalImageTransferOperation(),
+            completion: completion
+        )
     }
 
     func remoteStatusPayload() -> [String: Any] {
@@ -6379,7 +6852,8 @@ final class Workspace: Identifiable, ObservableObject {
 
     private func rememberTerminalConfigInheritanceSource(_ terminalPanel: TerminalPanel) {
         lastTerminalConfigInheritancePanelId = terminalPanel.id
-        if let sourceSurface = terminalPanel.surface.surface,
+        if terminalPanel.surface.hasLiveSurface,
+           let sourceSurface = terminalPanel.surface.surface,
            let runtimePoints = cmuxCurrentSurfaceFontSizePoints(sourceSurface) {
             let existing = terminalInheritanceFontPointsByPanelId[terminalPanel.id]
             if existing == nil || abs((existing ?? runtimePoints) - runtimePoints) > 0.05 {
@@ -6477,7 +6951,8 @@ final class Workspace: Identifiable, ObservableObject {
             preferredPanelId: preferredPanelId,
             inPane: preferredPaneId
         ) {
-            guard let sourceSurface = terminalPanel.surface.surface else { continue }
+            guard terminalPanel.surface.hasLiveSurface,
+                  let sourceSurface = terminalPanel.surface.surface else { continue }
             var config = cmuxInheritedSurfaceConfig(
                 sourceSurface: sourceSurface,
                 context: GHOSTTY_SURFACE_CONTEXT_SPLIT
@@ -6566,6 +7041,7 @@ final class Workspace: Identifiable, ObservableObject {
             portOrdinal: portOrdinal,
             initialCommand: remoteTerminalStartupCommand
         )
+        configureTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
         panelTitles[newPanel.id] = newPanel.displayTitle
         if remoteTerminalStartupCommand != nil {
@@ -6655,6 +7131,7 @@ final class Workspace: Identifiable, ObservableObject {
             initialCommand: remoteTerminalStartupCommand,
             additionalEnvironment: startupEnvironment
         )
+        configureTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
         panelTitles[newPanel.id] = newPanel.displayTitle
         if remoteTerminalStartupCommand != nil {
@@ -7461,6 +7938,11 @@ final class Workspace: Identifiable, ObservableObject {
         if let directory = detached.directory {
             panelDirectories[detached.panelId] = directory
         }
+        if let ttyName = detached.ttyName?.trimmingCharacters(in: .whitespacesAndNewlines), !ttyName.isEmpty {
+            surfaceTTYNames[detached.panelId] = ttyName
+        } else {
+            surfaceTTYNames.removeValue(forKey: detached.panelId)
+        }
         if let cachedTitle = detached.cachedTitle {
             panelTitles[detached.panelId] = cachedTitle
         }
@@ -7493,6 +7975,7 @@ final class Workspace: Identifiable, ObservableObject {
         ) else {
             panels.removeValue(forKey: detached.panelId)
             panelDirectories.removeValue(forKey: detached.panelId)
+            surfaceTTYNames.removeValue(forKey: detached.panelId)
             panelTitles.removeValue(forKey: detached.panelId)
             panelCustomTitles.removeValue(forKey: detached.panelId)
             pinnedPanelIds.remove(detached.panelId)
@@ -7509,6 +7992,11 @@ final class Workspace: Identifiable, ObservableObject {
         }
 
         surfaceIdToPanelId[newTabId] = detached.panelId
+        if detached.isRemoteTerminal,
+           let detachedRelayPort = detached.remoteRelayPort,
+           detachedRelayPort == remoteConfiguration?.relayPort {
+            trackRemoteTerminalSurface(detached.panelId)
+        }
         if let index {
             _ = bonsplitController.reorderTab(newTabId, toIndex: index)
         }
@@ -7762,8 +8250,10 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     func moveFocus(direction: NavigationDirection) {
+        let previousFocusedPanelId = focusedPanelId
+
         // Unfocus the currently-focused panel before navigating.
-        if let prevPanelId = focusedPanelId, let prev = panels[prevPanelId] {
+        if let prevPanelId = previousFocusedPanelId, let prev = panels[prevPanelId] {
             prev.unfocus()
         }
 
@@ -7775,6 +8265,7 @@ final class Workspace: Identifiable, ObservableObject {
            let tabId = bonsplitController.selectedTab(inPane: paneId)?.id {
             applyTabSelection(tabId: tabId, inPane: paneId)
         }
+
     }
 
     // MARK: - Surface Navigation
@@ -7879,7 +8370,7 @@ final class Workspace: Identifiable, ObservableObject {
     // MARK: - Flash/Notification Support
 
     func triggerFocusFlash(panelId: UUID) {
-        panels[panelId]?.triggerFlash()
+        requestAttentionFlash(panelId: panelId, reason: .navigation)
     }
 
     func triggerNotificationFocusFlash(
@@ -7887,7 +8378,7 @@ final class Workspace: Identifiable, ObservableObject {
         requiresSplit: Bool = false,
         shouldFocus: Bool = true
     ) {
-        guard let terminalPanel = terminalPanel(for: panelId) else { return }
+        guard terminalPanel(for: panelId) != nil else { return }
         if shouldFocus {
             focusPanel(panelId)
         }
@@ -7895,11 +8386,18 @@ final class Workspace: Identifiable, ObservableObject {
         if requiresSplit && !isSplit {
             return
         }
-        terminalPanel.triggerFlash()
+        requestAttentionFlash(panelId: panelId, reason: .notificationArrival)
+    }
+
+    func triggerNotificationDismissFlash(panelId: UUID) {
+        guard terminalPanel(for: panelId) != nil else { return }
+        requestAttentionFlash(panelId: panelId, reason: .notificationDismiss)
     }
 
     func triggerDebugFlash(panelId: UUID) {
-        triggerNotificationFocusFlash(panelId: panelId, requiresSplit: false, shouldFocus: true)
+        guard panels[panelId] != nil else { return }
+        focusPanel(panelId)
+        requestAttentionFlash(panelId: panelId, reason: .debug)
     }
 
     // MARK: - Portal Lifecycle
@@ -7937,6 +8435,7 @@ final class Workspace: Identifiable, ObservableObject {
             configTemplate: inheritedConfig,
             portOrdinal: portOrdinal
         )
+        configureTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
         panelTitles[newPanel.id] = newPanel.displayTitle
         seedTerminalInheritanceFontPoints(panelId: newPanel.id, configTemplate: inheritedConfig)
@@ -8801,8 +9300,28 @@ extension Workspace: BonsplitDelegate {
     @MainActor
     private func confirmClosePanel(for tabId: TabID) async -> Bool {
         let alert = NSAlert()
+
         alert.messageText = String(localized: "dialog.closeTab.title", defaultValue: "Close tab?")
-        alert.informativeText = String(localized: "dialog.closeTab.message", defaultValue: "This will close the current tab.")
+
+        let panelName: String? = {
+            guard let panelId = panelIdFromSurfaceId(tabId) else { return nil }
+            if let custom = panelCustomTitles[panelId], !custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return custom
+            }
+            if let title = panelTitles[panelId], !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return title
+            }
+            if let dir = panelDirectories[panelId], !dir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (dir as NSString).lastPathComponent
+            }
+            return nil
+        }()
+
+        if let panelName {
+            alert.informativeText = String(localized: "dialog.closeTab.messageNamed", defaultValue: "This will close \"\(panelName)\".")
+        } else {
+            alert.informativeText = String(localized: "dialog.closeTab.message", defaultValue: "This will close the current tab.")
+        }
         alert.alertStyle = .warning
         alert.addButton(withTitle: String(localized: "dialog.closeTab.close", defaultValue: "Close"))
         alert.addButton(withTitle: String(localized: "dialog.closeTab.cancel", defaultValue: "Cancel"))
@@ -9312,9 +9831,14 @@ extension Workspace: BonsplitDelegate {
                 isLoading: browserPanel?.isLoading ?? false,
                 isPinned: pinnedPanelIds.contains(panelId),
                 directory: panelDirectories[panelId],
+                ttyName: surfaceTTYNames[panelId],
                 cachedTitle: cachedTitle,
                 customTitle: panelCustomTitles[panelId],
-                manuallyUnread: manualUnreadPanelIds.contains(panelId)
+                manuallyUnread: manualUnreadPanelIds.contains(panelId),
+                isRemoteTerminal: activeRemoteTerminalSurfaceIds.contains(panelId),
+                remoteRelayPort: activeRemoteTerminalSurfaceIds.contains(panelId)
+                    ? remoteConfiguration?.relayPort
+                    : nil
             )
         } else {
             if let closedBrowserRestoreSnapshot {
@@ -9614,6 +10138,7 @@ extension Workspace: BonsplitDelegate {
                         configTemplate: inheritedConfig,
                         portOrdinal: portOrdinal
                     )
+                    configureTerminalPanel(replacementPanel)
                     panels[replacementPanel.id] = replacementPanel
                     panelTitles[replacementPanel.id] = replacementPanel.displayTitle
                     seedTerminalInheritanceFontPoints(panelId: replacementPanel.id, configTemplate: inheritedConfig)
@@ -9680,6 +10205,7 @@ extension Workspace: BonsplitDelegate {
             configTemplate: inheritedConfig,
             portOrdinal: portOrdinal
         )
+        configureTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
         panelTitles[newPanel.id] = newPanel.displayTitle
         seedTerminalInheritanceFontPoints(panelId: newPanel.id, configTemplate: inheritedConfig)
@@ -9774,7 +10300,7 @@ extension Workspace: BonsplitDelegate {
     }
 
     func splitTabBar(_ controller: BonsplitController, didChangeGeometry snapshot: LayoutSnapshot) {
-        _ = snapshot
+        tmuxLayoutSnapshot = snapshot
         scheduleTerminalGeometryReconcile()
         if !isDetachingCloseTransaction {
             scheduleFocusReconcile()
