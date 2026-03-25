@@ -853,6 +853,91 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         )
     }
 
+    func testBrowserFindFieldKeepsFocusAfterNewWorkspaceRoundTrip() {
+        let app = XCUIApplication()
+        app.launchEnvironment["CMUX_SOCKET_PATH"] = socketPath
+        app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_RECORD_ONLY"] = "1"
+        app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_PATH"] = dataPath
+        launchAndEnsureForeground(app)
+
+        let window = app.windows.firstMatch
+        _ = window.waitForExistence(timeout: 2.0)
+
+        app.typeKey("d", modifierFlags: [.command])
+        XCTAssertTrue(
+            waitForDataMatch(timeout: 6.0) { data in
+                guard data["lastSplitDirection"] == "right" else { return false }
+                guard let paneCountAfterSplit = Int(data["paneCountAfterSplit"] ?? "") else { return false }
+                return paneCountAfterSplit >= 2
+            },
+            "Expected Cmd+D to create a split before opening the browser. data=\(String(describing: loadData()))"
+        )
+
+        app.typeKey("l", modifierFlags: [.command])
+
+        let omnibar = app.textFields["BrowserOmnibarTextField"].firstMatch
+        XCTAssertTrue(omnibar.waitForExistence(timeout: 8.0), "Expected browser omnibar after Cmd+L")
+
+        app.typeKey("a", modifierFlags: [.command])
+        app.typeKey(XCUIKeyboardKey.delete.rawValue, modifierFlags: [])
+        app.typeText("example.com")
+        app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+
+        XCTAssertTrue(
+            waitForOmnibarToContainExampleDomain(omnibar, timeout: 8.0),
+            "Expected browser navigation to example domain before opening find. value=\(String(describing: omnibar.value))"
+        )
+
+        app.typeKey("f", modifierFlags: [.command])
+
+        let findField = app.textFields["BrowserFindSearchTextField"].firstMatch
+        XCTAssertTrue(findField.waitForExistence(timeout: 6.0), "Expected browser find field after Cmd+F")
+
+        app.typeText("seed")
+        XCTAssertTrue(
+            waitForCondition(timeout: 4.0) {
+                ((findField.value as? String) ?? "") == "seed"
+            },
+            "Expected browser find field to capture initial typing. value=\(String(describing: findField.value))"
+        )
+
+        app.typeKey("p", modifierFlags: [.command, .shift])
+
+        let paletteSearchField = app.textFields["CommandPaletteSearchField"].firstMatch
+        XCTAssertTrue(paletteSearchField.waitForExistence(timeout: 5.0), "Expected command palette search field")
+        paletteSearchField.click()
+        paletteSearchField.typeText("New Workspace")
+
+        let firstResultRow = app.descendants(matching: .any).matching(identifier: "CommandPaletteResultRow.0").firstMatch
+        XCTAssertTrue(firstResultRow.waitForExistence(timeout: 5.0), "Expected command palette results for New Workspace")
+        app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [])
+
+        XCTAssertTrue(
+            waitForNonExistence(paletteSearchField, timeout: 5.0),
+            "Expected command palette to dismiss after creating a workspace"
+        )
+
+        app.typeKey("1", modifierFlags: [.command])
+
+        let restoredFindField = app.textFields["BrowserFindSearchTextField"].firstMatch
+        XCTAssertTrue(restoredFindField.waitForExistence(timeout: 6.0), "Expected browser find field after returning to workspace 1")
+        XCTAssertTrue(
+            waitForCondition(timeout: 4.0) {
+                ((restoredFindField.value as? String) ?? "") == "seed"
+            },
+            "Expected existing browser find query to persist after returning. value=\(String(describing: restoredFindField.value))"
+        )
+
+        app.typeText("x")
+        XCTAssertTrue(
+            waitForCondition(timeout: 4.0) {
+                ((restoredFindField.value as? String) ?? "") == "seedx"
+            },
+            "Expected typing after returning from a new workspace to stay in the browser find field. " +
+                "findValue=\(String(describing: restoredFindField.value)) omnibarValue=\(String(describing: omnibar.value))"
+        )
+    }
+
     private enum FindFocusRoute {
         case cmdOptionArrows
         case cmdCtrlLetters
