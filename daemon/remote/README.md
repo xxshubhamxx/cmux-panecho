@@ -2,7 +2,7 @@
 
 Zig remote daemon for `cmux ssh` bootstrap, direct TLS attach, capability negotiation, PTY-backed terminal sessions, and CLI relay.
 
-Session state now lives in Zig and uses `ghostty-vt` as the terminal-state engine. The session core follows the same PTY ownership, VT feeding, and replay discipline used in [vendor/zmx](../../../vendor/zmx), while keeping cmux's existing multi-session JSON-RPC server shape instead of zmx's one-daemon-per-session Unix-socket model.
+Session state now lives in Zig and uses `ghostty-vt` as the terminal-state engine. The session core follows the same PTY ownership, VT feeding, and replay discipline used in [references/zmx](../../../references/zmx), while keeping cmux's existing multi-session JSON-RPC server shape instead of zmx's one-daemon-per-session Unix-socket model.
 
 ## Commands
 

@@ -17,6 +17,7 @@ const ParsedArgs = struct {
     socket_path: ?[]const u8 = null,
     session_name: ?[]const u8 = null,
     detached: bool = false,
+    quiet: bool = false,
     command_text: ?[]u8 = null,
 
     pub fn deinit(self: *ParsedArgs, alloc: std.mem.Allocator) void {
@@ -35,20 +36,25 @@ pub fn run(args: []const []const u8, stderr: anytype, stdout: anytype) !u8 {
     };
     defer parsed.deinit(alloc);
 
-    const socket_path = parsed.socket_path orelse {
+    const socket_path = parsed.socket_path orelse defaultSocketPath(alloc) orelse {
         try usage(stderr);
         return 2;
     };
 
     var client = rpc_client.Client.init(alloc, socket_path);
+    defer client.deinit();
     switch (parsed.command) {
         .attach => return cli_attach.run(alloc, socket_path, parsed.session_name.?, stderr),
         .list => return runList(&client, stdout, stderr),
         .status => return runStatus(&client, stdout, stderr, parsed.session_name.?),
         .history => return runHistory(&client, stdout, stderr, parsed.session_name.?),
         .kill => return runKill(&client, stdout, stderr, parsed.session_name.?),
-        .new => return runNew(&client, stdout, stderr, parsed.session_name.?, parsed.command_text, parsed.detached),
+        .new => return runNew(&client, stdout, stderr, parsed.session_name.?, parsed.command_text, parsed.detached, parsed.quiet),
     }
+}
+
+fn defaultSocketPath(alloc: std.mem.Allocator) ?[]const u8 {
+    return std.process.getEnvVarOwned(alloc, "CMUXD_UNIX_PATH") catch null;
 }
 
 pub fn parseArgs(alloc: std.mem.Allocator, args: []const []const u8) !ParsedArgs {
@@ -69,6 +75,10 @@ pub fn parseArgs(alloc: std.mem.Allocator, args: []const []const u8) !ParsedArgs
         }
         if (std.mem.eql(u8, arg, "--detached")) {
             parsed.detached = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--quiet")) {
+            parsed.quiet = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--")) {
@@ -95,6 +105,7 @@ pub fn parseArgs(alloc: std.mem.Allocator, args: []const []const u8) !ParsedArgs
 fn switchCommand(raw: []const u8) ?Command {
     if (std.mem.eql(u8, raw, "attach")) return .attach;
     if (std.mem.eql(u8, raw, "ls")) return .list;
+    if (std.mem.eql(u8, raw, "list")) return .list;
     if (std.mem.eql(u8, raw, "status")) return .status;
     if (std.mem.eql(u8, raw, "history")) return .history;
     if (std.mem.eql(u8, raw, "kill")) return .kill;
@@ -111,19 +122,53 @@ fn runList(client: *rpc_client.Client, stdout: anytype, stderr: anytype) !u8 {
     defer response.deinit();
 
     const sessions = response.value.object.get("result").?.object.get("sessions").?.array;
+    if (sessions.items.len == 0) {
+        try stdout.print("No sessions\n", .{});
+        try stdout.flush();
+        return 0;
+    }
+
     for (sessions.items) |item| {
-        try stdout.print("{s}\n", .{item.object.get("session_id").?.string});
+        const session_id = item.object.get("session_id").?.string;
+        var status = try sessionStatus(client, session_id, stderr);
+        defer status.deinit();
+
+        const result = status.value.object.get("result").?.object;
+        const effective_cols = try i64FromValue(result.get("effective_cols").?);
+        const effective_rows = try i64FromValue(result.get("effective_rows").?);
+        const attachments = result.get("attachments").?.array;
+
+        if (attachments.items.len == 0) {
+            try stdout.print("session {s} {d}x{d} [detached]\n", .{
+                session_id,
+                effective_cols,
+                effective_rows,
+            });
+            continue;
+        }
+
+        try stdout.print("session {s} {d}x{d} attachments={d}\n", .{
+            session_id,
+            effective_cols,
+            effective_rows,
+            attachments.items.len,
+        });
+        for (attachments.items, 0..) |attachment, index| {
+            const branch = if (index + 1 == attachments.items.len) "└──" else "├──";
+            try stdout.print("{s} {s} {d}x{d}\n", .{
+                branch,
+                attachment.object.get("attachment_id").?.string,
+                try i64FromValue(attachment.object.get("cols").?),
+                try i64FromValue(attachment.object.get("rows").?),
+            });
+        }
     }
     try stdout.flush();
     return 0;
 }
 
 fn runStatus(client: *rpc_client.Client, stdout: anytype, stderr: anytype, session_name: []const u8) !u8 {
-    var response = try call(client, .{
-        .id = "1",
-        .method = "session.status",
-        .params = .{ .session_id = session_name },
-    }, stderr);
+    var response = try sessionStatus(client, session_name, stderr);
     defer response.deinit();
 
     const result = response.value.object.get("result").?.object;
@@ -134,6 +179,14 @@ fn runStatus(client: *rpc_client.Client, stdout: anytype, stderr: anytype, sessi
     });
     try stdout.flush();
     return 0;
+}
+
+fn sessionStatus(client: *rpc_client.Client, session_name: []const u8, stderr: anytype) !std.json.Parsed(std.json.Value) {
+    return call(client, .{
+        .id = "1",
+        .method = "session.status",
+        .params = .{ .session_id = session_name },
+    }, stderr);
 }
 
 fn runHistory(client: *rpc_client.Client, stdout: anytype, stderr: anytype, session_name: []const u8) !u8 {
@@ -164,26 +217,43 @@ fn runKill(client: *rpc_client.Client, stdout: anytype, stderr: anytype, session
     return 0;
 }
 
-fn runNew(client: *rpc_client.Client, stdout: anytype, stderr: anytype, session_name: []const u8, command_text: ?[]const u8, detached: bool) !u8 {
+fn runNew(client: *rpc_client.Client, stdout: anytype, stderr: anytype, session_name: []const u8, command_text: ?[]const u8, detached: bool, quiet: bool) !u8 {
     const command = command_text orelse "exec ${SHELL:-/bin/sh} -l";
+    const size = cli_attach.currentAttachSize(.{ .cols = 80, .rows = 24 });
     var response = try call(client, .{
         .id = "1",
         .method = "terminal.open",
         .params = .{
             .session_id = session_name,
             .command = command,
-            .cols = 80,
-            .rows = 24,
+            .cols = size.cols,
+            .rows = size.rows,
         },
     }, stderr);
     defer response.deinit();
 
     const result = response.value.object.get("result").?.object;
     const created_session = result.get("session_id").?.string;
-    try stdout.print("{s}\n", .{created_session});
-    try stdout.flush();
+    const bootstrap_attachment_id = result.get("attachment_id").?.string;
+    if (!quiet) {
+        try stdout.print("{s}\n", .{created_session});
+        try stdout.flush();
+    }
+    try detachSession(client, created_session, bootstrap_attachment_id, stderr);
     if (detached) return 0;
     return cli_attach.run(client.alloc, client.socket_path, created_session, stderr);
+}
+
+fn detachSession(client: *rpc_client.Client, session_name: []const u8, attachment_id: []const u8, stderr: anytype) !void {
+    var response = try call(client, .{
+        .id = "1",
+        .method = "session.detach",
+        .params = .{
+            .session_id = session_name,
+            .attachment_id = attachment_id,
+        },
+    }, stderr);
+    response.deinit();
 }
 
 fn call(client: *rpc_client.Client, request: anytype, stderr: anytype) !std.json.Parsed(std.json.Value) {
@@ -208,7 +278,12 @@ fn call(client: *rpc_client.Client, request: anytype, stderr: anytype) !std.json
 }
 
 fn usage(stderr: anytype) !void {
-    try stderr.print("Usage: cmuxd-remote session <attach|ls|status|history|kill|new> [name] --socket <path> [--detached] [-- <command>]\n", .{});
+    try stderr.print("Usage:\n", .{});
+    try stderr.print("  cmuxd-remote session ls|list [--socket <path>]\n", .{});
+    try stderr.print("  cmuxd-remote session attach|status|history|kill <name> [--socket <path>]\n", .{});
+    try stderr.print("  cmuxd-remote session new <name> [--socket <path>] [--detached] [--quiet] [-- <command>]\n", .{});
+    try stderr.print("Defaults:\n", .{});
+    try stderr.print("  --socket defaults to $CMUXD_UNIX_PATH when set.\n", .{});
     try stderr.flush();
 }
 
@@ -227,4 +302,24 @@ test "parse session ls" {
 
     try std.testing.expectEqual(Command.list, parsed.command);
     try std.testing.expectEqualStrings("/tmp/cmuxd.sock", parsed.socket_path.?);
+}
+
+test "parse session list" {
+    var parsed = try parseArgs(std.testing.allocator, &.{ "list", "--socket", "/tmp/cmuxd.sock" });
+    defer parsed.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(Command.list, parsed.command);
+    try std.testing.expectEqualStrings("/tmp/cmuxd.sock", parsed.socket_path.?);
+}
+
+test "parse session new quiet detached" {
+    var parsed = try parseArgs(std.testing.allocator, &.{ "new", "dev", "--socket", "/tmp/cmuxd.sock", "--quiet", "--detached", "--", "cat" });
+    defer parsed.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(Command.new, parsed.command);
+    try std.testing.expectEqualStrings("dev", parsed.session_name.?);
+    try std.testing.expectEqualStrings("/tmp/cmuxd.sock", parsed.socket_path.?);
+    try std.testing.expect(parsed.quiet);
+    try std.testing.expect(parsed.detached);
+    try std.testing.expectEqualStrings("cat", parsed.command_text.?);
 }

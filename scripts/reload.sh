@@ -133,6 +133,19 @@ sanitize_path() {
   echo "$cleaned"
 }
 
+wait_for_process_pattern_exit() {
+  local pattern="$1"
+  local timeout_s="${2:-10}"
+  local deadline=$((SECONDS + timeout_s))
+  while (( SECONDS < deadline )); do
+    if ! pgrep -f "$pattern" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
 tagged_derived_data_path() {
   local slug="$1"
   echo "$HOME/Library/Developer/Xcode/DerivedData/cmux-${slug}"
@@ -265,6 +278,11 @@ if [[ -n "$TAG" ]]; then
   fi
 fi
 
+LOCAL_REMOTE_DAEMON_BIN="$PWD/daemon/remote/zig/zig-out/bin/cmuxd-remote"
+if [[ -n "${TAG_SLUG:-}" && -d "$PWD/daemon/remote/zig" ]]; then
+  (cd "$PWD/daemon/remote/zig" && zig build -Doptimize=ReleaseFast)
+fi
+
 XCODEBUILD_ARGS=(
   -project GhosttyTabs.xcodeproj
   -scheme cmux
@@ -378,6 +396,10 @@ if [[ -n "$TAG" && "$APP_NAME" != "$SEARCH_APP_NAME" ]]; then
         || /usr/libexec/PlistBuddy -c "Add :LSEnvironment:CMUX_REMOTE_DAEMON_ALLOW_LOCAL_BUILD string 1" "$INFO_PLIST"
       /usr/libexec/PlistBuddy -c "Set :LSEnvironment:CMUXTERM_REPO_ROOT \"${PWD}\"" "$INFO_PLIST" 2>/dev/null \
         || /usr/libexec/PlistBuddy -c "Add :LSEnvironment:CMUXTERM_REPO_ROOT string \"${PWD}\"" "$INFO_PLIST"
+      if [[ -x "$LOCAL_REMOTE_DAEMON_BIN" ]]; then
+        /usr/libexec/PlistBuddy -c "Set :LSEnvironment:CMUX_REMOTE_DAEMON_BINARY \"${LOCAL_REMOTE_DAEMON_BIN}\"" "$INFO_PLIST" 2>/dev/null \
+          || /usr/libexec/PlistBuddy -c "Add :LSEnvironment:CMUX_REMOTE_DAEMON_BINARY string \"${LOCAL_REMOTE_DAEMON_BIN}\"" "$INFO_PLIST"
+      fi
       if [[ -S "$CMUXD_SOCKET" ]]; then
         for PID in $(lsof -t "$CMUXD_SOCKET" 2>/dev/null); do
           kill "$PID" 2>/dev/null || true
@@ -410,15 +432,23 @@ fi
 
 # Ensure any running instance is fully terminated, regardless of DerivedData path.
 /usr/bin/osascript -e "tell application id \"${BUNDLE_ID}\" to quit" >/dev/null 2>&1 || true
-sleep 0.3
 if [[ -z "$TAG" ]]; then
   # Non-tag mode: kill any running instance (across any DerivedData path) to avoid socket conflicts.
   pkill -f "/${BASE_APP_NAME}.app/Contents/MacOS/${BASE_APP_NAME}" || true
+  wait_for_process_pattern_exit "/${BASE_APP_NAME}.app/Contents/MacOS/${BASE_APP_NAME}" 10 || true
 else
   # Tag mode: only kill the tagged instance; allow side-by-side with the main app.
   pkill -f "${APP_NAME}.app/Contents/MacOS/${BASE_APP_NAME}" || true
+  wait_for_process_pattern_exit "${APP_NAME}.app/Contents/MacOS/${BASE_APP_NAME}" 10 || true
+  if [[ -n "${CMUXD_SOCKET:-}" ]]; then
+    pkill -f "cmuxd-remote serve --unix --socket ${CMUXD_SOCKET}" || true
+    wait_for_process_pattern_exit "cmuxd-remote serve --unix --socket ${CMUXD_SOCKET}" 10 || true
+    rm -f "$CMUXD_SOCKET"
+  fi
+  if [[ -n "${CMUX_SOCKET:-}" ]]; then
+    rm -f "$CMUX_SOCKET"
+  fi
 fi
-sleep 0.3
 CMUXD_SRC="$PWD/cmuxd/zig-out/bin/cmuxd"
 if [[ -d "$PWD/cmuxd" ]]; then
   (cd "$PWD/cmuxd" && zig build -Doptimize=ReleaseFast)
@@ -428,6 +458,12 @@ if [[ -x "$CMUXD_SRC" ]]; then
   mkdir -p "$BIN_DIR"
   cp "$CMUXD_SRC" "$BIN_DIR/cmuxd"
   chmod +x "$BIN_DIR/cmuxd"
+fi
+if [[ -x "$LOCAL_REMOTE_DAEMON_BIN" ]]; then
+  BIN_DIR="$APP_PATH/Contents/Resources/bin"
+  mkdir -p "$BIN_DIR"
+  cp "$LOCAL_REMOTE_DAEMON_BIN" "$BIN_DIR/cmuxd-remote"
+  chmod +x "$BIN_DIR/cmuxd-remote"
 fi
 if [[ -d "$PWD/ghostty" ]]; then
   BIN_DIR="$APP_PATH/Contents/Resources/bin"
@@ -458,31 +494,51 @@ fi
 OPEN_CLEAN_ENV=(
   env
   -u CMUX_SOCKET_PATH
+  -u CMUX_SOCKET_MODE
   -u CMUX_WORKSPACE_ID
   -u CMUX_SURFACE_ID
   -u CMUX_TAB_ID
   -u CMUX_PANEL_ID
   -u CMUXD_UNIX_PATH
+  -u CMUX_REMOTE_DAEMON_BINARY
   -u CMUX_TAG
+  -u CMUX_PORT
+  -u CMUX_PORT_END
+  -u CMUX_PORT_RANGE
   -u CMUX_DEBUG_LOG
   -u CMUX_BUNDLE_ID
   -u CMUX_SHELL_INTEGRATION
+  -u CMUX_SHELL_INTEGRATION_DIR
+  -u CMUX_LOAD_GHOSTTY_ZSH_INTEGRATION
+  -u CMUX_LOAD_GHOSTTY_BASH_INTEGRATION
+  -u CMUX_BUNDLED_CLI_PATH
   -u GHOSTTY_BIN_DIR
   -u GHOSTTY_RESOURCES_DIR
   -u GHOSTTY_SHELL_FEATURES
+  -u GHOSTTY_ZSH_INTEGRATION_LOG
   # Dev shells (including CI/Codex) often force-disable paging by exporting these.
   # Don't leak that into cmux, otherwise `git diff` won't page even with PAGER=less.
   -u GIT_PAGER
   -u GH_PAGER
+  -u TERM
+  -u TERM_PROGRAM
+  -u TERM_PROGRAM_VERSION
+  -u COLORTERM
   -u TERMINFO
+  -u MANPATH
   -u XDG_DATA_DIRS
 )
 
+OPEN_EXTRA_ENV=()
+if [[ -x "$LOCAL_REMOTE_DAEMON_BIN" ]]; then
+  OPEN_EXTRA_ENV+=("CMUX_REMOTE_DAEMON_BINARY=$LOCAL_REMOTE_DAEMON_BIN")
+fi
+
 if [[ -n "${TAG_SLUG:-}" && -n "${CMUX_SOCKET:-}" ]]; then
   # Ensure tag-specific socket paths win even if the caller has CMUX_* overrides.
-  "${OPEN_CLEAN_ENV[@]}" CMUX_TAG="$TAG_SLUG" CMUX_SOCKET_ENABLE=1 CMUX_SOCKET_MODE=automation CMUX_SOCKET_PATH="$CMUX_SOCKET" CMUXD_UNIX_PATH="$CMUXD_SOCKET" CMUX_DEBUG_LOG="$CMUX_DEBUG_LOG" CMUX_REMOTE_DAEMON_ALLOW_LOCAL_BUILD=1 CMUXTERM_REPO_ROOT="$PWD" open -g "$APP_PATH"
+  "${OPEN_CLEAN_ENV[@]}" CMUX_TAG="$TAG_SLUG" CMUX_SOCKET_ENABLE=1 CMUX_SOCKET_MODE=automation CMUX_SOCKET_PATH="$CMUX_SOCKET" CMUXD_UNIX_PATH="$CMUXD_SOCKET" CMUX_DEBUG_LOG="$CMUX_DEBUG_LOG" CMUX_REMOTE_DAEMON_ALLOW_LOCAL_BUILD=1 CMUXTERM_REPO_ROOT="$PWD" "${OPEN_EXTRA_ENV[@]}" open -g "$APP_PATH"
 elif [[ -n "${TAG_SLUG:-}" ]]; then
-  "${OPEN_CLEAN_ENV[@]}" CMUX_TAG="$TAG_SLUG" CMUX_SOCKET_ENABLE=1 CMUX_SOCKET_MODE=automation CMUX_DEBUG_LOG="$CMUX_DEBUG_LOG" CMUX_REMOTE_DAEMON_ALLOW_LOCAL_BUILD=1 CMUXTERM_REPO_ROOT="$PWD" open -g "$APP_PATH"
+  "${OPEN_CLEAN_ENV[@]}" CMUX_TAG="$TAG_SLUG" CMUX_SOCKET_ENABLE=1 CMUX_SOCKET_MODE=automation CMUX_DEBUG_LOG="$CMUX_DEBUG_LOG" CMUX_REMOTE_DAEMON_ALLOW_LOCAL_BUILD=1 CMUXTERM_REPO_ROOT="$PWD" "${OPEN_EXTRA_ENV[@]}" open -g "$APP_PATH"
 else
   echo "/tmp/cmux-debug.sock" > /tmp/cmux-last-socket-path || true
   echo "/tmp/cmux-debug.log" > /tmp/cmux-last-debug-log-path || true

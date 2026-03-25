@@ -17,8 +17,10 @@ pub fn serve(cfg: Config) !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    var service = session_service.Service.init(alloc);
-    defer service.deinit();
+    var shared = SharedService{
+        .service = session_service.Service.init(alloc),
+    };
+    defer shared.service.deinit();
 
     const listener_fd = try createSocket(cfg.socket_path);
     defer {
@@ -28,13 +30,22 @@ pub fn serve(cfg: Config) !void {
 
     while (true) {
         const client_fd = try std.posix.accept(listener_fd, null, null, std.posix.SOCK.CLOEXEC);
-        defer std.posix.close(client_fd);
-
-        handleClient(alloc, &service, client_fd) catch {};
+        const thread = try std.Thread.spawn(.{}, handleClientThread, .{ &shared, client_fd });
+        thread.detach();
     }
 }
 
-fn handleClient(alloc: std.mem.Allocator, service: *session_service.Service, client_fd: std.posix.fd_t) !void {
+const SharedService = struct {
+    mutex: std.Thread.Mutex = .{},
+    service: session_service.Service,
+};
+
+fn handleClientThread(shared: *SharedService, client_fd: std.posix.fd_t) void {
+    handleClient(shared, client_fd) catch {};
+}
+
+fn handleClient(shared: *SharedService, client_fd: std.posix.fd_t) !void {
+    defer std.posix.close(client_fd);
     try local_peer_auth.authorizeClient(client_fd);
 
     var file = std.fs.File{ .handle = client_fd };
@@ -43,16 +54,21 @@ fn handleClient(alloc: std.mem.Allocator, service: *session_service.Service, cli
     const output = &output_writer.interface;
 
     var pending: std.ArrayList(u8) = .empty;
-    defer pending.deinit(alloc);
+    defer pending.deinit(std.heap.page_allocator);
 
     var read_buf: [64 * 1024]u8 = undefined;
     while (true) {
         const n = try file.read(&read_buf);
         if (n == 0) break;
 
-        try pending.appendSlice(alloc, read_buf[0..n]);
+        try pending.appendSlice(std.heap.page_allocator, read_buf[0..n]);
         while (std.mem.indexOfScalar(u8, pending.items, '\n')) |newline_index| {
-            try server_core.handleLine(service, output, pending.items[0..newline_index]);
+            shared.mutex.lock();
+            server_core.handleLine(&shared.service, output, pending.items[0..newline_index]) catch |err| {
+                shared.mutex.unlock();
+                return err;
+            };
+            shared.mutex.unlock();
 
             const remaining = pending.items[newline_index + 1 ..];
             std.mem.copyForwards(u8, pending.items[0..remaining.len], remaining);
@@ -61,7 +77,12 @@ fn handleClient(alloc: std.mem.Allocator, service: *session_service.Service, cli
     }
 
     if (pending.items.len > 0) {
-        try server_core.handleLine(service, output, pending.items);
+        shared.mutex.lock();
+        server_core.handleLine(&shared.service, output, pending.items) catch |err| {
+            shared.mutex.unlock();
+            return err;
+        };
+        shared.mutex.unlock();
     }
 }
 

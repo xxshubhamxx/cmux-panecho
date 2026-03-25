@@ -3458,6 +3458,80 @@ final class GhosttyTerminalViewVisibilityPolicyTests: XCTestCase {
             "Interactive resize should use the immediate portal sync path"
         )
     }
+
+    func testSurfaceResizeDeferralRequiresRealDragOutsideLiveResize() {
+        XCTAssertTrue(
+            GhosttyTerminalView.shouldDeferSurfaceResizeForActiveDrag(
+                hasTabDragPasteboardTypes: true,
+                eventType: .leftMouseDragged,
+                windowInLiveResize: false
+            )
+        )
+    }
+
+    func testSurfaceResizeDeferralSkipsLiveWindowResizeEvenWithTabDragPasteboard() {
+        XCTAssertFalse(
+            GhosttyTerminalView.shouldDeferSurfaceResizeForActiveDrag(
+                hasTabDragPasteboardTypes: true,
+                eventType: .leftMouseDragged,
+                windowInLiveResize: true
+            )
+        )
+    }
+
+    func testSurfaceResizeDeferralSkipsNonDragEvents() {
+        XCTAssertFalse(
+            GhosttyTerminalView.shouldDeferSurfaceResizeForActiveDrag(
+                hasTabDragPasteboardTypes: true,
+                eventType: .leftMouseUp,
+                windowInLiveResize: false
+            )
+        )
+    }
+
+    func testCoreSurfaceTargetSizePrefersLiveScrollBoundsOverStaleContentSizeWidth() {
+        XCTAssertEqual(
+            GhosttySurfaceScrollView.coreSurfaceTargetSize(
+                hostedBounds: CGSize.zero,
+                scrollBounds: CGSize(width: 600, height: 388),
+                contentSize: CGSize(width: 840, height: 388)
+            ),
+            CGSize(width: 600, height: 388)
+        )
+    }
+
+    func testCoreSurfaceTargetSizePrefersLiveScrollBoundsOverStaleContentSizeHeight() {
+        XCTAssertEqual(
+            GhosttySurfaceScrollView.coreSurfaceTargetSize(
+                hostedBounds: CGSize.zero,
+                scrollBounds: CGSize(width: 700, height: 420),
+                contentSize: CGSize(width: 700, height: 588)
+            ),
+            CGSize(width: 700, height: 420)
+        )
+    }
+
+    func testCoreSurfaceTargetSizeFallsBackToContentSizeWhenLiveBoundsUnavailable() {
+        XCTAssertEqual(
+            GhosttySurfaceScrollView.coreSurfaceTargetSize(
+                hostedBounds: CGSize.zero,
+                scrollBounds: CGSize.zero,
+                contentSize: CGSize(width: 700, height: 588)
+            ),
+            CGSize(width: 700, height: 588)
+        )
+    }
+
+    func testCoreSurfaceTargetSizePrefersHostedBoundsDuringPortalResize() {
+        XCTAssertEqual(
+            GhosttySurfaceScrollView.coreSurfaceTargetSize(
+                hostedBounds: CGSize(width: 1000, height: 738),
+                scrollBounds: CGSize(width: 700, height: 388),
+                contentSize: CGSize(width: 700, height: 388)
+            ),
+            CGSize(width: 1000, height: 738)
+        )
+    }
 }
 
 

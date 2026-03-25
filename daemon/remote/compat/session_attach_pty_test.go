@@ -1,8 +1,10 @@
 package compat
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +17,7 @@ func TestSessionAttachRoundTripAndReattach(t *testing.T) {
 
 	bin := daemonBinary(t)
 	socketPath := startUnixDaemon(t, bin)
-	openAndSeedCatSession(t, socketPath, "dev", "")
+	openAndSeedCatSession(t, socketPath, "dev", "hello\n")
 
 	cmd := exec.Command(bin, "session", "attach", "dev", "--socket", socketPath)
 	cmd.Dir = daemonRemoteRoot()
@@ -48,6 +50,225 @@ func TestSessionAttachRoundTripAndReattach(t *testing.T) {
 	}
 }
 
+func TestSessionAttachZshLoginShellStaysAlive(t *testing.T) {
+	t.Parallel()
+
+	if _, err := os.Stat("/bin/zsh"); err != nil {
+		t.Skip("/bin/zsh not available")
+	}
+
+	bin := daemonBinary(t)
+	socketPath := startUnixDaemon(t, bin)
+
+	create := exec.Command(
+		bin,
+		"session", "new", "zsh-login",
+		"--socket", socketPath,
+		"--detached",
+		"--",
+		"exec /bin/zsh -l",
+	)
+	create.Dir = daemonRemoteRoot()
+	output, err := create.CombinedOutput()
+	if err != nil {
+		t.Fatalf("create zsh session: %v\n%s", err, output)
+	}
+
+	attach := exec.Command(bin, "session", "attach", "zsh-login", "--socket", socketPath)
+	attach.Dir = daemonRemoteRoot()
+	ptmx, err := pty.Start(attach)
+	if err != nil {
+		t.Fatalf("pty start attach: %v", err)
+	}
+	defer ptmx.Close()
+
+	var buf bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		_, copyErr := buf.ReadFrom(ptmx)
+		done <- copyErr
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("attach exited unexpectedly: %v\n%s", err, buf.String())
+	case <-time.After(2 * time.Second):
+	}
+
+	writePTY(t, ptmx, "\x1c")
+	if err := attach.Wait(); err != nil {
+		t.Fatalf("detach attach session: %v\n%s", err, buf.String())
+	}
+	if strings.Contains(buf.String(), "UnexpectedEndOfInput") {
+		t.Fatalf("attach output contains daemon crash marker: %q", buf.String())
+	}
+}
+
+func TestSessionAttachPropagatesPTYResize(t *testing.T) {
+	t.Parallel()
+
+	bin := daemonBinary(t)
+	socketPath := startUnixDaemon(t, bin)
+
+	client := newUnixJSONRPCClient(t, socketPath)
+
+	open := client.Call(t, map[string]any{
+		"id": "1",
+		"method": "terminal.open",
+		"params": map[string]any{
+			"session_id": "resize-dev",
+			"command":    "cat",
+			"cols":       80,
+			"rows":       24,
+		},
+	})
+	if ok, _ := open["ok"].(bool); !ok {
+		t.Fatalf("terminal.open should succeed: %+v", open)
+	}
+	result := open["result"].(map[string]any)
+	attachmentID := result["attachment_id"].(string)
+
+	detach := client.Call(t, map[string]any{
+		"id": "2",
+		"method": "session.detach",
+		"params": map[string]any{
+			"session_id":    "resize-dev",
+			"attachment_id": attachmentID,
+		},
+	})
+	if ok, _ := detach["ok"].(bool); !ok {
+		t.Fatalf("session.detach should succeed: %+v", detach)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("close unix client: %v", err)
+	}
+
+	cmd := exec.Command(bin, "session", "attach", "resize-dev", "--socket", socketPath)
+	cmd.Dir = daemonRemoteRoot()
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 132, Rows: 43})
+	if err != nil {
+		t.Fatalf("pty start attach: %v", err)
+	}
+	defer ptmx.Close()
+
+	waitForSessionSize(t, bin, socketPath, "resize-dev", 132, 43, 3*time.Second)
+
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: 90, Rows: 43}); err != nil {
+		t.Fatalf("pty setsize width-only: %v", err)
+	}
+	waitForSessionSize(t, bin, socketPath, "resize-dev", 90, 43, 3*time.Second)
+
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: 90, Rows: 20}); err != nil {
+		t.Fatalf("pty setsize height-only: %v", err)
+	}
+	waitForSessionSize(t, bin, socketPath, "resize-dev", 90, 20, 3*time.Second)
+
+	writePTY(t, ptmx, "\x1c")
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("detach attach session: %v", err)
+	}
+}
+
+func TestSessionAttachResizeDeliversSigwinch(t *testing.T) {
+	t.Parallel()
+
+	if _, err := os.Stat("/bin/zsh"); err != nil {
+		t.Skip("/bin/zsh not available")
+	}
+
+	bin := daemonBinary(t)
+	socketPath := startUnixDaemon(t, bin)
+
+	client := newUnixJSONRPCClient(t, socketPath)
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Fatalf("close unix client: %v", err)
+		}
+	}()
+
+	open := client.Call(t, map[string]any{
+		"id": "1",
+		"method": "terminal.open",
+		"params": map[string]any{
+			"session_id": "resize-sigwinch",
+			"command":    `exec /bin/zsh -lc 'print -r -- READY:$(stty size); trap '\''print -r -- WINCH:$(stty size)'\'' WINCH; while true; do sleep 1; done'`,
+			"cols":       80,
+			"rows":       24,
+		},
+	})
+	if ok, _ := open["ok"].(bool); !ok {
+		t.Fatalf("terminal.open should succeed: %+v", open)
+	}
+	result := open["result"].(map[string]any)
+	attachmentID := result["attachment_id"].(string)
+
+	output, offset := waitForTerminalReadContains(t, client, "resize-sigwinch", 0, "READY:24 80", 3*time.Second)
+	if !strings.Contains(output, "READY:24 80") {
+		t.Fatalf("terminal did not report initial stty size: %q", output)
+	}
+
+	resize := client.Call(t, map[string]any{
+		"id": "2",
+		"method": "session.resize",
+		"params": map[string]any{
+			"session_id":    "resize-sigwinch",
+			"attachment_id": attachmentID,
+			"cols":          120,
+			"rows":          40,
+		},
+	})
+	if ok, _ := resize["ok"].(bool); !ok {
+		t.Fatalf("session.resize should succeed: %+v", resize)
+	}
+
+	output, _ = waitForTerminalReadContains(t, client, "resize-sigwinch", offset, "WINCH:40 120", 3*time.Second)
+	if !strings.Contains(output, "WINCH:40 120") {
+		t.Fatalf("terminal did not receive SIGWINCH resize notice: %q", output)
+	}
+}
+
+func TestSessionAttachDetachesCleanlyWithExistingAttachment(t *testing.T) {
+	t.Parallel()
+
+	bin := daemonBinary(t)
+	socketPath := startUnixDaemon(t, bin)
+
+	client := newUnixJSONRPCClient(t, socketPath)
+	open := client.Call(t, map[string]any{
+		"id": "1",
+		"method": "terminal.open",
+		"params": map[string]any{
+			"session_id": "multi-attach-dev",
+			"command":    "cat",
+			"cols":       80,
+			"rows":       24,
+		},
+	})
+	if ok, _ := open["ok"].(bool); !ok {
+		t.Fatalf("terminal.open should succeed: %+v", open)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("close unix client: %v", err)
+	}
+
+	cmd := exec.Command(bin, "session", "attach", "multi-attach-dev", "--socket", socketPath)
+	cmd.Dir = daemonRemoteRoot()
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		t.Fatalf("pty start attach: %v", err)
+	}
+	defer ptmx.Close()
+
+	writePTY(t, ptmx, "hello\n")
+	read := readUntilContains(t, ptmx, "hello", 3*time.Second)
+	if !strings.Contains(read, "hello") {
+		t.Fatalf("attach output missing hello: %q", read)
+	}
+
+	writePTY(t, ptmx, "\x1c")
+	waitForCommandExit(t, cmd, 5*time.Second)
+}
+
 func writePTY(t *testing.T, ptmx *os.File, text string) {
 	t.Helper()
 	if _, err := ptmx.WriteString(text); err != nil {
@@ -78,4 +299,111 @@ func readUntilContains(t *testing.T, ptmx *os.File, want string, timeout time.Du
 	}
 
 	return out.String()
+}
+
+func waitForSessionSize(t *testing.T, bin, socketPath, sessionID string, cols, rows int, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		gotCols, gotRows, err := sessionStatusDims(bin, socketPath, sessionID)
+		if err == nil && gotCols == cols && gotRows == rows {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	gotCols, gotRows, err := sessionStatusDims(bin, socketPath, sessionID)
+	if err != nil {
+		t.Fatalf("session size did not reach %dx%d: %v", cols, rows, err)
+	}
+	t.Fatalf("session size did not reach %dx%d: got %dx%d", cols, rows, gotCols, gotRows)
+}
+
+func waitForTerminalReadContains(t *testing.T, client *unixJSONRPCClient, sessionID string, offset uint64, want string, timeout time.Duration) (string, uint64) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	var out strings.Builder
+	currentOffset := offset
+	for time.Now().Before(deadline) {
+		read := client.Call(t, map[string]any{
+			"id": "read",
+			"method": "terminal.read",
+			"params": map[string]any{
+				"session_id": sessionID,
+				"offset":     currentOffset,
+				"max_bytes":  32 * 1024,
+				"timeout_ms": 200,
+			},
+		})
+		if ok, _ := read["ok"].(bool); !ok {
+			if errPayload, _ := read["error"].(map[string]any); errPayload != nil {
+				if code, _ := errPayload["code"].(string); code == "deadline_exceeded" {
+					time.Sleep(50 * time.Millisecond)
+					continue
+				}
+			}
+			t.Fatalf("terminal.read should succeed: %+v", read)
+		}
+		result := read["result"].(map[string]any)
+		chunk := string(decodeBase64Field(t, result, "data"))
+		if chunk != "" {
+			out.WriteString(chunk)
+		}
+		if next, ok := result["offset"].(float64); ok {
+			currentOffset = uint64(next)
+		}
+		if strings.Contains(out.String(), want) {
+			return out.String(), currentOffset
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	return out.String(), currentOffset
+}
+
+func waitForCommandExit(t *testing.T, cmd *exec.Cmd, timeout time.Duration) {
+	t.Helper()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatalf("command did not exit within %s", timeout)
+	}
+}
+
+func sessionStatusDims(bin, socketPath, sessionID string) (int, int, error) {
+	cmd := exec.Command(bin, "session", "status", sessionID, "--socket", socketPath)
+	cmd.Dir = daemonRemoteRoot()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	fields := strings.Fields(strings.TrimSpace(string(output)))
+	if len(fields) < 2 {
+		return 0, 0, exec.ErrNotFound
+	}
+	dims := strings.SplitN(fields[1], "x", 2)
+	if len(dims) != 2 {
+		return 0, 0, exec.ErrNotFound
+	}
+
+	cols, err := strconv.Atoi(dims[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	rows, err := strconv.Atoi(dims[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	return cols, rows, nil
 }

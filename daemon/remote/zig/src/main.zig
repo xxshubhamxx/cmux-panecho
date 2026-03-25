@@ -58,6 +58,9 @@ fn run(args: []const []const u8) !u8 {
     if (std.mem.eql(u8, command, "session")) {
         return cli_session.run(if (args.len > 2) args[2..] else &.{}, stderr, stdout);
     }
+    if (isTopLevelSessionCommand(command)) {
+        return cli_session.run(args[1..], stderr, stdout);
+    }
     if (std.mem.eql(u8, command, "serve")) {
         if (args.len == 3 and std.mem.eql(u8, args[2], "--stdio")) {
             try serve_stdio.serve();
@@ -82,6 +85,16 @@ fn run(args: []const []const u8) !u8 {
     return 2;
 }
 
+fn isTopLevelSessionCommand(command: []const u8) bool {
+    return std.mem.eql(u8, command, "attach")
+        or std.mem.eql(u8, command, "ls")
+        or std.mem.eql(u8, command, "list")
+        or std.mem.eql(u8, command, "status")
+        or std.mem.eql(u8, command, "history")
+        or std.mem.eql(u8, command, "kill")
+        or std.mem.eql(u8, command, "new");
+}
+
 fn usage(stderr: anytype) !void {
     try stderr.print("Usage:\n", .{});
     try stderr.print("  cmuxd-remote version\n", .{});
@@ -90,6 +103,9 @@ fn usage(stderr: anytype) !void {
     try stderr.print("  cmuxd-remote serve --tls --listen <addr> --server-id <id> --ticket-secret <secret> --cert-file <path> --key-file <path>\n", .{});
     try stderr.print("  cmuxd-remote cli <command> [args...]\n", .{});
     try stderr.print("  cmuxd-remote session <command> [args...]\n", .{});
+    try stderr.print("  cmuxd-remote list|ls [--socket <path>]\n", .{});
+    try stderr.print("  cmuxd-remote attach|status|history|kill <name> [--socket <path>]\n", .{});
+    try stderr.print("  cmuxd-remote new <name> [--socket <path>] [--detached] [--quiet] [-- <command>]\n", .{});
     try stderr.flush();
 }
 

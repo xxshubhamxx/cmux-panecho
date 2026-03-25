@@ -115,7 +115,7 @@ for target in "${TARGETS[@]}"; do
   (
     cd "$DAEMON_ROOT"
     zig build \
-      -Doptimize=ReleaseSafe \
+      -Doptimize=ReleaseFast \
       -Dtarget="${ZIG_TARGET}" \
       -Dversion="${VERSION}" \
       --prefix "$BUILD_PREFIX" \

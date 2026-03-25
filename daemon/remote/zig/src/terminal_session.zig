@@ -24,14 +24,17 @@ pub const OffsetWindow = struct {
 
 pub const TerminalSession = struct {
     alloc: std.mem.Allocator,
-    terminal: ghostty_vt.Terminal,
+    terminal: *ghostty_vt.Terminal,
     stream: ghostty_vt.ReadonlyStream,
     raw_buffer: std.ArrayList(u8),
     base_offset: u64 = 0,
     next_offset: u64 = 0,
 
     pub fn init(alloc: std.mem.Allocator, opts: Options) !TerminalSession {
-        var terminal = try ghostty_vt.Terminal.init(alloc, .{
+        const terminal = try alloc.create(ghostty_vt.Terminal);
+        errdefer alloc.destroy(terminal);
+
+        terminal.* = try ghostty_vt.Terminal.init(alloc, .{
             .cols = opts.cols,
             .rows = opts.rows,
             .max_scrollback = opts.max_scrollback,
@@ -41,17 +44,20 @@ pub const TerminalSession = struct {
         var raw_buffer: std.ArrayList(u8) = .empty;
         try raw_buffer.ensureTotalCapacity(alloc, 4096);
 
-        return .{
+        var session: TerminalSession = .{
             .alloc = alloc,
             .terminal = terminal,
-            .stream = terminal.vtStream(),
+            .stream = undefined,
             .raw_buffer = raw_buffer,
         };
+        session.stream = terminal.vtStream();
+        return session;
     }
 
     pub fn deinit(self: *TerminalSession) void {
         self.stream.deinit();
         self.terminal.deinit(self.alloc);
+        self.alloc.destroy(self.terminal);
         self.raw_buffer.deinit(self.alloc);
     }
 
@@ -76,11 +82,11 @@ pub const TerminalSession = struct {
     }
 
     pub fn snapshot(self: *TerminalSession, alloc: std.mem.Allocator, format: serialize.HistoryFormat) ![]u8 {
-        return serialize.serializeTerminal(alloc, &self.terminal, format) orelse error.SerializeFailed;
+        return serialize.serializeTerminal(alloc, self.terminal, format) orelse error.SerializeFailed;
     }
 
     pub fn history(self: *TerminalSession, alloc: std.mem.Allocator, format: serialize.HistoryFormat) ![]u8 {
-        return serialize.serializeTerminal(alloc, &self.terminal, format) orelse error.SerializeFailed;
+        return serialize.serializeTerminal(alloc, self.terminal, format) orelse error.SerializeFailed;
     }
 
     pub fn offsetWindow(self: *const TerminalSession) OffsetWindow {
@@ -188,7 +194,7 @@ test "raw ring truncates and advances base offset" {
     try std.testing.expectEqual(session.base_offset, read.base_offset);
 }
 
-// Adapted from vendor/zmx/src/util.zig at commit
+// Adapted from references/zmx/src/util.zig at commit
 // 993b0cf6c7e7d384e8cf428e301e5e790e88c6f2.
 test "serializeTerminalState excludes synchronized output replay" {
     var term = try ghostty_vt.Terminal.init(std.testing.allocator, .{
@@ -224,4 +230,39 @@ test "serializeTerminalState excludes synchronized output replay" {
 
     try std.testing.expect(restored.modes.get(.bracketed_paste));
     try std.testing.expect(!restored.modes.get(.synchronized_output));
+}
+
+test "serializeTerminalState round trips visible content" {
+    var term = try ghostty_vt.Terminal.init(std.testing.allocator, .{
+        .cols = 80,
+        .rows = 24,
+    });
+    defer term.deinit(std.testing.allocator);
+
+    var stream = term.vtStream();
+    defer stream.deinit();
+
+    try stream.nextSlice("\x1b[?2004h");
+    try stream.nextSlice("hello\r\nworld\r\n");
+
+    const output = serialize.serializeTerminalState(std.testing.allocator, &term) orelse return error.TestUnexpectedNull;
+    defer std.testing.allocator.free(output);
+
+    var restored = try ghostty_vt.Terminal.init(std.testing.allocator, .{
+        .cols = 80,
+        .rows = 24,
+    });
+    defer restored.deinit(std.testing.allocator);
+
+    var restored_stream = restored.vtStream();
+    defer restored_stream.deinit();
+    try restored_stream.nextSlice(output);
+
+    try std.testing.expect(restored.modes.get(.bracketed_paste));
+
+    const restored_plain = serialize.serializeTerminal(std.testing.allocator, &restored, .plain) orelse return error.TestUnexpectedNull;
+    defer std.testing.allocator.free(restored_plain);
+
+    try std.testing.expect(std.mem.indexOf(u8, restored_plain, "hello") != null);
+    try std.testing.expect(std.mem.indexOf(u8, restored_plain, "world") != null);
 }

@@ -225,61 +225,124 @@ struct cmuxApp: App {
     }
 
     private static func configureGhosttyEnvironment() {
-        let fileManager = FileManager.default
-        let ghosttyAppResources = "/Applications/Ghostty.app/Contents/Resources/ghostty"
-        let bundledGhosttyURL = Bundle.main.resourceURL?.appendingPathComponent("ghostty")
-        var resolvedResourcesDir: String?
+        let bundle = Bundle.main
+        let bundleVersion = (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let processEnvironment = cmuxCurrentProcessEnvironment()
 
-        if getenv("GHOSTTY_RESOURCES_DIR") == nil {
-            if let bundledGhosttyURL,
-               fileManager.fileExists(atPath: bundledGhosttyURL.path),
-               fileManager.fileExists(atPath: bundledGhosttyURL.appendingPathComponent("themes").path) {
-                resolvedResourcesDir = bundledGhosttyURL.path
-            } else if fileManager.fileExists(atPath: ghosttyAppResources) {
-                resolvedResourcesDir = ghosttyAppResources
-            } else if let bundledGhosttyURL, fileManager.fileExists(atPath: bundledGhosttyURL.path) {
-                resolvedResourcesDir = bundledGhosttyURL.path
-            }
-
-            if let resolvedResourcesDir {
-                setenv("GHOSTTY_RESOURCES_DIR", resolvedResourcesDir, 1)
-            }
-        }
-
-        if getenv("TERM") == nil {
-            setenv("TERM", "xterm-ghostty", 1)
-        }
-
-        if getenv("TERM_PROGRAM") == nil {
-            setenv("TERM_PROGRAM", "ghostty", 1)
-        }
-
-        if let resourcesDir = getenv("GHOSTTY_RESOURCES_DIR").flatMap({ String(cString: $0) }) {
-            let resourcesURL = URL(fileURLWithPath: resourcesDir)
-            let resourcesParent = resourcesURL.deletingLastPathComponent()
-            let dataDir = resourcesParent.path
-            let manDir = resourcesParent.appendingPathComponent("man").path
-
-            appendEnvPathIfMissing(
-                "XDG_DATA_DIRS",
-                path: dataDir,
-                defaultValue: "/usr/local/share:/usr/share"
-            )
-            appendEnvPathIfMissing("MANPATH", path: manDir)
+        for (key, value) in ghosttyEnvironmentOverrides(
+            processEnvironment: processEnvironment,
+            resourceURL: cmuxCurrentResourceURL(fileManager: .default) ?? bundle.resourceURL,
+            executableURL: cmuxCurrentExecutableURL() ?? bundle.executableURL,
+            bundleIdentifier: cmuxCurrentBundleIdentifier(environment: processEnvironment) ?? bundle.bundleIdentifier,
+            bundleVersion: bundleVersion,
+            fileManager: .default
+        ) {
+            setenv(key, value, 1)
         }
     }
 
-    private static func appendEnvPathIfMissing(_ key: String, path: String, defaultValue: String? = nil) {
-        if path.isEmpty { return }
-        var current = getenv(key).flatMap { String(cString: $0) } ?? ""
-        if current.isEmpty, let defaultValue {
-            current = defaultValue
+    static func ghosttyEnvironmentOverrides(
+        processEnvironment: [String: String],
+        resourceURL: URL?,
+        executableURL: URL?,
+        bundleIdentifier: String?,
+        bundleVersion: String?,
+        fileManager: FileManager = .default
+    ) -> [String: String] {
+        let fallbackGhosttyResources = "/Applications/Ghostty.app/Contents/Resources/ghostty"
+        let bundledGhosttyURL = resourceURL?.appendingPathComponent("ghostty")
+        let bundledShellIntegrationURL = resourceURL?.appendingPathComponent("shell-integration")
+        let bundledMacOSDir = executableURL?.deletingLastPathComponent().path
+        let bundledGhosttyResourcesWithThemes: String?
+        if let bundledGhosttyURL,
+           fileManager.fileExists(atPath: bundledGhosttyURL.path),
+           fileManager.fileExists(atPath: bundledGhosttyURL.appendingPathComponent("themes").path) {
+            bundledGhosttyResourcesWithThemes = bundledGhosttyURL.path
+        } else {
+            bundledGhosttyResourcesWithThemes = nil
         }
-        if current.split(separator: ":").contains(Substring(path)) {
-            return
+
+        func normalized(_ value: String?) -> String? {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
         }
-        let updated = current.isEmpty ? path : "\(current):\(path)"
-        setenv(key, updated, 1)
+
+        func firstExistingDirectory(_ candidates: [String?]) -> String? {
+            for candidate in candidates {
+                guard let candidate = normalized(candidate),
+                      fileManager.fileExists(atPath: candidate) else { continue }
+                return candidate
+            }
+            return nil
+        }
+
+        func prependedPath(_ path: String, current: String?, defaultValue: String? = nil) -> String {
+            let existing = normalized(current) ?? defaultValue ?? ""
+            let filteredExisting = existing
+                .split(separator: ":")
+                .map(String.init)
+                .filter { !$0.isEmpty && $0 != path }
+            if filteredExisting.isEmpty {
+                return path
+            }
+            return ([path] + filteredExisting).joined(separator: ":")
+        }
+
+        var overrides: [String: String] = [:]
+
+        let ghosttyResourcesDir = firstExistingDirectory([
+            bundledGhosttyResourcesWithThemes,
+            fileManager.fileExists(atPath: fallbackGhosttyResources) ? fallbackGhosttyResources : nil,
+            bundledGhosttyURL?.path,
+            processEnvironment["GHOSTTY_RESOURCES_DIR"],
+        ])
+
+        if let ghosttyResourcesDir {
+            overrides["GHOSTTY_RESOURCES_DIR"] = ghosttyResourcesDir
+
+            let resourcesParent = URL(fileURLWithPath: ghosttyResourcesDir).deletingLastPathComponent()
+            let terminfoDir = resourcesParent.appendingPathComponent("terminfo").path
+            if fileManager.fileExists(atPath: terminfoDir) {
+                overrides["TERMINFO"] = terminfoDir
+                overrides["TERM"] = "xterm-ghostty"
+            } else {
+                let preferredTerm = normalized(processEnvironment["TERM"]).flatMap { $0.lowercased() == "dumb" ? nil : $0 }
+                overrides["TERM"] = preferredTerm ?? "xterm-256color"
+            }
+
+            overrides["XDG_DATA_DIRS"] = prependedPath(
+                resourcesParent.path,
+                current: processEnvironment["XDG_DATA_DIRS"],
+                defaultValue: "/usr/local/share:/usr/share"
+            )
+            overrides["MANPATH"] = prependedPath(
+                resourcesParent.appendingPathComponent("man").path,
+                current: processEnvironment["MANPATH"]
+            )
+        } else {
+            let preferredTerm = normalized(processEnvironment["TERM"]).flatMap { $0.lowercased() == "dumb" ? nil : $0 }
+            overrides["TERM"] = preferredTerm ?? "xterm-256color"
+        }
+
+        if let bundledMacOSDir = firstExistingDirectory([bundledMacOSDir]) {
+            overrides["GHOSTTY_BIN_DIR"] = bundledMacOSDir
+        }
+        if let bundleIdentifier = normalized(bundleIdentifier) {
+            overrides["CMUX_BUNDLE_ID"] = bundleIdentifier
+        }
+        if let shellIntegrationDir = firstExistingDirectory([bundledShellIntegrationURL?.path]) {
+            overrides["CMUX_SHELL_INTEGRATION_DIR"] = shellIntegrationDir
+        }
+
+        overrides["COLORTERM"] = normalized(processEnvironment["COLORTERM"]) ?? "truecolor"
+        overrides["TERM_PROGRAM"] = "ghostty"
+
+        if let bundleVersion = normalized(bundleVersion) ?? normalized(processEnvironment["TERM_PROGRAM_VERSION"]) {
+            overrides["TERM_PROGRAM_VERSION"] = bundleVersion
+        }
+
+        return overrides
     }
 
     private func migrateSidebarAppearanceDefaultsIfNeeded(defaults: UserDefaults) {

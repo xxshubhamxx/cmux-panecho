@@ -2411,6 +2411,10 @@ class TerminalController {
             return v2Result(id: id, self.v2DebugPanelSnapshot(params: params))
         case "debug.panel_snapshot.reset":
             return v2Result(id: id, self.v2DebugPanelSnapshotReset(params: params))
+        case "debug.window.frame":
+            return v2Result(id: id, self.v2DebugWindowFrame(params: params))
+        case "debug.window.set_frame":
+            return v2Result(id: id, self.v2DebugSetWindowFrame(params: params))
         case "debug.window.screenshot":
             return v2Result(id: id, self.v2DebugScreenshot(params: params))
 #endif
@@ -2606,6 +2610,8 @@ class TerminalController {
             "debug.flash.reset",
             "debug.panel_snapshot",
             "debug.panel_snapshot.reset",
+            "debug.window.frame",
+            "debug.window.set_frame",
             "debug.window.screenshot",
         ])
 #endif
@@ -3275,6 +3281,59 @@ class TerminalController {
                 "window_id": windowId.uuidString,
                 "window_ref": v2Ref(kind: .window, uuid: windowId)
             ])
+    }
+
+    private func v2DebugWindowFrame(params: [String: Any]) -> V2CallResult {
+        guard let windowId = v2UUID(params, "window_id") else {
+            return .err(code: "invalid_params", message: "Missing or invalid window_id", data: nil)
+        }
+        guard let frame = v2MainSync({ AppDelegate.shared?.mainWindowFrame(windowId: windowId) }) else {
+            return .err(code: "not_found", message: "Window not found", data: [
+                "window_id": windowId.uuidString,
+                "window_ref": v2Ref(kind: .window, uuid: windowId),
+            ])
+        }
+        return .ok(v2WindowFramePayload(windowId: windowId, frame: frame))
+    }
+
+    private func v2DebugSetWindowFrame(params: [String: Any]) -> V2CallResult {
+        guard let windowId = v2UUID(params, "window_id") else {
+            return .err(code: "invalid_params", message: "Missing or invalid window_id", data: nil)
+        }
+        guard let x = v2Int(params, "x"),
+              let y = v2Int(params, "y"),
+              let width = v2Int(params, "width"),
+              let height = v2Int(params, "height"),
+              width > 0,
+              height > 0 else {
+            return .err(code: "invalid_params", message: "Missing or invalid x, y, width, or height", data: nil)
+        }
+        let requestedFrame = CGRect(x: x, y: y, width: width, height: height)
+        guard let actualFrame = v2MainSync({
+            AppDelegate.shared?.setMainWindowFrame(windowId: windowId, frame: requestedFrame)
+        }) else {
+            return .err(code: "not_found", message: "Window not found", data: [
+                "window_id": windowId.uuidString,
+                "window_ref": v2Ref(kind: .window, uuid: windowId),
+            ])
+        }
+        var payload = v2WindowFramePayload(windowId: windowId, frame: actualFrame)
+        payload["requested_x"] = x
+        payload["requested_y"] = y
+        payload["requested_width"] = width
+        payload["requested_height"] = height
+        return .ok(payload)
+    }
+
+    private func v2WindowFramePayload(windowId: UUID, frame: CGRect) -> [String: Any] {
+        [
+            "window_id": windowId.uuidString,
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "x": Int(frame.origin.x.rounded()),
+            "y": Int(frame.origin.y.rounded()),
+            "width": Int(frame.size.width.rounded()),
+            "height": Int(frame.size.height.rounded()),
+        ]
     }
 
     // MARK: - V2 Workspace Methods

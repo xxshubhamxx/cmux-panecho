@@ -4743,6 +4743,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return true
     }
 
+    func mainWindowFrame(windowId: UUID) -> CGRect? {
+        guard let window = windowForMainWindowId(windowId) else { return nil }
+        return window.frame
+    }
+
+    @discardableResult
+    func setMainWindowFrame(windowId: UUID, frame: CGRect) -> CGRect? {
+        guard let window = windowForMainWindowId(windowId) else { return nil }
+        window.setFrame(frame, display: true)
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        return window.frame
+    }
+
     func closeMainWindow(windowId: UUID) -> Bool {
         guard let window = windowForMainWindowId(windowId) else { return false }
         window.performClose(nil)

@@ -33,7 +33,7 @@ trap cleanup EXIT
 echo "=== Build Zig daemon ==="
 (
   cd "$DAEMON_DIR"
-  zig build >/dev/null
+  zig build -Doptimize=ReleaseFast >/dev/null
 )
 
 BIN="$DAEMON_DIR/zig-out/bin/cmuxd-remote"
