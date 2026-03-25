@@ -353,6 +353,8 @@ cef_bridge_browser_t cef_bridge_browser_create(
     cef_bridge_profile_t profile,
     const char* initial_url,
     void* parent_view,
+    int width,
+    int height,
     const cef_bridge_client_callbacks* callbacks
 ) {
     if (!g_initialized || !callbacks) return nullptr;
@@ -363,10 +365,9 @@ cef_bridge_browser_t cef_bridge_browser_create(
 
     CefWindowInfo window_info;
     window_info.size = sizeof(CefWindowInfo);
-    // Set the parent view so CEF renders inside our view hierarchy
-    // instead of creating its own top-level window.
     if (parent_view) {
         window_info.parent_view = parent_view;
+        window_info.bounds = {0, 0, width, height};
     }
 
     CefBrowserSettings browser_settings;
@@ -702,7 +703,7 @@ cef_bridge_profile_t cef_bridge_profile_create(const char* p) { return nullptr; 
 void cef_bridge_profile_destroy(cef_bridge_profile_t p) {}
 int cef_bridge_profile_clear_data(cef_bridge_profile_t p) { return CEF_BRIDGE_ERR_NOT_INIT; }
 
-cef_bridge_browser_t cef_bridge_browser_create(cef_bridge_profile_t p, const char* u, void* v, const cef_bridge_client_callbacks* c) { return nullptr; }
+cef_bridge_browser_t cef_bridge_browser_create(cef_bridge_profile_t p, const char* u, void* v, int w, int h, const cef_bridge_client_callbacks* c) { return nullptr; }
 void cef_bridge_browser_destroy(cef_bridge_browser_t b) {}
 void* cef_bridge_browser_get_nsview(cef_bridge_browser_t b) { return nullptr; }
 

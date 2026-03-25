@@ -205,11 +205,14 @@ int cef_bridge_profile_clear_data(cef_bridge_profile_t profile);
 
 /// Create a new browser view. The browser renders inside `parent_view`
 /// (an NSView*). Pass NULL to create a hidden browser with no view.
+/// `width` and `height` set the initial browser size.
 /// The browser starts loading `initial_url` if non-NULL.
 cef_bridge_browser_t cef_bridge_browser_create(
     cef_bridge_profile_t profile,
     const char* initial_url,
     void* parent_view,
+    int width,
+    int height,
     const cef_bridge_client_callbacks* callbacks
 );
 
