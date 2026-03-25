@@ -1132,10 +1132,7 @@ final class TabManagerEqualizeSplitsTests: XCTestCase {
                 return
             }
             let targetPosition: CGFloat = index.isMultiple(of: 2) ? 0.2 : 0.8
-            XCTAssertTrue(
-                workspace.bonsplitController.setDividerPosition(targetPosition, forSplit: splitId),
-                "Expected to seed divider position for split \(splitId)"
-            )
+            workspace.bonsplitController.setDividerPosition(targetPosition, for: splitId)
         }
 
         XCTAssertTrue(manager.equalizeSplits(tabId: workspace.id), "Expected equalize splits command to succeed")
