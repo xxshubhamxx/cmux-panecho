@@ -546,7 +546,14 @@ public final class PaperLayoutController {
     @discardableResult
     func addPane(width: CGFloat, afterPaneId: PaneID? = nil, withTab tab: PaperTab? = nil) -> PaneID {
         let newPaneId = PaneID()
-        let pane = PaperPane(id: newPaneId, width: width)
+        // Resolve infinity/zero width using viewport width or a sensible default
+        let resolvedWidth: CGFloat
+        if !width.isFinite || width <= 0 {
+            resolvedWidth = viewportWidth > 0 ? viewportWidth : 800
+        } else {
+            resolvedWidth = width
+        }
+        let pane = PaperPane(id: newPaneId, width: resolvedWidth)
         if let tab {
             let item = PaperTabItem(
                 id: tab.id.id,
@@ -591,6 +598,10 @@ public final class PaperLayoutController {
         }
 
         let sourcePane = panes[idx]
+        // Resolve infinity width before splitting
+        if !sourcePane.width.isFinite || sourcePane.width <= 0 {
+            sourcePane.width = viewportWidth > 0 ? viewportWidth : 800
+        }
         let halfWidth = max(sourcePane.width / 2, configuration.appearance.minimumPaneWidth)
 
         // Resize source pane

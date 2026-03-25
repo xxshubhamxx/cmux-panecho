@@ -66,11 +66,18 @@ struct PaperLayoutView<Content: View, EmptyContent: View>: View {
 
     /// Resolve panes that used a placeholder width (e.g., fullscreen initial pane).
     private func resolveInitialPaneWidths() {
-        for pane in controller.panes {
-            if pane.width <= 0 || pane.width == .infinity {
-                pane.width = controller.viewportWidth
+        guard controller.viewportWidth > 0 else { return }
+        // If there's exactly one pane, it should fill the viewport
+        if controller.panes.count == 1 {
+            controller.panes[0].width = controller.viewportWidth
+        } else {
+            for pane in controller.panes {
+                if !pane.width.isFinite || pane.width <= 0 {
+                    pane.width = controller.viewportWidth
+                }
             }
         }
+        controller.notifyGeometryChange()
     }
 }
 
