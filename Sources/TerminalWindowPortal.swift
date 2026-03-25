@@ -1482,21 +1482,22 @@ final class WindowTerminalPortal: NSObject {
             // layer on the host view.
             let stableFrame = unclampedFrameInHost
 
-            // Update sidebar clip mask: the mask layer clips the host view
-            // so terminals can't render in the sidebar area. The sidebar
-            // width comes from the first ancestor whose left edge is > 0.
-            let sidebarRight = targetFrame.origin.x
+            // Update sidebar clip mask so terminals can't render over the
+            // sidebar. The mask is opaque (white background) in the content
+            // area and absent in the sidebar area.
+            let sidebarRight = PaperLayoutController.sidebarWidth
             if sidebarRight > 0 {
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
                 if hostView.layer?.mask !== sidebarClipLayer {
+                    sidebarClipLayer.backgroundColor = CGColor.white
                     hostView.layer?.mask = sidebarClipLayer
                 }
                 let hostSize = hostView.bounds.size
                 sidebarClipLayer.frame = NSRect(
                     x: sidebarRight,
                     y: 0,
-                    width: hostSize.width - sidebarRight,
+                    width: max(0, hostSize.width - sidebarRight),
                     height: hostSize.height
                 )
                 CATransaction.commit()

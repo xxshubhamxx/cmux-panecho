@@ -2249,12 +2249,13 @@ final class WindowBrowserPortal: NSObject {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             if hostView.layer?.mask !== sidebarClipLayer {
+                sidebarClipLayer.backgroundColor = CGColor.white
                 hostView.layer?.mask = sidebarClipLayer
             }
             sidebarClipLayer.frame = NSRect(
                 x: sidebarWidth,
                 y: 0,
-                width: frameInContainer.width - sidebarWidth,
+                width: max(0, frameInContainer.width - sidebarWidth),
                 height: frameInContainer.height
             )
             CATransaction.commit()
