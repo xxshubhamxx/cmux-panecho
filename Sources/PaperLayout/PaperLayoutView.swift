@@ -22,32 +22,33 @@ struct PaperLayoutView<Content: View, EmptyContent: View>: View {
             let viewportWidth = geometry.size.width
             let viewportHeight = geometry.size.height
 
-            PaperScrollView(
-                contentWidth: controller.totalCanvasWidth,
-                scrollOffset: controller.viewportOffset,
-                animationDuration: controller.configuration.appearance.enableAnimations
-                    ? controller.configuration.appearance.animationDuration
-                    : 0,
-                onScrollComplete: {
-                    controller.notifyGeometryChange()
+            HStack(spacing: 0) {
+                ForEach(controller.panes) { pane in
+                    let resolvedWidth = (pane.width <= 0 || pane.width == .infinity)
+                        ? viewportWidth
+                        : pane.width
+                    PaperPaneContainerView(
+                        pane: pane,
+                        controller: controller,
+                        contentBuilder: contentBuilder,
+                        emptyPaneBuilder: emptyPaneBuilder
+                    )
+                    .frame(width: resolvedWidth, height: viewportHeight)
                 }
-            ) {
-                HStack(spacing: 0) {
-                    ForEach(controller.panes) { pane in
-                        let resolvedWidth = (pane.width <= 0 || pane.width == .infinity)
-                            ? viewportWidth
-                            : pane.width
-                        PaperPaneContainerView(
-                            pane: pane,
-                            controller: controller,
-                            contentBuilder: contentBuilder,
-                            emptyPaneBuilder: emptyPaneBuilder
-                        )
-                        .frame(width: resolvedWidth, height: viewportHeight)
-                    }
-                }
-                .frame(height: viewportHeight)
             }
+            .offset(x: -controller.viewportOffset)
+            .animation(
+                controller.configuration.appearance.enableAnimations
+                    ? .easeInOut(duration: controller.configuration.appearance.animationDuration)
+                    : nil,
+                value: controller.viewportOffset
+            )
+            // Pass the viewport offset to descendant views so the portal system
+            // can adjust anchor positions. SwiftUI's .offset() uses CALayer
+            // transforms invisible to NSView.convert, so the portal reads this
+            // environment value instead.
+            .environment(\.paperViewportOffset, controller.viewportOffset)
+            .clipped()
             .onAppear {
                 controller.viewportWidth = viewportWidth
                 controller.viewportHeight = viewportHeight

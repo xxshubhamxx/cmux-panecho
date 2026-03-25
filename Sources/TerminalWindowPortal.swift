@@ -929,6 +929,15 @@ final class WindowTerminalPortal: NSObject {
     /// visible rect that should drive portal geometry.
     private func effectiveAnchorFrameInWindow(for anchorView: NSView) -> NSRect {
         var frameInWindow = anchorView.convert(anchorView.bounds, to: nil)
+
+        // Paper layout adjustment: SwiftUI's .offset() uses CALayer transforms
+        // that are invisible to NSView.convert(_:to:nil). Subtract the viewport
+        // offset so the portal positions terminals at their visible location.
+        let paperOffset = PaperLayoutController.currentViewportOffset
+        if paperOffset != 0 {
+            frameInWindow.origin.x -= paperOffset
+        }
+
         var current = anchorView.superview
         while let ancestor = current {
             let ancestorBoundsInWindow = ancestor.convert(ancestor.bounds, to: nil)

@@ -148,7 +148,22 @@ public final class PaperLayoutController {
     }
 
     /// Current horizontal scroll offset of the viewport (pixels from the left edge of the canvas).
-    var viewportOffset: CGFloat = 0
+    var viewportOffset: CGFloat = 0 {
+        didSet {
+            // Update the global viewport offset so the terminal portal system
+            // can adjust anchor positions. SwiftUI's .offset() uses CALayer
+            // transforms invisible to NSView.convert(_:to:nil).
+            Self.currentViewportOffset = viewportOffset
+            if viewportOffset != oldValue {
+                notifyGeometryChange()
+            }
+        }
+    }
+
+    /// Global viewport offset readable by the portal system.
+    /// Portal-hosted terminal views need to adjust their anchor frame
+    /// X position by this amount since .offset() doesn't change NSView frames.
+    @MainActor static var currentViewportOffset: CGFloat = 0
 
     /// Width of the visible viewport (set by GeometryReader on each layout pass).
     var viewportWidth: CGFloat = 0

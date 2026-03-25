@@ -38,6 +38,23 @@ extension EnvironmentValues {
     }
 }
 
+// MARK: - Paper Viewport Offset Environment Key
+
+/// The current horizontal viewport offset of the paper layout.
+/// Used by the terminal portal system to adjust anchor positions since
+/// SwiftUI's .offset() uses CALayer transforms that are invisible to
+/// NSView.convert(_:to:nil).
+private struct PaperViewportOffsetKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var paperViewportOffset: CGFloat {
+        get { self[PaperViewportOffsetKey.self] }
+        set { self[PaperViewportOffsetKey.self] = newValue }
+    }
+}
+
 // MARK: - Pane ID
 
 /// Opaque identifier for panes
