@@ -79,6 +79,14 @@ install_name_tool -change \
 # Sign the helper
 codesign --force --sign - "$HELPER_APP" 2>/dev/null || true
 
+# 4. Copy the real CEF bridge dylib (replaces the stub static lib)
+CEF_BRIDGE_DYLIB="$PROJECT_DIR/vendor/cef-bridge/libcef_bridge.dylib"
+if [ -f "$CEF_BRIDGE_DYLIB" ]; then
+    cp "$CEF_BRIDGE_DYLIB" "$FRAMEWORKS_DIR/libcef_bridge.dylib"
+    codesign --force --sign - "$FRAMEWORKS_DIR/libcef_bridge.dylib" 2>/dev/null || true
+    echo "==> Copied CEF bridge dylib"
+fi
+
 echo "==> CEF embedded successfully"
 echo "    Framework: $FRAMEWORKS_DIR/Chromium Embedded Framework.framework"
 echo "    Helper:    $HELPER_APP"

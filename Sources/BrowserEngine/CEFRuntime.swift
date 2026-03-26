@@ -31,6 +31,13 @@ final class CEFRuntime {
     func initialize() -> Bool {
         guard !isInitialized else { return true }
 
+        // Load the real CEF bridge dylib (replaces stub functions).
+        // The dylib is embedded in the app bundle by embed-cef.sh.
+        if !loadBridgeDylib() {
+            initError = "CEF bridge dylib not found in app bundle"
+            return false
+        }
+
         // Find the framework directory (parent of the .framework bundle)
         let frameworkDir = resolveFrameworkDir()
         guard let frameworkDir else {
@@ -116,6 +123,43 @@ final class CEFRuntime {
         let str = String(cString: cstr)
         cef_bridge_free_string(cstr)
         return str
+    }
+
+    // MARK: - Dynamic Loading
+
+    private var bridgeDylibLoaded = false
+
+    /// Load the real CEF bridge dylib from the app bundle's Frameworks/.
+    /// This replaces the stub implementations linked at build time with
+    /// real CEF calls. Returns true if loaded (or already loaded).
+    private func loadBridgeDylib() -> Bool {
+        if bridgeDylibLoaded { return true }
+
+        guard let fwPath = Bundle.main.privateFrameworksPath else { return false }
+        let dylibPath = (fwPath as NSString).appendingPathComponent("libcef_bridge.dylib")
+
+        guard FileManager.default.fileExists(atPath: dylibPath) else {
+#if DEBUG
+            dlog("cef.loadDylib not found at \(dylibPath)")
+#endif
+            return false
+        }
+
+        let handle = dlopen(dylibPath, RTLD_NOW | RTLD_GLOBAL)
+        if handle == nil {
+            let err = String(cString: dlerror())
+#if DEBUG
+            dlog("cef.loadDylib dlopen failed: \(err)")
+#endif
+            initError = "dlopen failed: \(err)"
+            return false
+        }
+
+#if DEBUG
+        dlog("cef.loadDylib loaded successfully")
+#endif
+        bridgeDylibLoaded = true
+        return true
     }
 
     // MARK: - Path Resolution
