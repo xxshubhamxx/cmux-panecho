@@ -9084,6 +9084,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let normalizedFlags = flags.subtracting([.numericPad, .function, .capsLock])
 
         #if DEBUG
+        // Skip all shortcut handling when the niri canvas window is key.
+        // It handles its own shortcuts via sendEvent/performKeyEquivalent.
+        if event.window is NiriCanvasWindow { return false }
+
         // Cmd+Ctrl+N: Open niri canvas demo
         if hasCommand && hasControl && !flags.contains(.shift) && (chars.lowercased() == "n" || event.keyCode == 45) {
             openNiriCanvas()
@@ -11564,7 +11568,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if niriCanvasController == nil {
             niriCanvasController = NiriCanvasWindowController()
         }
-        niriCanvasController?.open(terminalCount: 5)
+        NSLog("niri.openCanvas")
+        niriCanvasController?.open(terminalCount: 3)
     }
     #endif
 
