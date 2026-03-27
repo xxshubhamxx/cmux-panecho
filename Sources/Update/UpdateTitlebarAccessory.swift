@@ -1271,6 +1271,9 @@ final class UpdateTitlebarAccessoryController {
         guard currentMode != lastKnownPresentationMode else { return }
         lastKnownPresentationMode = currentMode
 
+        #if DEBUG
+        dlog("minimal.accessory.modeChange to=\(currentMode) windows=\(NSApp.windows.count)")
+        #endif
         if currentMode == .minimal {
             attachToExistingWindows()
         } else {
@@ -1279,12 +1282,25 @@ final class UpdateTitlebarAccessoryController {
             // UserDefaults change). The accessory needs a valid toolbar/titlebar
             // area to lay out correctly.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.attachToExistingWindows()
+                guard let self else { return }
+                #if DEBUG
+                dlog("minimal.accessory.reattachNow windows=\(NSApp.windows.count) attached=\(self.attachedWindows.allObjects.count)")
+                let controlsId = self.controlsIdentifier
+                for window in NSApp.windows {
+                    let id = window.identifier?.rawValue ?? "<nil>"
+                    let isMain = self.isMainTerminalWindow(window)
+                    let isAttached = self.attachedWindows.contains(window)
+                    let hasAccessory = window.titlebarAccessoryViewControllers.contains { $0.view.identifier == controlsId }
+                    let hasToolbar = window.toolbar != nil
+                    dlog("minimal.accessory.windowCheck id=\(id) isMain=\(isMain) isAttached=\(isAttached) hasAccessory=\(hasAccessory) hasToolbar=\(hasToolbar)")
+                }
+                #endif
+                self.attachToExistingWindows()
                 // Hide accessories on fullscreen windows (fullscreen uses SwiftUI
                 // overlay controls instead).
                 for window in NSApp.windows where window.styleMask.contains(.fullScreen) {
                     for accessory in window.titlebarAccessoryViewControllers
-                        where accessory.view.identifier == self?.controlsIdentifier {
+                        where accessory.view.identifier == controlsId {
                         accessory.isHidden = true
                         accessory.view.alphaValue = 0
                     }
