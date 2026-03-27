@@ -2406,6 +2406,7 @@ struct ContentView: View {
                 .accessibilityHidden(sidebarSelectionState.selection != .notifications)
         }
         .padding(.top, effectiveTitlebarPadding)
+        .padding(.leading, isMinimalMode && !sidebarState.isVisible ? titlebarLeadingInset : 0)
         .overlay(alignment: .top) {
             if !isMinimalMode {
                 // Titlebar overlay is only over terminal content, not the sidebar.
