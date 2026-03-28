@@ -3362,29 +3362,30 @@ private final class SplitButtonLayoutDebugWindowController: NSWindowController, 
 }
 
 private struct SplitButtonLayoutDebugView: View {
-    @AppStorage("debugSplitButtonLayout") private var layout = 0
+    @AppStorage("debugFadeColorStyle") private var fadeColor = 0
 
-    private let options: [(Int, String)] = [
-        (0, "HStack sibling (no overlay)"),
-        (1, "Overlay: solid barFill bg"),
-        (2, "Overlay: opaque windowBg"),
-        (3, "Overlay: ultraThinMaterial"),
-        (4, "Overlay: fade gradient + barFill"),
+    private let fadeOptions: [(Int, String)] = [
+        (0, "barFill with focus opacity"),
+        (1, "barBackground (raw)"),
+        (2, "windowBackgroundColor"),
+        (3, "controlBackgroundColor"),
+        (4, "textBackgroundColor"),
+        (5, "underPageBackgroundColor"),
     ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Split Button Layout")
+            Text("Fade Gradient Color")
                 .font(.headline)
 
-            ForEach(options, id: \.0) { id, label in
+            ForEach(fadeOptions, id: \.0) { id, label in
                 HStack {
-                    Image(systemName: layout == id ? "checkmark.circle.fill" : "circle")
-                        .foregroundColor(layout == id ? .accentColor : .secondary)
+                    Image(systemName: fadeColor == id ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(fadeColor == id ? .accentColor : .secondary)
                     Text(label)
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { layout = id }
+                .onTapGesture { fadeColor = id }
             }
 
             Text("Changes apply live.")
