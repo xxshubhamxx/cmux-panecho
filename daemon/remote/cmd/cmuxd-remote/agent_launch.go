@@ -379,6 +379,12 @@ func omoEnsurePlugin(searchPath string) error {
 	}
 	config["plugin"] = plugins
 
+	// Force dark color scheme. opencode uses OSC 11 to query terminal
+	// background, which can return wrong results over SSH relay.
+	if config["colorScheme"] == nil {
+		config["colorScheme"] = "dark"
+	}
+
 	output, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return err
