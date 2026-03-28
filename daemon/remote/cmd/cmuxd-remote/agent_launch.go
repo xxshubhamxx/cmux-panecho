@@ -113,8 +113,8 @@ func runOMORelay(socketPath string, args []string, refreshAddr func() string) in
 		launchArgs = append([]string{"--port", port}, launchArgs...)
 	}
 
-	argv := append([]string{opencodePath}, launchArgs...)
-	execErr := syscall.Exec(opencodePath, argv, os.Environ())
+	launchPath, launchArgv := resolveNodeScriptExec(opencodePath, launchArgs, originalPath, shimDir)
+	execErr := syscall.Exec(launchPath, launchArgv, os.Environ())
 	fmt.Fprintf(os.Stderr, "cmux omo: exec failed: %v\n", execErr)
 	return 1
 }
@@ -507,6 +507,43 @@ func fileExists(path string) bool {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// --- Node script resolution ---
+
+// resolveNodeScriptExec checks if the target binary is a #!/usr/bin/env node
+// script. If node isn't in PATH but bun is, it rewrites the exec to use bun
+// as the runtime (bun is node-compatible).
+func resolveNodeScriptExec(binPath string, args []string, searchPath string, skipDir string) (string, []string) {
+	if !isNodeScript(binPath) {
+		return binPath, append([]string{binPath}, args...)
+	}
+
+	// node in PATH? Use the script directly.
+	if findExecutableInPath("node", searchPath, skipDir) != "" {
+		return binPath, append([]string{binPath}, args...)
+	}
+
+	// Fall back to bun as a node-compatible runtime.
+	bunPath := findExecutableInPath("bun", searchPath, skipDir)
+	if bunPath != "" {
+		return bunPath, append([]string{bunPath, binPath}, args...)
+	}
+
+	// No node or bun; exec the script directly and let the OS error.
+	return binPath, append([]string{binPath}, args...)
+}
+
+func isNodeScript(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 64)
+	n, _ := f.Read(buf)
+	line := string(buf[:n])
+	return strings.Contains(line, "/env node") || strings.Contains(line, "/bin/node")
 }
 
 // --- Executable resolution ---
