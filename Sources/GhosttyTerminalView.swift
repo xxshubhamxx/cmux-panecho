@@ -6118,6 +6118,10 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         keyEvent.text = nil
         keyEvent.composing = false
         _ = ghostty_surface_key(surface, keyEvent)
+        // Refresh ghostty's mouse position so quicklook_word uses current coordinates
+        // when Cmd is pressed while the pointer is stationary.
+        let point = convert(event.locationInWindow, from: nil)
+        ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, modsFromEvent(event))
         updateWordPathHover(cmdHeld: event.modifierFlags.contains(.command))
     }
 
@@ -6364,6 +6368,10 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         // check if the word under cursor is a valid file/directory in the terminal's CWD.
         // This enables cmd-click on bare filenames from commands like `ls`.
         if !consumed && event.modifierFlags.contains(.command) {
+            // Refresh ghostty's cached mouse position so quicklook_word reads
+            // up-to-date coordinates (mouseDown skips pos update on double-click).
+            let point = convert(event.locationInWindow, from: nil)
+            ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, modsFromEvent(event))
             tryOpenWordAsPath()
         }
     }
@@ -6391,12 +6399,13 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
         guard text.text_len > 0, let ptr = text.text else { return nil }
         let wordData = Data(bytes: ptr, count: Int(text.text_len))
-        let word = String(decoding: wordData, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !word.isEmpty else { return nil }
+        guard let decodedWord = String(bytes: wordData, encoding: .utf8) else { return nil }
+        let word = decodedWord.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !word.isEmpty, !word.hasPrefix("/") else { return nil }
 
         guard let termSurface = terminalSurface,
               let workspace = termSurface.owningWorkspace(),
+              !workspace.isRemoteTerminalSurface(termSurface.id),
               let cwd = workspace.panelDirectories[termSurface.id] else { return nil }
 
         let resolvedPath = (cwd as NSString).appendingPathComponent(word)
@@ -6410,7 +6419,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         guard cmdHeld else {
             if wordPathHoverActive {
                 wordPathHoverActive = false
-                NSCursor.iBeam.set()
+                window?.invalidateCursorRects(for: self)
             }
             return
         }
@@ -6422,7 +6431,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             }
         } else if wordPathHoverActive {
             wordPathHoverActive = false
-            NSCursor.iBeam.set()
+            window?.invalidateCursorRects(for: self)
         }
     }
 
