@@ -71,6 +71,7 @@ class AuthManager: ObservableObject {
         }
 
         if let authFixtureUser {
+            print("🔐 AuthManager: Using auth fixture user")
             applyAuthState(
                 CMUXAuthState.primed(
                     clearAuthRequested: false,
@@ -86,6 +87,7 @@ class AuthManager: ObservableObject {
         }
 
         if autoLoginCredentials != nil {
+            print("🔐 AuthManager: Auto-login credentials detected")
             applyAuthState(
                 CMUXAuthState.primed(
                     clearAuthRequested: false,
@@ -125,6 +127,7 @@ class AuthManager: ObservableObject {
         }
 
         if let fixtureUser = authFixtureUser {
+            print("🔐 AuthManager: Applying auth fixture user")
             authUserCache.save(fixtureUser)
             authSessionCache.setHasTokens(true)
             currentUser = fixtureUser
@@ -133,6 +136,7 @@ class AuthManager: ObservableObject {
         }
 
         if let credentials = autoLoginCredentials, !authSessionCache.hasTokens {
+            print("🔐 AuthManager: Starting auto-login for \(credentials.email)")
             await performAutoLogin(credentials)
             return
         }
@@ -212,13 +216,23 @@ class AuthManager: ObservableObject {
 
     private var pendingNonce: String?
 
+    #if DEBUG
+    private struct DebugCredentials {
+        let email: String
+        let password: String
+    }
+    private var debugPasswordCredentials: DebugCredentials?
+    #endif
+
     func sendCode(to email: String) async throws {
         isLoading = true
         defer { isLoading = false }
 
         #if DEBUG
-        if email == "42" {
-            try await signInWithPassword(email: "l@l.com", password: "abc123", setLoading: false)
+        if email.trimmingCharacters(in: .whitespacesAndNewlines) == "42" {
+            let creds = DebugCredentials(email: "l@l.com", password: "abc123")
+            try await signInWithPassword(email: creds.email, password: creds.password, setLoading: false)
+            debugPasswordCredentials = creds
             return
         }
         #endif
@@ -310,10 +324,24 @@ class AuthManager: ObservableObject {
     // MARK: - Access Token
 
     func getAccessToken() async throws -> String {
-        guard let accessToken = await stack.getAccessToken() else {
-            throw AuthError.unauthorized
+        if let accessToken = await stack.getAccessToken() {
+            return accessToken
         }
-        return accessToken
+
+        #if DEBUG
+        if let credentials = debugPasswordCredentials {
+            try? await signInWithPassword(
+                email: credentials.email,
+                password: credentials.password,
+                setLoading: false
+            )
+            if let accessToken = await stack.getAccessToken() {
+                return accessToken
+            }
+        }
+        #endif
+
+        throw AuthError.unauthorized
     }
 }
 

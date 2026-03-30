@@ -2,9 +2,12 @@ const std = @import("std");
 const local_peer_auth = @import("local_peer_auth.zig");
 const server_core = @import("server_core.zig");
 const session_service = @import("session_service.zig");
+const serve_ws = @import("serve_ws.zig");
 
 pub const Config = struct {
     socket_path: []const u8,
+    ws_port: ?u16 = null,
+    ws_secret: []const u8 = "",
 };
 
 pub fn serve(cfg: Config) !void {
@@ -22,6 +25,18 @@ pub fn serve(cfg: Config) !void {
     };
     defer shared.service.deinit();
 
+    // Start WebSocket listener on a separate thread if configured
+    if (cfg.ws_port) |ws_port| {
+        if (cfg.ws_secret.len > 0) {
+            const ws_thread = try std.Thread.spawn(.{}, serve_ws.serveShared, .{
+                &shared.service,
+                ws_port,
+                cfg.ws_secret,
+            });
+            ws_thread.detach();
+        }
+    }
+
     const listener_fd = try createSocket(cfg.socket_path);
     defer {
         std.posix.close(listener_fd);
@@ -36,7 +51,6 @@ pub fn serve(cfg: Config) !void {
 }
 
 const SharedService = struct {
-    mutex: std.Thread.Mutex = .{},
     service: session_service.Service,
 };
 
@@ -63,12 +77,9 @@ fn handleClient(shared: *SharedService, client_fd: std.posix.fd_t) !void {
 
         try pending.appendSlice(std.heap.page_allocator, read_buf[0..n]);
         while (std.mem.indexOfScalar(u8, pending.items, '\n')) |newline_index| {
-            shared.mutex.lock();
             server_core.handleLine(&shared.service, output, pending.items[0..newline_index]) catch |err| {
-                shared.mutex.unlock();
                 return err;
             };
-            shared.mutex.unlock();
 
             const remaining = pending.items[newline_index + 1 ..];
             std.mem.copyForwards(u8, pending.items[0..remaining.len], remaining);
@@ -77,12 +88,9 @@ fn handleClient(shared: *SharedService, client_fd: std.posix.fd_t) !void {
     }
 
     if (pending.items.len > 0) {
-        shared.mutex.lock();
         server_core.handleLine(&shared.service, output, pending.items) catch |err| {
-            shared.mutex.unlock();
             return err;
         };
-        shared.mutex.unlock();
     }
 }
 

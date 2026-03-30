@@ -5,6 +5,9 @@ enum Environment {
     case development
     case production
 
+    private static let secureAPIBaseURL = "https://api.cmux.sh"
+    private static let processEnvironment = ProcessInfo.processInfo.environment
+
     static var current: Environment {
         #if DEBUG
         return .development
@@ -25,16 +28,14 @@ enum Environment {
     }()
 
     private func localOverride(devKey: String, prodKey: String, legacyKey: String? = nil) -> String? {
-        let environmentKey = self == .development ? devKey : prodKey
-        if let value = Self.localConfig?[environmentKey] as? String, !value.isEmpty {
-            return value
-        }
-        if let legacyKey,
-           let value = Self.localConfig?[legacyKey] as? String,
-           !value.isEmpty {
-            return value
-        }
-        return nil
+        Self.stringOverride(
+            devKey: devKey,
+            prodKey: prodKey,
+            legacyKey: legacyKey,
+            environment: self,
+            environmentVariables: Self.processEnvironment,
+            localConfig: Self.localConfig
+        )
     }
 
     // MARK: - Stack Auth
@@ -80,20 +81,17 @@ enum Environment {
     // MARK: - API URLs
 
     var apiBaseURL: String {
-        if let override = localOverride(
+        let configuredValue = localOverride(
             devKey: "API_BASE_URL_DEV",
             prodKey: "API_BASE_URL_PROD",
             legacyKey: "API_BASE_URL"
-        ) {
-            return override
-        }
+        ) ?? defaultAPIBaseURL
 
-        switch self {
-        case .development:
-            return "http://localhost:3000"
-        case .production:
-            return "https://api.cmux.sh"
-        }
+        return Self.resolvedAPIBaseURL(
+            candidate: configuredValue,
+            environment: self,
+            allowInsecureLocalOverride: Self.allowsInsecureLocalAPIBaseURL
+        )
     }
 
     // MARK: - Debug Info
@@ -126,5 +124,72 @@ enum Environment {
             }
         }
         return overrides
+    }
+
+    private var defaultAPIBaseURL: String {
+        switch self {
+        case .development:
+            return "http://localhost:3000"
+        case .production:
+            return Self.secureAPIBaseURL
+        }
+    }
+
+    private static var allowsInsecureLocalAPIBaseURL: Bool {
+        #if targetEnvironment(simulator) && DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    static func resolvedAPIBaseURL(
+        candidate: String,
+        environment: Environment,
+        allowInsecureLocalOverride: Bool
+    ) -> String {
+        guard let url = URL(string: candidate),
+              let scheme = url.scheme?.lowercased() else {
+            return secureFallbackAPIBaseURL(for: environment)
+        }
+
+        if scheme == "https" || allowInsecureLocalOverride {
+            return candidate
+        }
+
+        NSLog("📱 Environment: Ignoring insecure API base URL on device: %@", candidate)
+        return secureFallbackAPIBaseURL(for: environment)
+    }
+
+    private static func secureFallbackAPIBaseURL(for environment: Environment) -> String {
+        switch environment {
+        case .development, .production:
+            return secureAPIBaseURL
+        }
+    }
+
+    static func stringOverride(
+        devKey: String,
+        prodKey: String,
+        legacyKey: String? = nil,
+        environment: Environment,
+        environmentVariables: [String: String],
+        localConfig: [String: Any]?
+    ) -> String? {
+        let environmentKey = environment == .development ? devKey : prodKey
+        for key in [environmentKey, legacyKey].compactMap({ $0 }) {
+            if let value = environmentVariables[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty {
+                return value
+            }
+        }
+        for key in [environmentKey, legacyKey].compactMap({ $0 }) {
+            if let value = (localConfig?[key] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 }

@@ -23,6 +23,7 @@ final class TerminalDirectDaemonTransport: @unchecked Sendable, TerminalTranspor
     private let sessionTransportFactory: @Sendable (
         any TerminalRemoteDaemonTransport,
         String,
+        String,
         TerminalRemoteDaemonResumeState?
     ) -> TerminalTransport
     private let fallbackTransportFactory: @Sendable (
@@ -46,12 +47,15 @@ final class TerminalDirectDaemonTransport: @unchecked Sendable, TerminalTranspor
         sessionTransportFactory: @escaping @Sendable (
             any TerminalRemoteDaemonTransport,
             String,
+            String,
             TerminalRemoteDaemonResumeState?
-        ) -> TerminalTransport = { transport, command, resumeState in
+        ) -> TerminalTransport = { transport, command, sessionName, resumeState in
             TerminalRemoteDaemonSessionTransport(
                 client: TerminalRemoteDaemonClient(transport: transport),
                 command: command,
-                resumeState: resumeState
+                preferredSessionID: sessionName,
+                resumeState: resumeState,
+                attachmentMode: .observer
             )
         },
         fallbackTransportFactory: @escaping @Sendable (
@@ -166,6 +170,7 @@ final class TerminalDirectDaemonTransport: @unchecked Sendable, TerminalTranspor
         let transport = sessionTransportFactory(
             daemonTransport,
             host.bootstrapCommand.replacingOccurrences(of: "{{session}}", with: sessionName),
+            sessionName,
             normalizedResumeState
         )
         transport.eventHandler = { [weak self, weak transport] event in
@@ -300,7 +305,7 @@ final class TerminalDirectDaemonTransport: @unchecked Sendable, TerminalTranspor
         return TerminalRemoteDaemonResumeState(
             sessionID: ticket.sessionID,
             attachmentID: ticket.attachmentID,
-            readOffset: resumeState?.readOffset ?? 0
+            readOffset: 0
         )
     }
 

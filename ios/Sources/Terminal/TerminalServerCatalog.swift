@@ -51,7 +51,9 @@ struct TerminalServerCatalog {
                     teamID: host.teamID,
                     serverID: host.serverID,
                     allowsSSHFallback: host.allowsSSHFallback,
-                    directTLSPins: host.directTLSPins
+                    directTLSPins: host.directTLSPins,
+                    wsPort: host.wsPort,
+                    wsSecret: host.wsSecret
                 )
             }
 
@@ -74,7 +76,9 @@ struct TerminalServerCatalog {
                 teamID: host.teamID,
                 serverID: host.serverID,
                 allowsSSHFallback: existing.allowsSSHFallback,
-                directTLSPins: host.directTLSPins
+                directTLSPins: host.directTLSPins,
+                wsPort: host.wsPort,
+                wsSecret: host.wsSecret
             )
         }
 

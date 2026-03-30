@@ -124,7 +124,9 @@ extension UnifiedInboxItem {
             title: workspaceRow.title,
             preview: workspaceRow.preview.isEmpty ? "No recent activity" : workspaceRow.preview,
             unreadCount: workspaceRow.unreadCount,
-            sortDate: Date(timeIntervalSince1970: workspaceRow.lastActivityAt / 1000),
+            sortDate: workspaceRow.lastActivityAt > 0
+                ? Date(timeIntervalSince1970: workspaceRow.lastActivityAt / 1000)
+                : Date(),
             accessoryLabel: workspaceRow.machineDisplayName,
             symbolName: "terminal",
             tmuxSessionName: workspaceRow.tmuxSessionName,

@@ -16,12 +16,14 @@ struct MobileMachineRow: Codable, Equatable, Sendable, Identifiable {
     let status: MobileMachineStatus
     let lastSeenAt: Double
     let lastWorkspaceSyncAt: Double?
+    let wsPort: Int?
+    let wsSecret: String?
 
     var id: String { machineId }
 
     func asTerminalHost() -> TerminalHost {
         let address = preferredAddress
-        return TerminalHost(
+        let host = TerminalHost(
             stableID: machineId,
             name: displayName,
             hostname: address,
@@ -32,8 +34,11 @@ struct MobileMachineRow: Codable, Equatable, Sendable, Identifiable {
             transportPreference: .remoteDaemon,
             teamID: teamId,
             serverID: preferredServerID,
-            allowsSSHFallback: true
+            allowsSSHFallback: true,
+            wsPort: wsPort,
+            wsSecret: wsSecret
         )
+        return host
     }
 
     var preferredAddress: String {

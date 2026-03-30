@@ -129,6 +129,13 @@ struct DefaultTerminalTransportFactory: TerminalTransportFactory {
         sessionName: String,
         resumeState: TerminalRemoteDaemonResumeState?
     ) -> TerminalTransport {
+        if host.hasWebSocketEndpoint {
+            return TerminalWebSocketTransport(
+                host: host,
+                sessionName: sessionName,
+                resumeState: resumeState
+            )
+        }
         if host.transportPreference == .remoteDaemon {
             if let remoteDaemonBuilder {
                 return remoteDaemonBuilder(host, credentials, sessionName, resumeState)

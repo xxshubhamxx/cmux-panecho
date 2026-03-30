@@ -745,10 +745,11 @@ final class TerminalSidebarStore: ObservableObject {
             hosts[existingIndex].transportPreference = .remoteDaemon
             hosts[existingIndex].teamID = item.teamID
             hosts[existingIndex].serverID = serverID
+            applyDebugWebSocketConfig(&hosts[existingIndex])
             return hosts[existingIndex]
         }
 
-        let host = TerminalHost(
+        var host = TerminalHost(
             stableID: machineID,
             name: hostName,
             hostname: hostname,
@@ -762,8 +763,23 @@ final class TerminalSidebarStore: ObservableObject {
             serverID: serverID,
             allowsSSHFallback: true
         )
+        applyDebugWebSocketConfig(&host)
         hosts.append(host)
         return host
+    }
+
+    private func applyDebugWebSocketConfig(_ host: inout TerminalHost) {
+        #if DEBUG
+        if host.wsPort == nil,
+           let portStr = ProcessInfo.processInfo.environment["CMUX_DEBUG_WS_PORT"],
+           let port = Int(portStr) {
+            host.wsPort = port
+            host.wsSecret = ProcessInfo.processInfo.environment["CMUX_DEBUG_WS_SECRET"] ?? ""
+            if let wsHost = ProcessInfo.processInfo.environment["CMUX_DEBUG_WS_HOST"] {
+                host.hostname = wsHost
+            }
+        }
+        #endif
     }
 
     private func normalizedRemoteServerID(machineID: String, tailscaleHostname: String?) -> String {
@@ -936,6 +952,10 @@ final class TerminalSessionController: ObservableObject {
     private var pendingReconnectAfterTransportWork = false
     private var pendingReconnectUsesReconnectingPhase = false
 
+    private var isLiveAnchormuxSession: Bool {
+        host.stableID.hasPrefix("anchormux-live-")
+    }
+
     static func unavailable(workspaceID: TerminalWorkspace.ID) -> TerminalSessionController {
         TerminalSessionController(
             workspace: TerminalWorkspace(
@@ -996,6 +1016,9 @@ final class TerminalSessionController: ObservableObject {
     }
 
     func connectIfNeeded(reconnecting: Bool = false) {
+        if isLiveAnchormuxSession {
+            liveAnchormuxLog("controller.connectIfNeeded reconnecting=\(reconnecting) phase=\(phase) transport=\(transport != nil)")
+        }
         guard transport == nil else { return }
         guard transportConnectTask == nil, transportDisconnectTask == nil else {
             queueReconnectAfterPendingTransportWork(reconnecting: reconnecting)
@@ -1079,6 +1102,9 @@ final class TerminalSessionController: ObservableObject {
     }
 
     func resumeIfNeeded() {
+        if isLiveAnchormuxSession {
+            liveAnchormuxLog("controller.resumeIfNeeded phase=\(phase) transport=\(transport != nil) shouldReconnect=\(shouldReconnect)")
+        }
         guard shouldReconnect else { return }
         if transport == nil, phase != .needsConfiguration {
             connectIfNeeded(reconnecting: true)
@@ -1086,18 +1112,29 @@ final class TerminalSessionController: ObservableObject {
     }
 
     func reconnectNow() {
+        if isLiveAnchormuxSession {
+            liveAnchormuxLog("controller.reconnectNow phase=\(phase)")
+        }
+        guard phase != .reconnecting, transportDisconnectTask == nil else {
+            terminalSurface?.focusInput()
+            return
+        }
         reconnectTask?.cancel()
         reconnectTask = nil
         clearStatusMessage()
         syncRemoteDaemonResumeStateFromTransport()
         clearPendingReconnectAfterTransportWork()
         cancelTransportConnectTask()
+        setPhase(.reconnecting, error: nil)
         let transport = releaseTransport()
         scheduleTransportDisconnect(transport, preserveSession: true)
         connectIfNeeded(reconnecting: true)
     }
 
     func disconnect() {
+        if isLiveAnchormuxSession {
+            liveAnchormuxLog("controller.disconnect phase=\(phase)")
+        }
         shouldReconnect = false
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -1111,6 +1148,9 @@ final class TerminalSessionController: ObservableObject {
     }
 
     func suspendPreservingState() {
+        if isLiveAnchormuxSession {
+            liveAnchormuxLog("controller.suspendPreservingState phase=\(phase)")
+        }
         reconnectTask?.cancel()
         reconnectTask = nil
         clearStatusMessage()
@@ -1128,12 +1168,27 @@ final class TerminalSessionController: ObservableObject {
     }
 
     private func handle(event: TerminalTransportEvent) {
+        if isLiveAnchormuxSession {
+            switch event {
+            case .connected:
+                liveAnchormuxLog("controller.event connected")
+            case .output(let data):
+                liveAnchormuxLog("controller.event output bytes=\(data.count)")
+            case .disconnected(let message):
+                liveAnchormuxLog("controller.event disconnected message=\(message ?? "nil")")
+            case .notice(let message):
+                liveAnchormuxLog("controller.event notice message=\(message)")
+            case .trustedHostKey(let hostKey):
+                liveAnchormuxLog("controller.event trusted_host_key key=\(hostKey)")
+            }
+        }
         switch event {
         case .connected:
             reconnectTask?.cancel()
             reconnectTask = nil
             setPhase(.connected, error: nil)
             syncRemoteDaemonResumeStateFromTransport()
+            terminalSurface?.focusInput()
             if statusMessage != nil {
                 scheduleStatusMessageClear(after: 2)
             }
@@ -1160,9 +1215,13 @@ final class TerminalSessionController: ObservableObject {
     }
 
     private func setPhase(_ phase: TerminalConnectionPhase, error: String?) {
+        let normalizedError = normalizedDisplayError(error)
+        if isLiveAnchormuxSession {
+            liveAnchormuxLog("controller.phase from=\(self.phase) to=\(phase) error=\(normalizedError ?? "nil")")
+        }
         self.phase = phase
-        self.errorMessage = error
-        onUpdate?(.phase(phase, error))
+        self.errorMessage = normalizedError
+        onUpdate?(.phase(phase, normalizedError))
     }
 
     private func scheduleReconnectIfNeeded(after seconds: Double) {
@@ -1176,7 +1235,10 @@ final class TerminalSessionController: ObservableObject {
     private func shouldAutoReconnect(after error: Error) -> Bool {
         switch error {
         case let error as TerminalDirectDaemonClientError:
-            if case .connectionFailed = error {
+            if case .connectionFailed(let message) = error {
+                if isSecureConnectionConfigurationError(message) {
+                    return false
+                }
                 return true
             }
             return false
@@ -1209,6 +1271,9 @@ final class TerminalSessionController: ObservableObject {
         guard let errorMessage else { return true }
 
         let lowercased = errorMessage.localizedLowercase
+        if isSecureConnectionConfigurationError(errorMessage) {
+            return false
+        }
         if lowercased.contains("host key") ||
             lowercased.contains("password") ||
             lowercased.contains("private key") ||
@@ -1230,10 +1295,28 @@ final class TerminalSessionController: ObservableObject {
         }
     }
 
+    private func normalizedDisplayError(_ error: String?) -> String? {
+        guard let error else { return nil }
+        if isSecureConnectionConfigurationError(error) {
+            return TerminalStoreStrings.secureConnectionError
+        }
+        return error
+    }
+
+    private func isSecureConnectionConfigurationError(_ errorMessage: String?) -> Bool {
+        guard let errorMessage else { return false }
+        if errorMessage == TerminalStoreStrings.secureConnectionError {
+            return true
+        }
+        let lowercased = errorMessage.localizedLowercase
+        return lowercased.contains("app transport security") ||
+            lowercased.contains("requires the use of a secure connection")
+    }
+
     private func setStatusMessage(_ message: String?) {
         statusMessageTask?.cancel()
         statusMessageTask = nil
-        statusMessage = message
+        statusMessage = normalizedDisplayError(message)
     }
 
     private func clearStatusMessage() {
@@ -1338,6 +1421,9 @@ final class TerminalSessionController: ObservableObject {
     }
 
     private func handleSurfaceCloseRequest(processAlive _: Bool) {
+        if isLiveAnchormuxSession {
+            liveAnchormuxLog("controller.surfaceCloseRequest phase=\(phase)")
+        }
         guard terminalSurface != nil else { return }
 
         reconnectTask?.cancel()
@@ -1537,6 +1623,57 @@ extension TerminalSidebarStore {
         return TerminalSidebarStore(
             snapshotStore: snapshotStore,
             credentialsStore: credentialsStore,
+            serverDiscovery: nil,
+            networkPathMonitor: nil,
+            eagerlyRestoreSessions: false
+        )
+    }
+
+    static func uiTestWorkspaceHomeFixture() -> TerminalSidebarStore {
+        let desktopID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        let macMiniID = UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
+        let desktop = TerminalHost(
+            id: desktopID,
+            stableID: "lawrences-macbook-pro-2",
+            name: "Desktop",
+            hostname: "lawrences-macbook-pro-2.tail",
+            username: "cmux",
+            symbolName: "desktopcomputer",
+            palette: .sky,
+            sortIndex: 0,
+            source: .discovered,
+            transportPreference: .remoteDaemon,
+            teamID: "uitest_team",
+            serverID: "lawrences-macbook-pro-2"
+        )
+        let macMini = TerminalHost(
+            id: macMiniID,
+            stableID: "cmux-macmini",
+            name: "Mac mini",
+            hostname: "cmux-macmini.tail",
+            username: "cmux",
+            symbolName: "desktopcomputer",
+            palette: .mint,
+            sortIndex: 1,
+            source: .discovered,
+            transportPreference: .remoteDaemon,
+            teamID: "uitest_team",
+            serverID: "cmux-macmini"
+        )
+        let snapshot = TerminalStoreSnapshot(
+            hosts: [desktop, macMini],
+            workspaces: [],
+            selectedWorkspaceID: nil
+        )
+        return TerminalSidebarStore(
+            snapshotStore: InMemoryTerminalSnapshotStore(snapshot: snapshot),
+            credentialsStore: InMemoryTerminalCredentialsStore(
+                passwords: [
+                    desktop.id: "fixture",
+                    macMini.id: "fixture",
+                ]
+            ),
+            transportFactory: TerminalUITestConnectedTransportFactory(),
             serverDiscovery: nil,
             networkPathMonitor: nil,
             eagerlyRestoreSessions: false
@@ -1854,5 +1991,9 @@ private enum TerminalStoreStrings {
     static let configurePrivateKeyError = String(
         localized: "terminal.workspace.configure_private_key",
         defaultValue: "Add a private key for this server."
+    )
+    static let secureConnectionError = String(
+        localized: "terminal.workspace.secure_connection_required",
+        defaultValue: "Secure connection required. Check the server URL and try again."
     )
 }

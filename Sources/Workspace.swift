@@ -229,19 +229,6 @@ private struct BonsplitCompatibilityTabIDPayload: Codable {
 }
 
 extension TabID {
-    init(uuid: UUID) {
-        let payload = BonsplitCompatibilityTabIDPayload(id: uuid)
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-
-        do {
-            let data = try encoder.encode(payload)
-            self = try decoder.decode(TabID.self, from: data)
-        } catch {
-            preconditionFailure("Failed to construct Bonsplit TabID compatibility payload: \(error)")
-        }
-    }
-
     var uuid: UUID {
         if let id = Mirror(reflecting: self).children.first(where: { $0.label == "id" })?.value as? UUID {
             return id
@@ -256,126 +243,6 @@ extension TabID {
         } catch {
             preconditionFailure("Failed to read Bonsplit TabID compatibility payload: \(error)")
         }
-    }
-}
-
-@MainActor
-private enum BonsplitCompatibilityStateStore {
-    struct State {
-        var contextMenuShortcuts: [TabContextAction: KeyboardShortcut] = [:]
-        var onExternalTabDrop: ((BonsplitController.ExternalTabDropRequest) -> Bool)?
-        var onTabCloseRequest: ((TabID, PaneID?) -> Void)?
-        var zoomedPaneId: PaneID?
-    }
-
-    static var states: [ObjectIdentifier: State] = [:]
-
-    static func state(for controller: BonsplitController) -> State {
-        states[ObjectIdentifier(controller), default: State()]
-    }
-
-    static func update(for controller: BonsplitController, _ mutate: (inout State) -> Void) {
-        let key = ObjectIdentifier(controller)
-        var current = states[key, default: State()]
-        mutate(&current)
-        if current.contextMenuShortcuts.isEmpty,
-           current.onExternalTabDrop == nil,
-           current.onTabCloseRequest == nil,
-           current.zoomedPaneId == nil {
-            states.removeValue(forKey: key)
-        } else {
-            states[key] = current
-        }
-    }
-
-    static func validatedZoomedPaneId(for controller: BonsplitController) -> PaneID? {
-        let key = ObjectIdentifier(controller)
-        guard let paneId = states[key]?.zoomedPaneId else {
-            return nil
-        }
-
-        guard controller.allPaneIds.contains(paneId) else {
-            update(for: controller) { $0.zoomedPaneId = nil }
-            return nil
-        }
-
-        return paneId
-    }
-}
-
-extension BonsplitController {
-    var contextMenuShortcuts: [TabContextAction: KeyboardShortcut] {
-        get {
-            BonsplitCompatibilityStateStore.state(for: self).contextMenuShortcuts
-        }
-        set {
-            BonsplitCompatibilityStateStore.update(for: self) { $0.contextMenuShortcuts = newValue }
-        }
-    }
-
-    var onExternalTabDrop: ((ExternalTabDropRequest) -> Bool)? {
-        get {
-            BonsplitCompatibilityStateStore.state(for: self).onExternalTabDrop
-        }
-        set {
-            BonsplitCompatibilityStateStore.update(for: self) { $0.onExternalTabDrop = newValue }
-        }
-    }
-
-    var onTabCloseRequest: ((TabID, PaneID?) -> Void)? {
-        get {
-            BonsplitCompatibilityStateStore.state(for: self).onTabCloseRequest
-        }
-        set {
-            BonsplitCompatibilityStateStore.update(for: self) { $0.onTabCloseRequest = newValue }
-        }
-    }
-
-    var zoomedPaneId: PaneID? {
-        get {
-            BonsplitCompatibilityStateStore.validatedZoomedPaneId(for: self)
-        }
-        set {
-            guard let newValue else {
-                BonsplitCompatibilityStateStore.update(for: self) { $0.zoomedPaneId = nil }
-                return
-            }
-
-            guard allPaneIds.contains(newValue) else {
-                BonsplitCompatibilityStateStore.update(for: self) { $0.zoomedPaneId = nil }
-                return
-            }
-
-            BonsplitCompatibilityStateStore.update(for: self) { $0.zoomedPaneId = newValue }
-        }
-    }
-
-    var isSplitZoomed: Bool {
-        zoomedPaneId != nil
-    }
-
-    @discardableResult
-    func clearPaneZoom() -> Bool {
-        guard zoomedPaneId != nil else {
-            return false
-        }
-
-        BonsplitCompatibilityStateStore.update(for: self) { $0.zoomedPaneId = nil }
-        return true
-    }
-
-    @discardableResult
-    func togglePaneZoom(inPane paneId: PaneID) -> Bool {
-        guard allPaneIds.contains(paneId) else {
-            return false
-        }
-
-        if zoomedPaneId == paneId {
-            return clearPaneZoom()
-        }
-
-        BonsplitCompatibilityStateStore.update(for: self) { $0.zoomedPaneId = paneId }
-        return true
     }
 }
 
@@ -5568,6 +5435,8 @@ struct ClosedBrowserPanelRestoreSnapshot {
 struct LocalTerminalDaemonConfiguration: Equatable {
     let socketPath: String
     let daemonBinaryPath: String
+    var wsPort: Int?
+    var wsSecret: String?
 }
 
 enum LocalTerminalDaemonBridge {
@@ -5612,37 +5481,77 @@ enum LocalTerminalDaemonBridge {
             return nil
         }
 
+        var config: LocalTerminalDaemonConfiguration?
+
         if let rawBinaryPath = environment["CMUX_REMOTE_DAEMON_BINARY"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !rawBinaryPath.isEmpty,
            fileManager.isExecutableFile(atPath: rawBinaryPath) {
-            return LocalTerminalDaemonConfiguration(
+            config = LocalTerminalDaemonConfiguration(
                 socketPath: rawSocketPath,
                 daemonBinaryPath: rawBinaryPath
             )
         }
 
-        if let repoRoot = environment["CMUXTERM_REPO_ROOT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+        if config == nil,
+           let repoRoot = environment["CMUXTERM_REPO_ROOT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !repoRoot.isEmpty {
             let candidate = URL(fileURLWithPath: repoRoot, isDirectory: true)
                 .appendingPathComponent("daemon/remote/zig/zig-out/bin/cmuxd-remote", isDirectory: false)
                 .path
             if fileManager.isExecutableFile(atPath: candidate) {
-                return LocalTerminalDaemonConfiguration(
+                config = LocalTerminalDaemonConfiguration(
                     socketPath: rawSocketPath,
                     daemonBinaryPath: candidate
                 )
             }
         }
 
-        if let bundledBinaryURL = bundle.resourceURL?.appendingPathComponent("bin/cmuxd-remote", isDirectory: false),
+        if config == nil,
+           let bundledBinaryURL = bundle.resourceURL?.appendingPathComponent("bin/cmuxd-remote", isDirectory: false),
            fileManager.isExecutableFile(atPath: bundledBinaryURL.path) {
-            return LocalTerminalDaemonConfiguration(
+            config = LocalTerminalDaemonConfiguration(
                 socketPath: rawSocketPath,
                 daemonBinaryPath: bundledBinaryURL.path
             )
         }
 
-        return nil
+        guard config != nil else { return nil }
+
+        // Auto-enable WebSocket listener for mobile connections
+        let wsPort = Int(environment["CMUX_MOBILE_WS_PORT"] ?? "") ?? 9444
+        config?.wsPort = wsPort
+        config?.wsSecret = resolveWebSocketSecret(environment: environment)
+
+        return config
+    }
+
+    private static func resolveWebSocketSecret(environment: [String: String]) -> String {
+        if let explicit = environment["CMUX_MOBILE_WS_SECRET"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !explicit.isEmpty {
+            return explicit
+        }
+        return persistedWebSocketSecret()
+    }
+
+    private static func persistedWebSocketSecret() -> String {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let secretDir = appSupport.appendingPathComponent("cmux", isDirectory: true)
+        let secretFile = secretDir.appendingPathComponent("mobile-ws-secret")
+
+        if let existing = try? String(contentsOf: secretFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           existing.count >= 32 {
+            return existing
+        }
+
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let secret = bytes.map { String(format: "%02x", $0) }.joined()
+
+        try? FileManager.default.createDirectory(at: secretDir, withIntermediateDirectories: true)
+        try? secret.write(to: secretFile, atomically: true, encoding: .utf8)
+
+        return secret
     }
 
     private static func ensureReachableConfiguration(
@@ -5735,7 +5644,14 @@ enum LocalTerminalDaemonBridge {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: configuration.daemonBinaryPath)
-        process.arguments = ["serve", "--unix", "--socket", configuration.socketPath]
+        var args = ["serve", "--unix", "--socket", configuration.socketPath]
+        if let wsPort = configuration.wsPort {
+            args += ["--ws-port", String(wsPort)]
+        }
+        if let wsSecret = configuration.wsSecret, !wsSecret.isEmpty {
+            args += ["--ws-secret", wsSecret]
+        }
+        process.arguments = args
         process.standardInput = FileHandle.nullDevice
 
         let logURL = managedLogURL(for: configuration.socketPath)
@@ -5872,7 +5788,7 @@ enum LocalTerminalDaemonBridge {
 #endif
 
         let startupScript = """
-        exec \(shellSingleQuoted(configuration.daemonBinaryPath)) session new \(shellSingleQuoted(sessionID.uuidString)) --quiet --socket \(shellSingleQuoted(configuration.socketPath)) -- \(shellSingleQuoted(daemonCommand))
+        exec \(shellSingleQuoted(configuration.daemonBinaryPath)) amux new \(shellSingleQuoted(sessionID.uuidString)) --quiet --socket \(shellSingleQuoted(configuration.socketPath)) -- \(shellSingleQuoted(daemonCommand))
         """
         return "sh -c \(shellSingleQuoted(startupScript))"
     }
@@ -6853,12 +6769,25 @@ final class Workspace: Identifiable, ObservableObject {
         let previousState = panelShellActivityStates[panelId] ?? .unknown
         guard previousState != state else { return }
         panelShellActivityStates[panelId] = state
+        NotificationCenter.default.post(
+            name: .terminalSurfaceShellActivityDidChange,
+            object: self,
+            userInfo: [
+                "workspaceId": id,
+                "surfaceId": panelId,
+                "state": state.rawValue
+            ]
+        )
 #if DEBUG
         dlog(
             "surface.shellState workspace=\(id.uuidString.prefix(5)) " +
             "panel=\(panelId.uuidString.prefix(5)) from=\(previousState.rawValue) to=\(state.rawValue)"
         )
 #endif
+    }
+
+    func panelShellActivityState(panelId: UUID) -> PanelShellActivityState {
+        panelShellActivityStates[panelId] ?? .unknown
     }
 
     func panelNeedsConfirmClose(panelId: UUID, fallbackNeedsConfirmClose: Bool) -> Bool {

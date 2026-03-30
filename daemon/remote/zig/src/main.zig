@@ -4,6 +4,7 @@ const cli_relay = @import("cli_relay.zig");
 const cli_session = @import("cli_session.zig");
 const serve_tls = @import("serve_tls.zig");
 const serve_unix = @import("serve_unix.zig");
+const serve_ws = @import("serve_ws.zig");
 const ticket_auth = @import("ticket_auth.zig");
 const serve_stdio = @import("serve_stdio.zig");
 const json_rpc = @import("json_rpc.zig");
@@ -40,6 +41,9 @@ fn run(args: []const []const u8) !u8 {
     if (std.mem.eql(u8, argv0, "cmux")) {
         return cli_relay.run(if (args.len > 1) args[1..] else &.{}, stderr);
     }
+    if (std.mem.eql(u8, argv0, "amux")) {
+        return cli_session.run(if (args.len > 1) args[1..] else &.{}, stderr, stdout);
+    }
 
     if (args.len <= 1) {
         try usage(stderr);
@@ -55,7 +59,7 @@ fn run(args: []const []const u8) !u8 {
     if (std.mem.eql(u8, command, "cli")) {
         return cli_relay.run(if (args.len > 2) args[2..] else &.{}, stderr);
     }
-    if (std.mem.eql(u8, command, "session")) {
+    if (std.mem.eql(u8, command, "amux") or std.mem.eql(u8, command, "session")) {
         return cli_session.run(if (args.len > 2) args[2..] else &.{}, stderr, stdout);
     }
     if (isTopLevelSessionCommand(command)) {
@@ -76,7 +80,12 @@ fn run(args: []const []const u8) !u8 {
             try serve_tls.serve(cfg);
             return 0;
         }
-        try stderr.print("serve requires exactly one of --stdio, --unix, or --tls\n", .{});
+        if (args.len >= 3 and std.mem.eql(u8, args[2], "--ws")) {
+            const cfg = try parseServeWSArgs(args[3..]);
+            try serve_ws.serve(cfg);
+            return 0;
+        }
+        try stderr.print("serve requires exactly one of --stdio, --unix, --tls, or --ws\n", .{});
         try stderr.flush();
         return 2;
     }
@@ -86,23 +95,19 @@ fn run(args: []const []const u8) !u8 {
 }
 
 fn isTopLevelSessionCommand(command: []const u8) bool {
-    return std.mem.eql(u8, command, "attach")
-        or std.mem.eql(u8, command, "ls")
-        or std.mem.eql(u8, command, "list")
-        or std.mem.eql(u8, command, "status")
-        or std.mem.eql(u8, command, "history")
-        or std.mem.eql(u8, command, "kill")
-        or std.mem.eql(u8, command, "new");
+    return std.mem.eql(u8, command, "attach") or std.mem.eql(u8, command, "ls") or std.mem.eql(u8, command, "list") or std.mem.eql(u8, command, "status") or std.mem.eql(u8, command, "history") or std.mem.eql(u8, command, "kill") or std.mem.eql(u8, command, "new");
 }
 
 fn usage(stderr: anytype) !void {
     try stderr.print("Usage:\n", .{});
     try stderr.print("  cmuxd-remote version\n", .{});
     try stderr.print("  cmuxd-remote serve --stdio\n", .{});
-    try stderr.print("  cmuxd-remote serve --unix --socket <path>\n", .{});
+    try stderr.print("  cmuxd-remote serve --unix --socket <path> [--ws-port <port> --ws-secret <secret>]\n", .{});
     try stderr.print("  cmuxd-remote serve --tls --listen <addr> --server-id <id> --ticket-secret <secret> --cert-file <path> --key-file <path>\n", .{});
+    try stderr.print("  cmuxd-remote serve --ws --listen <addr> --secret <secret>\n", .{});
     try stderr.print("  cmuxd-remote cli <command> [args...]\n", .{});
-    try stderr.print("  cmuxd-remote session <command> [args...]\n", .{});
+    try stderr.print("  cmuxd-remote amux <command> [args...]\n", .{});
+    try stderr.print("  cmuxd-remote session <command> [args...]  # alias\n", .{});
     try stderr.print("  cmuxd-remote list|ls [--socket <path>]\n", .{});
     try stderr.print("  cmuxd-remote attach|status|history|kill <name> [--socket <path>]\n", .{});
     try stderr.print("  cmuxd-remote new <name> [--socket <path>] [--detached] [--quiet] [-- <command>]\n", .{});
@@ -122,6 +127,10 @@ fn parseServeUnixArgs(args: []const []const u8) !serve_unix.Config {
 
         if (std.mem.eql(u8, flag, "--socket")) {
             cfg.socket_path = value;
+        } else if (std.mem.eql(u8, flag, "--ws-port")) {
+            cfg.ws_port = try std.fmt.parseInt(u16, value, 10);
+        } else if (std.mem.eql(u8, flag, "--ws-secret")) {
+            cfg.ws_secret = value;
         } else {
             return error.InvalidServeUnixArgs;
         }
@@ -166,5 +175,31 @@ fn parseServeTLSArgs(args: []const []const u8) !serve_tls.Config {
     if (cfg.listen_addr.len == 0 or cfg.server_id.len == 0 or cfg.ticket_secret.len == 0 or cfg.cert_file.len == 0 or cfg.key_file.len == 0) {
         return error.InvalidServeTLSArgs;
     }
+    return cfg;
+}
+
+fn parseServeWSArgs(args: []const []const u8) !serve_ws.Config {
+    var cfg = serve_ws.Config{
+        .listen_addr = "",
+        .secret = "",
+    };
+
+    var idx: usize = 0;
+    while (idx < args.len) : (idx += 1) {
+        const flag = args[idx];
+        if (idx + 1 >= args.len) return error.InvalidServeWSArgs;
+        const value = args[idx + 1];
+
+        if (std.mem.eql(u8, flag, "--listen")) {
+            cfg.listen_addr = value;
+        } else if (std.mem.eql(u8, flag, "--secret")) {
+            cfg.secret = value;
+        } else {
+            return error.InvalidServeWSArgs;
+        }
+        idx += 1;
+    }
+
+    if (cfg.listen_addr.len == 0 or cfg.secret.len == 0) return error.InvalidServeWSArgs;
     return cfg;
 }

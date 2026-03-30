@@ -102,6 +102,8 @@ struct TerminalHost: Identifiable, Codable, Equatable, Sendable {
     var serverID: String?
     var allowsSSHFallback: Bool
     var directTLSPins: [String]
+    var wsPort: Int?
+    var wsSecret: String?
 
     init(
         id: ID = UUID(),
@@ -122,7 +124,9 @@ struct TerminalHost: Identifiable, Codable, Equatable, Sendable {
         teamID: String? = nil,
         serverID: String? = nil,
         allowsSSHFallback: Bool = true,
-        directTLSPins: [String] = []
+        directTLSPins: [String] = [],
+        wsPort: Int? = nil,
+        wsSecret: String? = nil
     ) {
         self.id = id
         self.stableID = stableID ?? id.uuidString
@@ -143,6 +147,12 @@ struct TerminalHost: Identifiable, Codable, Equatable, Sendable {
         self.serverID = serverID
         self.allowsSSHFallback = allowsSSHFallback
         self.directTLSPins = directTLSPins.normalizedTerminalPins
+        self.wsPort = wsPort
+        self.wsSecret = wsSecret
+    }
+
+    var hasWebSocketEndpoint: Bool {
+        wsPort != nil && !(wsSecret?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     var subtitle: String {
@@ -212,6 +222,8 @@ struct TerminalHost: Identifiable, Codable, Equatable, Sendable {
         case serverID
         case allowsSSHFallback
         case directTLSPins
+        case wsPort
+        case wsSecret
     }
 
     init(from decoder: Decoder) throws {
@@ -244,7 +256,9 @@ struct TerminalHost: Identifiable, Codable, Equatable, Sendable {
             teamID: try container.decodeIfPresent(String.self, forKey: .teamID),
             serverID: try container.decodeIfPresent(String.self, forKey: .serverID),
             allowsSSHFallback: try container.decodeIfPresent(Bool.self, forKey: .allowsSSHFallback) ?? true,
-            directTLSPins: try container.decodeIfPresent([String].self, forKey: .directTLSPins) ?? []
+            directTLSPins: try container.decodeIfPresent([String].self, forKey: .directTLSPins) ?? [],
+            wsPort: try container.decodeIfPresent(Int.self, forKey: .wsPort),
+            wsSecret: try container.decodeIfPresent(String.self, forKey: .wsSecret)
         )
     }
 
@@ -531,6 +545,139 @@ extension TerminalWorkspace {
             (backendMetadata?.preview?.localizedLowercase.contains(query) ?? false) ||
             host.name.localizedLowercase.contains(query) ||
             host.hostname.localizedLowercase.contains(query)
+    }
+}
+
+struct TerminalWorkspaceDeviceSection: Identifiable, Equatable {
+    let host: TerminalHost
+    let workspaces: [TerminalWorkspace]
+
+    var id: TerminalHost.ID { host.id }
+
+    var title: String {
+        host.name
+    }
+
+    var subtitle: String? {
+        let hostname = host.hostname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !hostname.isEmpty else { return nil }
+        guard hostname.caseInsensitiveCompare(host.name) != .orderedSame else { return nil }
+        return hostname
+    }
+}
+
+enum TerminalWorkspaceDeviceSectionBuilder {
+    static func makeSections(
+        workspaces: [TerminalWorkspace],
+        hosts: [TerminalHost],
+        query: String
+    ) -> [TerminalWorkspaceDeviceSection] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        let hostsByID = Dictionary(uniqueKeysWithValues: hosts.map { ($0.id, $0) })
+        let filtered = workspaces
+            .filter { workspace in
+                guard let host = hostsByID[workspace.hostID] else { return false }
+                guard !normalizedQuery.isEmpty else { return true }
+                return workspace.matches(query: normalizedQuery, host: host)
+            }
+            .sorted { $0.lastActivity > $1.lastActivity }
+
+        var orderedHostIDs: [TerminalHost.ID] = []
+        var grouped: [TerminalHost.ID: [TerminalWorkspace]] = [:]
+
+        for workspace in filtered {
+            if grouped[workspace.hostID] == nil {
+                orderedHostIDs.append(workspace.hostID)
+            }
+            grouped[workspace.hostID, default: []].append(workspace)
+        }
+
+        return orderedHostIDs.compactMap { hostID in
+            guard let host = hostsByID[hostID],
+                  let workspaces = grouped[hostID],
+                  !workspaces.isEmpty else {
+                return nil
+            }
+            return TerminalWorkspaceDeviceSection(
+                host: host,
+                workspaces: workspaces
+            )
+        }
+    }
+}
+
+struct UnifiedInboxWorkspaceDeviceSection: Identifiable, Equatable {
+    let machineID: String
+    let title: String
+    let subtitle: String?
+    let items: [UnifiedInboxItem]
+
+    var id: String { machineID }
+}
+
+enum UnifiedInboxWorkspaceDeviceSectionBuilder {
+    static func makeSections(
+        items: [UnifiedInboxItem]
+    ) -> [UnifiedInboxWorkspaceDeviceSection] {
+        let filtered = items
+            .filter { $0.kind == .workspace }
+            .sorted { $0.sortDate > $1.sortDate }
+
+        var orderedMachineIDs: [String] = []
+        var grouped: [String: [UnifiedInboxItem]] = [:]
+
+        for item in filtered {
+            let machineID = normalizedMachineID(for: item)
+            if grouped[machineID] == nil {
+                orderedMachineIDs.append(machineID)
+            }
+            grouped[machineID, default: []].append(item)
+        }
+
+        return orderedMachineIDs.compactMap { machineID in
+            guard let items = grouped[machineID],
+                  let first = items.first else {
+                return nil
+            }
+
+            return UnifiedInboxWorkspaceDeviceSection(
+                machineID: machineID,
+                title: displayTitle(for: first, machineID: machineID),
+                subtitle: subtitle(for: first, machineID: machineID),
+                items: items
+            )
+        }
+    }
+
+    private static func normalizedMachineID(for item: UnifiedInboxItem) -> String {
+        let machineID = item.machineID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let machineID, !machineID.isEmpty else {
+            return item.id
+        }
+        return machineID
+    }
+
+    private static func displayTitle(for item: UnifiedInboxItem, machineID: String) -> String {
+        let label = item.accessoryLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let label, !label.isEmpty else { return machineID }
+        return label
+    }
+
+    private static func subtitle(for item: UnifiedInboxItem, machineID: String) -> String? {
+        let candidates = [
+            item.tailscaleHostname?.trimmingCharacters(in: .whitespacesAndNewlines),
+            item.tailscaleIPs.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+            machineID,
+        ]
+
+        let title = displayTitle(for: item, machineID: machineID)
+        for candidate in candidates {
+            guard let candidate, !candidate.isEmpty else { continue }
+            guard candidate.caseInsensitiveCompare(title) != .orderedSame else { continue }
+            return candidate
+        }
+
+        return nil
     }
 }
 

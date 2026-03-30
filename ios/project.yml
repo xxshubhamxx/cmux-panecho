@@ -111,6 +111,8 @@ targets:
     info:
       path: Info.plist
       properties:
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen:
           UIColorName: ""

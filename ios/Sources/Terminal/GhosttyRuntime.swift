@@ -53,7 +53,7 @@ final class GhosttyRuntime {
         try Self.initializeBackendIfNeeded()
 
         let config = ghostty_config_new()
-        ghostty_config_load_default_files(config)
+        Self.loadConfig(config)
         ghostty_config_finalize(config)
 
         var runtimeConfig = ghostty_runtime_config_s(
@@ -105,6 +105,7 @@ final class GhosttyRuntime {
 
     func tick() {
         guard let app else { return }
+        liveAnchormuxLog("runtime.tick")
         ghostty_app_tick(app)
     }
 
@@ -117,11 +118,81 @@ final class GhosttyRuntime {
         backendInitialized = true
     }
 
+    private static func loadConfig(_ config: ghostty_config_t?) {
+        guard let config else { return }
+        #if os(iOS)
+        ensureDefaultiOSConfig()
+        for url in iOSConfigURLs() {
+            url.path.withCString { path in
+                ghostty_config_load_file(config, path)
+            }
+        }
+        #else
+        ghostty_config_load_default_files(config)
+        #endif
+    }
+
+    private static func ensureDefaultiOSConfig() {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let configDir = appSupport.appendingPathComponent("ghostty", isDirectory: true)
+        let configFile = configDir.appendingPathComponent("config", isDirectory: false)
+        guard !FileManager.default.fileExists(atPath: configFile.path) else { return }
+
+        let defaultConfig = """
+        theme = dark:Monokai Classic
+        font-size = 14
+        cursor-style = bar
+        cursor-style-blink = true
+        """
+
+        try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        try? defaultConfig.write(to: configFile, atomically: true, encoding: .utf8)
+    }
+
+    nonisolated static func iOSConfigURLs(
+        processInfo: ProcessInfo = .processInfo,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        #if os(iOS)
+        var urls: [URL] = []
+        if let overridePath = processInfo.environment["CMUX_GHOSTTY_CONFIG_PATH"], !overridePath.isEmpty {
+            let overrideURL = URL(fileURLWithPath: overridePath)
+            if isReadableConfigFile(at: overrideURL, fileManager: fileManager) {
+                urls.append(overrideURL)
+            }
+        }
+
+        if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let fallbackURLs = [
+                appSupport.appendingPathComponent("ghostty/config.ghostty", isDirectory: false),
+                appSupport.appendingPathComponent("ghostty/config", isDirectory: false),
+            ]
+            for url in fallbackURLs where isReadableConfigFile(at: url, fileManager: fileManager) {
+                urls.append(url)
+            }
+        }
+        return urls
+        #else
+        return []
+        #endif
+    }
+
+    private nonisolated static func isReadableConfigFile(at url: URL, fileManager: FileManager) -> Bool {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              let type = attributes[.type] as? FileAttributeType,
+              type == .typeRegular,
+              let size = attributes[.size] as? NSNumber else {
+            return false
+        }
+        return size.intValue > 0
+    }
+
     nonisolated private static func handleWakeup(_ userdata: UnsafeMutableRawPointer?) {
         guard let userdata else { return }
         let runtime = Unmanaged<GhosttyRuntime>.fromOpaque(userdata).takeUnretainedValue()
         Task { @MainActor in
             runtime.tick()
+            GhosttySurfaceView.drawVisibleSurfacesForWakeup()
         }
     }
 
