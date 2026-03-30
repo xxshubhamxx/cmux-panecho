@@ -3851,8 +3851,15 @@ enum PreferredEditorSettings {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
+            // Check exit status on a background thread; fall back on failure
+            // (e.g. command not found exits 127 but /bin/sh itself succeeds)
+            DispatchQueue.global(qos: .userInitiated).async {
+                process.waitUntilExit()
+                if process.terminationStatus != 0 {
+                    DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+                }
+            }
         } catch {
-            // Fall back to system default if the command fails to launch
             NSWorkspace.shared.open(url)
         }
     }
@@ -5788,6 +5795,7 @@ struct SettingsView: View {
         socketControlMode = SocketControlSettings.defaultMode.rawValue
         claudeCodeHooksEnabled = ClaudeCodeIntegrationSettings.defaultHooksEnabled
         sendAnonymousTelemetry = TelemetrySettings.defaultSendAnonymousTelemetry
+        preferredEditorCommand = ""
         browserSearchEngine = BrowserSearchSettings.defaultSearchEngine.rawValue
         browserSearchSuggestionsEnabled = BrowserSearchSettings.defaultSearchSuggestionsEnabled
         browserThemeMode = BrowserThemeSettings.defaultMode.rawValue

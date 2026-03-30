@@ -4666,6 +4666,11 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             NotificationCenter.default.removeObserver(windowObserver)
             self.windowObserver = nil
         }
+        // Balance the cursor stack if the view is removed while hover is active
+        if wordPathHoverActive {
+            wordPathHoverActive = false
+            NSCursor.pop()
+        }
 #if DEBUG
         dlog(
             "surface.view.windowMove surface=\(terminalSurface?.id.uuidString.prefix(5) ?? "nil") " +
@@ -6405,8 +6410,20 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
         guard let termSurface = terminalSurface,
               let workspace = termSurface.owningWorkspace(),
-              !workspace.isRemoteTerminalSurface(termSurface.id),
-              let cwd = workspace.panelDirectories[termSurface.id] else { return nil }
+              !workspace.isRemoteTerminalSurface(termSurface.id) else { return nil }
+
+        // Use the same CWD fallback chain as Workspace split creation:
+        // panelDirectories (live OSC 7) → requestedWorkingDirectory → workspace currentDirectory
+        let cwd: String? = {
+            if let dir = workspace.panelDirectories[termSurface.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !dir.isEmpty { return dir }
+            if let dir = workspace.terminalPanel(for: termSurface.id)?
+                .requestedWorkingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !dir.isEmpty { return dir }
+            let dir = workspace.currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+            return dir.isEmpty ? nil : dir
+        }()
+        guard let cwd else { return nil }
 
         let resolvedPath = (cwd as NSString).appendingPathComponent(word)
         guard FileManager.default.fileExists(atPath: resolvedPath) else { return nil }
