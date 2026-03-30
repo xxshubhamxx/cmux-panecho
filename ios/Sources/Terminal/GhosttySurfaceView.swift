@@ -13,6 +13,10 @@ protocol TerminalSurfaceHosting: AnyObject {
     func focusInput()
 }
 
+extension TerminalSurfaceHosting {
+    func focusInput() {}
+}
+
 final class GhosttySurfaceBridge {
     weak var surfaceView: GhosttySurfaceView?
 
@@ -269,11 +273,29 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
     private weak var delegate: GhosttySurfaceViewDelegate?
     private let fontSize: Float32
     private let bridge = GhosttySurfaceBridge()
+    private let prefersSnapshotFallbackRendering = true
     var onFocusInputRequestedForTesting: (() -> Void)?
     private var surfaceTitle: String?
+    private let snapshotFallbackView: UITextView = {
+        let view = UITextView()
+        view.backgroundColor = .black
+        view.textColor = .white
+        view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        view.textContainerInset = UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
+        view.textContainer.lineFragmentPadding = 0
+        view.isEditable = false
+        view.isSelectable = false
+        view.isScrollEnabled = true
+        view.isUserInteractionEnabled = false
+        view.showsVerticalScrollIndicator = false
+        view.showsHorizontalScrollIndicator = false
+        view.isHidden = true
+        return view
+    }()
 
     private(set) var surface: ghostty_surface_t?
     private var lastReportedSize: TerminalGridSize?
+    private var lastSnapshotFallbackHTML: String?
 
     var currentGridSize: TerminalGridSize {
         lastReportedSize ?? TerminalGridSize(columns: 100, rows: 32, pixelWidth: 900, pixelHeight: 650)
@@ -302,6 +324,7 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         bridge.attach(to: self)
         backgroundColor = .black
         isOpaque = true
+        addSubview(snapshotFallbackView)
         addSubview(inputProxy)
         initializeSurface()
 
@@ -323,13 +346,18 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        snapshotFallbackView.frame = bounds
         inputProxy.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        liveAnchormuxLog("surface.layout bounds=\(Int(bounds.width))x\(Int(bounds.height)) window=\(window != nil)")
         syncSurfaceGeometry()
+        syncSurfaceVisibility()
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        liveAnchormuxLog("surface.didMoveToWindow window=\(window != nil)")
         syncSurfaceGeometry()
+        syncSurfaceVisibility()
         setFocus(window != nil)
         if window != nil {
             focusInput()
@@ -338,6 +366,7 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
 
     func processOutput(_ data: Data) {
         guard let surface else { return }
+        liveAnchormuxLog("surface.processOutput bytes=\(data.count) window=\(window != nil) bounds=\(Int(bounds.width))x\(Int(bounds.height))")
         data.withUnsafeBytes { buffer in
             guard let baseAddress = buffer.baseAddress else { return }
             let pointer = baseAddress.assumingMemoryBound(to: CChar.self)
@@ -346,6 +375,14 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         ghostty_surface_refresh(surface)
         runtime?.tick()
         ghostty_surface_draw(surface)
+        syncSnapshotFallback()
+        if window != nil {
+            logLayerTree(reason: "processOutput")
+            let preview = renderedTextForTesting()?
+                .replacingOccurrences(of: "\n", with: "\\n")
+                .prefix(160) ?? ""
+            liveAnchormuxLog("surface.viewportText chars=\(preview.count) preview=\(preview)")
+        }
     }
 
     @objc
@@ -360,10 +397,83 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         runtime?.tick()
     }
 
+    func simulatePasteInputForTesting(_ text: String) {
+        setFocus(true)
+        sendPaste(text)
+        runtime?.tick()
+    }
+
     func simulateInputProxyTextChangeForTesting(_ text: String, isComposing: Bool) {
         setFocus(true)
         inputProxy.simulateTextChangeForTesting(text, isComposing: isComposing)
         runtime?.tick()
+    }
+
+    func renderedTextForTesting(pointTag: ghostty_point_tag_e = GHOSTTY_POINT_VIEWPORT) -> String? {
+        guard let surface else { return nil }
+
+        let topLeft = ghostty_point_s(
+            tag: pointTag,
+            coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+            x: 0,
+            y: 0
+        )
+        let bottomRight = ghostty_point_s(
+            tag: pointTag,
+            coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+            x: 0,
+            y: 0
+        )
+        let selection = ghostty_selection_s(
+            top_left: topLeft,
+            bottom_right: bottomRight,
+            rectangle: false
+        )
+
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_text(surface, selection, &text) else {
+            return nil
+        }
+        defer {
+            ghostty_surface_free_text(surface, &text)
+        }
+
+        guard let ptr = text.text, text.text_len > 0 else {
+            return ""
+        }
+
+        let data = Data(bytes: ptr, count: Int(text.text_len))
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    func renderedHTMLForTesting(pointTag: ghostty_point_tag_e = GHOSTTY_POINT_VIEWPORT) -> String? {
+        guard let surface else { return nil }
+
+        let topLeft = ghostty_point_s(
+            tag: pointTag,
+            coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+            x: 0,
+            y: 0
+        )
+        let bottomRight = ghostty_point_s(
+            tag: pointTag,
+            coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+            x: 0,
+            y: 0
+        )
+        let selection = ghostty_selection_s(
+            top_left: topLeft,
+            bottom_right: bottomRight,
+            rectangle: false
+        )
+
+        // ghostty_surface_read_text_html not available in this build
+        return nil
+    }
+
+    func processExitedForTesting() -> Bool {
+        guard let surface else { return false }
+        return ghostty_surface_process_exited(surface)
     }
 
     func disposeSurface() {
@@ -388,6 +498,15 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         let count = text.utf8CString.count
         guard count > 0 else { return }
         text.withCString { pointer in
+            ghostty_surface_text_input(surface, pointer, UInt(count - 1))
+        }
+    }
+
+    private func sendPaste(_ text: String) {
+        guard let surface else { return }
+        let count = text.utf8CString.count
+        guard count > 0 else { return }
+        text.withCString { pointer in
             ghostty_surface_text(surface, pointer, UInt(count - 1))
         }
     }
@@ -406,10 +525,22 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         ghostty_surface_set_focus(surface, focused)
     }
 
+    private func syncSurfaceVisibility() {
+        guard let surface else { return }
+        let visible = window != nil &&
+            !isHidden &&
+            alpha > 0.01 &&
+            bounds.width > 0 &&
+            bounds.height > 0
+        liveAnchormuxLog("surface.occlusion visible=\(visible) window=\(window != nil) hidden=\(isHidden) alpha=\(alpha)")
+        ghostty_surface_set_occlusion(surface, visible)
+    }
+
     private func syncSurfaceGeometry() {
         guard let surface else { return }
 
         let scale = preferredScreenScale
+        syncRendererLayerFrame(scale: scale)
         ghostty_surface_set_content_scale(surface, scale, scale)
 
         let width = UInt32(max(1, Int((bounds.width * scale).rounded(.down))))
@@ -423,9 +554,45 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
             pixelWidth: Int(size.width_px),
             pixelHeight: Int(size.height_px)
         )
+        liveAnchormuxLog(
+            "surface.geometry bounds=\(Int(bounds.width))x\(Int(bounds.height)) px=\(nextSize.pixelWidth)x\(nextSize.pixelHeight) cols=\(nextSize.columns) rows=\(nextSize.rows)"
+        )
+        ghostty_surface_refresh(surface)
+        runtime?.tick()
+        ghostty_surface_draw(surface)
+        syncSnapshotFallback()
+        if window != nil {
+            logLayerTree(reason: "geometry")
+        }
         guard nextSize != lastReportedSize else { return }
         lastReportedSize = nextSize
         delegate?.ghosttySurfaceView(self, didResize: nextSize)
+    }
+
+    private func syncRendererLayerFrame(scale: CGFloat) {
+        layer.contentsScale = scale
+        for sublayer in layer.sublayers ?? [] where isGhosttyRendererLayer(sublayer) {
+            if sublayer.frame != layer.bounds {
+                sublayer.frame = layer.bounds
+            }
+            if sublayer.bounds.size != layer.bounds.size {
+                sublayer.bounds = layer.bounds
+            }
+            sublayer.contentsScale = scale
+        }
+    }
+
+    private func isGhosttyRendererLayer(_ layer: CALayer) -> Bool {
+        String(describing: type(of: layer)) == "IOSurfaceLayer"
+    }
+
+    private func logLayerTree(reason: String) {
+        let hostLayer = layer
+        let hostSummary = "\(type(of: hostLayer)) bounds=\(hostLayer.bounds.integral.debugDescription) frame=\(hostLayer.frame.integral.debugDescription) contentsScale=\(hostLayer.contentsScale)"
+        let childSummaries = (hostLayer.sublayers ?? []).prefix(4).enumerated().map { index, sublayer in
+            "\(index):\(type(of: sublayer)) bounds=\(sublayer.bounds.integral.debugDescription) frame=\(sublayer.frame.integral.debugDescription) hidden=\(sublayer.isHidden) contents=\(sublayer.contents != nil) scale=\(sublayer.contentsScale)"
+        }.joined(separator: " | ")
+        liveAnchormuxLog("surface.layers reason=\(reason) host=\(hostSummary) children=[\(childSummaries)] fallbackHidden=\(snapshotFallbackView.isHidden) fallbackChars=\(snapshotFallbackView.text.count)")
     }
 
     private func makeSurface(app: ghostty_app_t) -> ghostty_surface_t? {
@@ -449,6 +616,133 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
 
     fileprivate func handleOutboundBytes(_ bytes: Data) {
         delegate?.ghosttySurfaceView(self, didProduceInput: bytes)
+    }
+
+    func drawForWakeup() {
+        guard let surface, window != nil else { return }
+        liveAnchormuxLog("surface.drawForWakeup")
+        ghostty_surface_draw(surface)
+        syncSnapshotFallback()
+        logLayerTree(reason: "wakeup")
+    }
+
+    func visibleSnapshotTextForTesting() -> String {
+        snapshotFallbackView.attributedText?.string ?? snapshotFallbackView.text
+    }
+
+    func visibleSnapshotAttributedTextForTesting() -> NSAttributedString? {
+        snapshotFallbackView.attributedText
+    }
+
+    func isUsingSnapshotFallbackForTesting() -> Bool {
+        !snapshotFallbackView.isHidden
+    }
+
+    private func syncSnapshotFallback() {
+        let rendererHasContents = !prefersSnapshotFallbackRendering &&
+            (layer.sublayers ?? []).contains(where: isGhosttyRendererLayerVisible)
+        if rendererHasContents {
+            snapshotFallbackView.isHidden = true
+            return
+        }
+
+        let snapshot = renderedTextForTesting() ?? ""
+        guard !snapshot.isEmpty else {
+            lastSnapshotFallbackHTML = nil
+            snapshotFallbackView.attributedText = nil
+            snapshotFallbackView.text = ""
+            snapshotFallbackView.isHidden = true
+            return
+        }
+
+        let html = renderedHTMLForTesting()
+        if let html,
+           html != lastSnapshotFallbackHTML,
+           let attributedSnapshot = makeSnapshotAttributedText(from: html) {
+            lastSnapshotFallbackHTML = html
+            snapshotFallbackView.attributedText = attributedSnapshot
+            applySnapshotFallbackTheme(from: attributedSnapshot)
+        } else if snapshotFallbackView.attributedText?.string != snapshot {
+            lastSnapshotFallbackHTML = nil
+            snapshotFallbackView.attributedText = nil
+            snapshotFallbackView.text = snapshot
+            snapshotFallbackView.backgroundColor = .black
+        }
+
+        if snapshotFallbackView.text != snapshot && snapshotFallbackView.attributedText == nil {
+            snapshotFallbackView.text = snapshot
+        }
+
+        let visibleTextLength = snapshotFallbackView.attributedText?.string.utf16.count ?? snapshotFallbackView.text.utf16.count
+        if visibleTextLength > 0 {
+            snapshotFallbackView.scrollRangeToVisible(NSRange(location: max(0, visibleTextLength - 1), length: 1))
+        }
+        snapshotFallbackView.isHidden = false
+        flushSnapshotFallbackPresentation()
+    }
+
+    private func flushSnapshotFallbackPresentation() {
+        snapshotFallbackView.textContainer.size = snapshotFallbackView.bounds.size
+        snapshotFallbackView.layoutManager.ensureLayout(for: snapshotFallbackView.textContainer)
+        snapshotFallbackView.layoutManager.invalidateDisplay(
+            forCharacterRange: NSRange(location: 0, length: snapshotFallbackView.textStorage.length)
+        )
+        snapshotFallbackView.setNeedsDisplay()
+    }
+
+    private func makeSnapshotAttributedText(from html: String) -> NSAttributedString? {
+        let wrappedHTML = """
+        <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Menlo, Monaco, monospace;
+            font-size: 13px;
+            line-height: 1.25;
+        }
+        div, pre {
+            white-space: pre-wrap;
+        }
+        </style>
+        \(html)
+        """
+        guard let wrappedData = wrappedHTML.data(using: .utf8) else { return nil }
+        return try? NSMutableAttributedString(
+            data: wrappedData,
+            options: [
+                .documentType: NSAttributedString.DocumentType.html,
+                .characterEncoding: String.Encoding.utf8.rawValue,
+            ],
+            documentAttributes: nil
+        )
+    }
+
+    private func applySnapshotFallbackTheme(from attributedText: NSAttributedString) {
+        guard attributedText.length > 0 else {
+            snapshotFallbackView.backgroundColor = .black
+            return
+        }
+
+        let probeIndex = firstVisibleThemeAttributeIndex(in: attributedText)
+        if let background = attributedText.attribute(.backgroundColor, at: probeIndex, effectiveRange: nil) as? UIColor {
+            snapshotFallbackView.backgroundColor = background
+        } else {
+            snapshotFallbackView.backgroundColor = .black
+        }
+    }
+
+    private func firstVisibleThemeAttributeIndex(in attributedText: NSAttributedString) -> Int {
+        let fullString = attributedText.string
+        for (index, scalar) in fullString.unicodeScalars.enumerated() {
+            if !CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                return index
+            }
+        }
+        return 0
+    }
+
+    private func isGhosttyRendererLayerVisible(_ layer: CALayer) -> Bool {
+        isGhosttyRendererLayer(layer) && layer.contents != nil
     }
 
     nonisolated private static func handleWrite(
@@ -479,6 +773,14 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
     @MainActor
     static func title(for surface: ghostty_surface_t) -> String? {
         view(for: surface)?.surfaceTitle
+    }
+
+    @MainActor
+    static func drawVisibleSurfacesForWakeup() {
+        registeredSurfaceViews = registeredSurfaceViews.filter { $0.value.value != nil }
+        for view in registeredSurfaceViews.values.compactMap(\.value) {
+            view.drawForWakeup()
+        }
     }
 
     private func handleBell() {

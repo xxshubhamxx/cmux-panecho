@@ -42,7 +42,6 @@ final class TerminalWebSocketDaemonClient: Sendable {
         }
 
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForResource = timeoutSeconds
         config.timeoutIntervalForRequest = timeoutSeconds
         let session = URLSession(configuration: config)
         let task = session.webSocketTask(with: url)
