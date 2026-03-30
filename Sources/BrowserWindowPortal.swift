@@ -2787,10 +2787,24 @@ final class WindowBrowserPortal: NSObject {
 
     func forceRefreshWebView(withId webViewId: ObjectIdentifier, reason: String) {
         guard ensureInstalled() else { return }
+        let refreshSource = "forceRefresh:\(reason)"
         synchronizeWebView(
             withId: webViewId,
-            source: "forceRefresh:\(reason)",
+            source: refreshSource,
             forcePresentationRefresh: true
+        )
+        guard let entry = entriesByWebViewId[webViewId],
+              let webView = entry.webView,
+              let containerView = entry.containerView,
+              !containerView.isHidden else {
+            return
+        }
+        // Portal-host replacement/fullscreen churn relies on forceRefresh to kick
+        // WebKit even when synchronizeWebView short-circuits or skips its refresh path.
+        refreshHostedWebViewPresentation(
+            webView,
+            in: containerView,
+            reason: refreshSource
         )
     }
 
