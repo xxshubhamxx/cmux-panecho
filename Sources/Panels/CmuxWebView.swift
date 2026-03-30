@@ -251,6 +251,7 @@ final class CmuxWebView: WKWebView {
         var replayedBrowserFindShortcutIntoWebContent = false
         if shouldRouteBrowserFindCommandEquivalentThroughWebContentFirst(
             event,
+            responder: window?.firstResponder,
             owningWebView: self
         ) {
             replayedBrowserFindShortcutIntoWebContent = true

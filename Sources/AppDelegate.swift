@@ -1868,19 +1868,42 @@ private enum BrowserFindCommandEquivalent {
     }
 }
 
+private func cmuxIsLikelyWebInspectorResponder(_ responder: NSResponder?) -> Bool {
+    guard let responder else { return false }
+    let responderType = String(describing: type(of: responder))
+    if responderType.contains("WKInspector") {
+        return true
+    }
+    guard let view = responder as? NSView else { return false }
+    var node: NSView? = view
+    var hops = 0
+    while let current = node, hops < 64 {
+        if String(describing: type(of: current)).contains("WKInspector") {
+            return true
+        }
+        node = current.superview
+        hops += 1
+    }
+    return false
+}
+
 private func browserFindCommandEquivalent(for event: NSEvent) -> BrowserFindCommandEquivalent? {
     let flags = event.modifierFlags
         .intersection(.deviceIndependentFlagsMask)
         .subtracting([.numericPad, .function, .capsLock])
 
     let normalizedChars = KeyboardLayout.normalizedCharacters(for: event).lowercased()
+    let hasSingleASCIIShortcutChar =
+        normalizedChars.count == 1 && normalizedChars.allSatisfy(\.isASCII)
+    let producedAnyASCIIShortcutChar = normalizedChars.contains(where: \.isASCII)
     func matches(_ chars: String, keyCode: UInt16) -> Bool {
-        if normalizedChars.count == 1,
-           normalizedChars.allSatisfy(\.isASCII),
-           normalizedChars == chars {
-            return true
+        if hasSingleASCIIShortcutChar {
+            return normalizedChars == chars
         }
-        return event.keyCode == keyCode
+        if !producedAnyASCIIShortcutChar {
+            return event.keyCode == keyCode
+        }
+        return false
     }
 
     switch flags {
@@ -1913,9 +1936,14 @@ private func browserFindCommandEquivalent(for event: NSEvent) -> BrowserFindComm
 /// browser find overlay to keep owning its visible Find UI shortcuts.
 func shouldRouteBrowserFindCommandEquivalentThroughWebContentFirst(
     _ event: NSEvent,
+    responder: NSResponder? = nil,
     owningWebView: CmuxWebView? = nil
 ) -> Bool {
     guard let shortcut = browserFindCommandEquivalent(for: event) else {
+        return false
+    }
+
+    if cmuxIsLikelyWebInspectorResponder(responder) {
         return false
     }
 
@@ -7522,7 +7550,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             .first(where: { $0.searchState != nil })
         updates["browserFindPanelId"] = browserWithFind?.id.uuidString ?? ""
         updates["browserFindNeedle"] = browserWithFind?.searchState?.needle ?? ""
-        updates["browserFindSelected"] = browserWithFind?.searchState?.selected.map(String.init) ?? ""
+        updates["browserFindSelected"] = browserWithFind?.searchState?.selected.map {
+            String($0 + 1)
+        } ?? ""
         updates["browserFindTotal"] = browserWithFind?.searchState?.total.map(String.init) ?? ""
         updates["browserFindVisible"] = browserWithFind == nil ? "false" : "true"
 
@@ -10502,22 +10532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func isLikelyWebInspectorResponder(_ responder: NSResponder?) -> Bool {
-        guard let responder else { return false }
-        let responderType = String(describing: type(of: responder))
-        if responderType.contains("WKInspector") {
-            return true
-        }
-        guard let view = responder as? NSView else { return false }
-        var node: NSView? = view
-        var hops = 0
-        while let current = node, hops < 64 {
-            if String(describing: type(of: current)).contains("WKInspector") {
-                return true
-            }
-            node = current.superview
-            hops += 1
-        }
-        return false
+        cmuxIsLikelyWebInspectorResponder(responder)
     }
 
 #if DEBUG
@@ -12860,6 +12875,7 @@ private extension NSWindow {
         if let firstResponderWebView,
            shouldRouteBrowserFindCommandEquivalentThroughWebContentFirst(
                event,
+               responder: self.firstResponder,
                owningWebView: firstResponderWebView
            ) {
             let result = firstResponderWebView.performKeyEquivalent(with: event)

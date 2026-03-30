@@ -7,6 +7,7 @@ import XCTest
 #endif
 
 private let appDelegateLastSurfaceCloseShortcutDefaultsKey = "closeWorkspaceOnLastSurfaceShortcut"
+private final class FakeWKInspectorContainerView: NSView {}
 
 @MainActor
 final class AppDelegateShortcutRoutingTests: XCTestCase {
@@ -3056,6 +3057,51 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
         XCTAssertTrue(
             shouldRouteBrowserFindCommandEquivalentThroughWebContentFirst(event),
             "Expected browser-first routing to keep Cmd+F eligible under non-Latin input"
+        )
+    }
+
+    func testBrowserFirstFindShortcutRoutingDoesNotUseANSIPositionsForMismatchedASCIICharacters() {
+        let cases: [(name: String, modifiers: NSEvent.ModifierFlags, chars: String, keyCode: UInt16)] = [
+            ("cmd-u-on-ansi-f", [.command], "u", 3),
+            ("cmd-o-on-ansi-g", [.command], "o", 5),
+            ("cmd-period-on-ansi-e", [.command], ".", 14),
+            ("cmd-shift-u-on-ansi-f", [.command, .shift], "u", 3),
+            ("cmd-shift-o-on-ansi-g", [.command, .shift], "o", 5),
+        ]
+
+        for testCase in cases {
+            let event = makeKeyEvent(
+                modifierFlags: testCase.modifiers,
+                characters: testCase.chars,
+                charactersIgnoringModifiers: testCase.chars,
+                keyCode: testCase.keyCode
+            )
+
+            XCTAssertFalse(
+                shouldRouteBrowserFindCommandEquivalentThroughWebContentFirst(event),
+                "Did not expect browser-first routing for mismatched ASCII shortcut \(testCase.name)"
+            )
+        }
+    }
+
+    func testBrowserFirstFindShortcutRoutingExcludesWebInspectorResponders() {
+        let inspectorContainer = FakeWKInspectorContainerView(frame: .zero)
+        let inspectorChild = NSView(frame: .zero)
+        inspectorContainer.addSubview(inspectorChild)
+
+        let event = makeKeyEvent(
+            modifierFlags: [.command],
+            characters: "f",
+            charactersIgnoringModifiers: "f",
+            keyCode: 3
+        )
+
+        XCTAssertFalse(
+            shouldRouteBrowserFindCommandEquivalentThroughWebContentFirst(
+                event,
+                responder: inspectorChild
+            ),
+            "Did not expect browser-first routing while a Web Inspector responder is focused"
         )
     }
 
