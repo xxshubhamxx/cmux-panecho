@@ -4817,6 +4817,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             "bounds=\(CmuxTerminalHostDebugLog.rect(bounds))"
         )
 #endif
+        terminalSurface?.hostedView.refreshPanelBackgroundFill(reason: "surfaceView.viewDidMoveToWindow")
         applySurfaceBackground()
         applySurfaceColorScheme(force: true)
         GhosttyApp.shared.synchronizeThemeWithAppearance(
@@ -7161,6 +7162,7 @@ final class GhosttySurfaceScrollView: NSView {
     private let flashOverlayView: GhosttyFlashOverlayView
     private let flashLayer: CAShapeLayer
     private var lastFlashStyle: FlashStyle = .navigation
+    private var terminalBackgroundColor: NSColor
     private let keyboardCopyModeBadgeContainerView: GhosttyFlashOverlayView
     private let keyboardCopyModeBadgeView: GhosttyPassthroughVisualEffectView
     private let keyboardCopyModeBadgeIconView: NSImageView
@@ -7193,6 +7195,7 @@ final class GhosttySurfaceScrollView: NSView {
     private var lastRequestedPortalOcclusionVisible: Bool?
     private var activeDropZone: DropZone?
     private var pendingDropZone: DropZone?
+    private var lastPanelBackgroundFallbackVisible: Bool?
     private var dropZoneOverlayAnimationGeneration: UInt64 = 0
     private var pendingAutomaticFirstResponderApply = false
     // Intentionally no focus retry loops: rely on AppKit first-responder and WorkspaceSplit selection.
@@ -7205,10 +7208,18 @@ final class GhosttySurfaceScrollView: NSView {
     }
     private(set) var searchFocusTarget: SearchFocusTarget = .searchField
 
-    private static func panelBackgroundFillColor(for terminalBackgroundColor: NSColor) -> NSColor {
-        // The Ghostty renderer already draws translucent terminal backgrounds. If we paint an
-        // additional translucent layer here, alpha stacks and appears effectively opaque.
-        terminalBackgroundColor.alphaComponent < 0.999 ? .clear : terminalBackgroundColor
+    private static func panelBackgroundFillColor(
+        for terminalBackgroundColor: NSColor,
+        showingFallback: Bool
+    ) -> NSColor {
+        guard terminalBackgroundColor.alphaComponent < 0.999 else {
+            return terminalBackgroundColor
+        }
+
+        // The Ghostty renderer already draws translucent terminal backgrounds. Keep the hosted
+        // fill clear once the Metal surface is live, but retain the real terminal background while
+        // the surface is still starting or geometry is catching up so the pane host does not flash through.
+        return showingFallback ? terminalBackgroundColor : .clear
     }
 
 #if DEBUG
@@ -7361,7 +7372,10 @@ final class GhosttySurfaceScrollView: NSView {
     }
 
     init(surfaceView: GhosttyNSView) {
+        let initialTerminalBackground = GhosttyApp.shared.defaultBackgroundColor
+            .withAlphaComponent(GhosttyApp.shared.defaultBackgroundOpacity)
         self.surfaceView = surfaceView
+        terminalBackgroundColor = initialTerminalBackground
         backgroundView = NSView(frame: .zero)
         scrollView = GhosttyScrollView()
         inactiveOverlayView = GhosttyFlashOverlayView(frame: .zero)
@@ -7399,9 +7413,10 @@ final class GhosttySurfaceScrollView: NSView {
         layer?.masksToBounds = true
 
         backgroundView.wantsLayer = true
-        let initialTerminalBackground = GhosttyApp.shared.defaultBackgroundColor
-            .withAlphaComponent(GhosttyApp.shared.defaultBackgroundOpacity)
-        let initialPanelFill = Self.panelBackgroundFillColor(for: initialTerminalBackground)
+        let initialPanelFill = Self.panelBackgroundFillColor(
+            for: initialTerminalBackground,
+            showingFallback: true
+        )
         backgroundView.layer?.backgroundColor = initialPanelFill.cgColor
         backgroundView.layer?.isOpaque = initialPanelFill.alphaComponent >= 1.0
         addSubview(backgroundView)
@@ -7718,6 +7733,70 @@ final class GhosttySurfaceScrollView: NSView {
         surfaceView.terminalSurface?.forceRefresh(reason: reason)
     }
 
+    private func targetSurfaceFrame() -> CGRect {
+        CGRect(origin: surfaceView.frame.origin, size: scrollView.bounds.size)
+    }
+
+    private func expectedDrawableSize() -> CGSize {
+        let targetSize = scrollView.bounds.size
+        guard targetSize.width > 0, targetSize.height > 0 else { return .zero }
+        let backingSize = surfaceView.convertToBacking(NSRect(origin: .zero, size: targetSize)).size
+        return CGSize(
+            width: floor(max(0, backingSize.width)),
+            height: floor(max(0, backingSize.height))
+        )
+    }
+
+    private func surfaceHasPresentedFrame() -> Bool {
+        let layer = surfaceView.layer?.presentation() ?? surfaceView.layer
+        return layer?.contents != nil
+    }
+
+    private func shouldShowPanelBackgroundFallback() -> Bool {
+        guard terminalBackgroundColor.alphaComponent < 0.999 else { return true }
+
+        let runtimeReady = surfaceView.terminalSurface?.surface != nil
+        let hasPresentedFrame = surfaceHasPresentedFrame()
+        let surfaceFrameMatches = Self.rectApproximatelyEqual(surfaceView.frame, targetSurfaceFrame())
+        let drawableMatches: Bool = {
+            guard let metalLayer = surfaceView.layer as? CAMetalLayer else { return surfaceFrameMatches }
+            let expected = expectedDrawableSize()
+            guard expected.width > 0, expected.height > 0 else { return surfaceFrameMatches }
+            return sizeApproximatelyEqual(metalLayer.drawableSize, expected, epsilon: 0.5)
+        }()
+        let liveResizeActive = inLiveResize || window?.inLiveResize == true
+
+        return !runtimeReady || !hasPresentedFrame || !surfaceFrameMatches || !drawableMatches || liveResizeActive
+    }
+
+    func refreshPanelBackgroundFill(reason: String = "unspecified") {
+        let showingFallback = shouldShowPanelBackgroundFallback()
+        let fillColor = Self.panelBackgroundFillColor(
+            for: terminalBackgroundColor,
+            showingFallback: showingFallback
+        )
+
+        guard let layer = backgroundView.layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.backgroundColor = fillColor.cgColor
+        layer.isOpaque = fillColor.alphaComponent >= 1.0
+        CATransaction.commit()
+
+#if DEBUG
+        if lastPanelBackgroundFallbackVisible != showingFallback {
+            lastPanelBackgroundFallbackVisible = showingFallback
+            CmuxTerminalHostDebugLog.log(
+                "h3.panelFill reason=\(reason) surface=\(debugSurfaceId?.uuidString.prefix(5) ?? "nil") " +
+                "fallback=\(showingFallback ? 1 : 0) runtime=\(debugRuntimeSurfaceReady ? 1 : 0) " +
+                "hasContents=\(surfaceHasPresentedFrame() ? 1 : 0) " +
+                "frame=\(CmuxTerminalHostDebugLog.rect(surfaceView.frame)) " +
+                "target=\(CmuxTerminalHostDebugLog.rect(targetSurfaceFrame()))"
+            )
+        }
+#endif
+    }
+
     @discardableResult
     private func synchronizeGeometryAndContent() -> Bool {
         CATransaction.begin()
@@ -7772,6 +7851,7 @@ final class GhosttySurfaceScrollView: NSView {
         synchronizeScrollView()
         synchronizeSurfaceView()
         let didCoreSurfaceChange = synchronizeCoreSurface()
+        refreshPanelBackgroundFill(reason: "synchronizeGeometryAndContent")
         let sizeChanged = !sizeApproximatelyEqual(previousSurfaceSize, targetSize)
 #if DEBUG
         if sizeChanged || didCoreSurfaceChange {
@@ -7915,6 +7995,7 @@ final class GhosttySurfaceScrollView: NSView {
         super.viewDidMoveToWindow()
         windowObservers.forEach { NotificationCenter.default.removeObserver($0) }
         windowObservers.removeAll()
+        refreshPanelBackgroundFill(reason: "hostedView.viewDidMoveToWindow")
         guard let window else { return }
         windowObservers.append(NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
@@ -7982,13 +8063,8 @@ final class GhosttySurfaceScrollView: NSView {
     }
 
     func setBackgroundColor(_ color: NSColor) {
-        guard let layer = backgroundView.layer else { return }
-        let fillColor = Self.panelBackgroundFillColor(for: color)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.backgroundColor = fillColor.cgColor
-        layer.isOpaque = fillColor.alphaComponent >= 1.0
-        CATransaction.commit()
+        terminalBackgroundColor = color
+        refreshPanelBackgroundFill(reason: "setBackgroundColor")
     }
 
     func setInactiveOverlay(color: NSColor, opacity: CGFloat, visible: Bool) {
@@ -10380,6 +10456,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
 
             hostedView.setVisibleInUI(isVisibleInUI)
             hostedView.setActive(isActive)
+            hostedView.refreshPanelBackgroundFill(reason: "directHost.updateNSView")
             _ = portalZPriority
             _ = reattachToken
             return
