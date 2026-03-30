@@ -9107,6 +9107,39 @@ struct CMUXCLI {
         return (workspaceId, nil, surfaceId)
     }
 
+    private func tmuxAnchoredSplitTarget(
+        workspaceId: String,
+        client: SocketClient
+    ) -> (targetSurfaceId: String, callerSurfaceId: String, direction: String)? {
+        guard let callerSurface = tmuxCallerSurfaceHandle(),
+              let callerSurfaceId = try? tmuxCanonicalSurfaceId(
+                callerSurface,
+                workspaceId: workspaceId,
+                client: client
+              ) else {
+            return nil
+        }
+
+        var store = loadTmuxCompatStore()
+        if let lastColumn = store.mainVerticalLayouts[workspaceId]?.lastColumnSurfaceId {
+            if let lastColumnId = try? tmuxCanonicalSurfaceId(
+                lastColumn,
+                workspaceId: workspaceId,
+                client: client
+            ) {
+                return (lastColumnId, callerSurfaceId, "down")
+            }
+
+            // Right-column anchors can outlive the pane they pointed at.
+            // Drop stale state and rebuild from the caller surface instead.
+            store.mainVerticalLayouts[workspaceId]?.lastColumnSurfaceId = nil
+            store.lastSplitSurface.removeValue(forKey: workspaceId)
+            try? saveTmuxCompatStore(store)
+        }
+
+        return (callerSurfaceId, callerSurfaceId, "right")
+    }
+
     private func tmuxRenderFormat(
         _ format: String?,
         context: [String: String],
@@ -10205,6 +10238,7 @@ struct CMUXCLI {
             )
             var target = try tmuxResolveSurfaceTarget(parsed.value("-t"), client: client)
             var direction: String
+            var anchoredCallerSurfaceId: String?
             if parsed.hasFlag("-h") {
                 direction = parsed.hasFlag("-b") ? "left" : "right"
             } else {
@@ -10218,20 +10252,12 @@ struct CMUXCLI {
             // successfully. Falling back to target.workspaceId would pair
             // the caller's surface with a different workspace, creating an
             // invalid cross-workspace split.
-            if let callerSurface = tmuxCallerSurfaceHandle(),
-               let callerWorkspace = tmuxCallerWorkspaceHandle(),
-               let wsId = try? resolveWorkspaceId(callerWorkspace, client: client) {
-                let store = loadTmuxCompatStore()
-                if let mvState = store.mainVerticalLayouts[wsId],
-                   let lastColumn = mvState.lastColumnSurfaceId {
-                    // Main-vertical active: stack in right column.
-                    target = (wsId, nil, lastColumn)
-                    direction = "down"
-                } else {
-                    // First teammate: split the leader surface to the right.
-                    target = (wsId, nil, callerSurface)
-                    direction = "right"
-                }
+            if let callerWorkspace = tmuxCallerWorkspaceHandle(),
+               let wsId = try? resolveWorkspaceId(callerWorkspace, client: client),
+               let anchoredTarget = tmuxAnchoredSplitTarget(workspaceId: wsId, client: client) {
+                target = (wsId, nil, anchoredTarget.targetSurfaceId)
+                direction = anchoredTarget.direction
+                anchoredCallerSurfaceId = anchoredTarget.callerSurfaceId
             }
 
             // Keep the leader pane focused while agents spawn beside it.
@@ -10254,11 +10280,11 @@ struct CMUXCLI {
                 updatedStore.lastSplitSurface[target.workspaceId] = surfaceId
                 if updatedStore.mainVerticalLayouts[target.workspaceId] != nil {
                     updatedStore.mainVerticalLayouts[target.workspaceId]?.lastColumnSurfaceId = surfaceId
-                } else if direction == "right", let callerSurface = tmuxCallerSurfaceHandle() {
+                } else if direction == "right", let anchoredCallerSurfaceId {
                     // First right split created the column; seed main-vertical
                     // state so subsequent splits stack downward.
                     updatedStore.mainVerticalLayouts[target.workspaceId] = MainVerticalState(
-                        mainSurfaceId: callerSurface,
+                        mainSurfaceId: anchoredCallerSurfaceId,
                         lastColumnSurfaceId: surfaceId
                     )
                 }
