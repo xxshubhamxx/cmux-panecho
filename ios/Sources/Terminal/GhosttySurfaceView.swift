@@ -544,8 +544,24 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         surface = makeSurface(app: app)
         if let surface {
             GhosttySurfaceView.register(surface: surface, for: self)
+            if let config = runtime?.config {
+                ghostty_surface_update_config(surface, config)
+                applyBackgroundColorFromConfig(config)
+            }
         }
         syncSurfaceGeometry()
+    }
+
+    private func applyBackgroundColorFromConfig(_ config: ghostty_config_t) {
+        var color = ghostty_config_color_s()
+        let key = "background"
+        guard ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) else { return }
+        backgroundColor = UIColor(
+            red: CGFloat(color.r) / 255.0,
+            green: CGFloat(color.g) / 255.0,
+            blue: CGFloat(color.b) / 255.0,
+            alpha: 1.0
+        )
     }
 
     private func setFocus(_ focused: Bool) {

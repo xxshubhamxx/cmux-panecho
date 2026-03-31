@@ -32,7 +32,7 @@ final class GhosttyRuntime {
     private static var clipboardWriter: @MainActor (String?) -> Void = { UIPasteboard.general.string = $0 }
 
     private(set) var app: ghostty_app_t?
-    private var config: ghostty_config_t?
+    private(set) var config: ghostty_config_t?
 
     static func shared() throws -> GhosttyRuntime {
         if let sharedResult {
@@ -89,7 +89,6 @@ final class GhosttyRuntime {
             },
             read_clipboard_cb: { userdata, location, state in
                 GhosttyRuntime.handleReadClipboard(userdata, location: location, state: state)
-                return true
             },
             confirm_read_clipboard_cb: { _, _, _, _ in
                 // iOS embed doesn't currently support clipboard confirmation prompts.
