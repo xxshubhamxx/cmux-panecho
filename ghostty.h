@@ -3,8 +3,9 @@
 // isn't meant to be a general purpose embedding API (yet) so there hasn't
 // been documentation or example work beyond that.
 //
-// The only consumer of this API is the macOS app, but the API is built to
-// be more general purpose.
+// cmux uses this API on both macOS and iOS. The iOS integration depends on
+// manual surface I/O via ghostty_surface_config_s.io_mode, io_write_cb,
+// ghostty_surface_process_output, and ghostty_surface_text_input.
 #ifndef GHOSTTY_H
 #define GHOSTTY_H
 
@@ -16,11 +17,6 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
-
-#ifdef _MSC_VER
-#include <BaseTsd.h>
-typedef SSIZE_T ssize_t;
-#endif
 
 //-------------------------------------------------------------------
 // Macros
@@ -478,12 +474,6 @@ typedef struct {
 
 // Config types
 
-// config.Path
-typedef struct {
-  const char* path;
-  bool optional;
-} ghostty_config_path_s;
-
 // config.Color
 typedef struct {
   uint8_t r;
@@ -904,7 +894,6 @@ typedef enum {
   GHOSTTY_ACTION_RENDER_INSPECTOR,
   GHOSTTY_ACTION_DESKTOP_NOTIFICATION,
   GHOSTTY_ACTION_SET_TITLE,
-  GHOSTTY_ACTION_SET_TAB_TITLE,
   GHOSTTY_ACTION_PROMPT_TITLE,
   GHOSTTY_ACTION_PWD,
   GHOSTTY_ACTION_MOUSE_SHAPE,
@@ -953,7 +942,6 @@ typedef union {
   ghostty_action_inspector_e inspector;
   ghostty_action_desktop_notification_s desktop_notification;
   ghostty_action_set_title_s set_title;
-  ghostty_action_set_title_s set_tab_title;
   ghostty_action_prompt_title_e prompt_title;
   ghostty_action_pwd_s pwd;
   ghostty_action_mouse_shape_e mouse_shape;
@@ -985,7 +973,7 @@ typedef struct {
 } ghostty_action_s;
 
 typedef void (*ghostty_runtime_wakeup_cb)(void*);
-typedef bool (*ghostty_runtime_read_clipboard_cb)(void*,
+typedef void (*ghostty_runtime_read_clipboard_cb)(void*,
                                                   ghostty_clipboard_e,
                                                   void*);
 typedef void (*ghostty_runtime_confirm_read_clipboard_cb)(
@@ -1111,6 +1099,7 @@ bool ghostty_surface_key_is_binding(ghostty_surface_t,
                                     ghostty_input_key_s,
                                     ghostty_binding_flags_e*);
 void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t);
+void ghostty_surface_text_input(ghostty_surface_t, const char*, uintptr_t);
 void ghostty_surface_preedit(ghostty_surface_t, const char*, uintptr_t);
 void ghostty_surface_process_output(ghostty_surface_t, const char*, uintptr_t);
 bool ghostty_surface_mouse_captured(ghostty_surface_t);
@@ -1146,6 +1135,9 @@ bool ghostty_surface_read_selection(ghostty_surface_t, ghostty_text_s*);
 bool ghostty_surface_read_text(ghostty_surface_t,
                                ghostty_selection_s,
                                ghostty_text_s*);
+bool ghostty_surface_read_text_html(ghostty_surface_t,
+                                    ghostty_selection_s,
+                                    ghostty_text_s*);
 void ghostty_surface_free_text(ghostty_surface_t, ghostty_text_s*);
 
 #ifdef __APPLE__
