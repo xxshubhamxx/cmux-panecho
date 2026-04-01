@@ -11039,6 +11039,15 @@ private struct SidebarEmptyArea: View {
                 dragAutoScrollController: dragAutoScrollController,
                 dropIndicator: $dropIndicator
             ))
+            .onDrop(of: BonsplitTabDragPayload.dropContentTypes, delegate: SidebarBonsplitWorkspaceDropDelegate(
+                targetTabId: nil,
+                tabManager: tabManager,
+                selectedTabIds: $selectedTabIds,
+                lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
+                targetRowHeight: nil,
+                dragAutoScrollController: dragAutoScrollController,
+                dropIndicator: $dropIndicator
+            ))
             .overlay(alignment: .top) {
                 if shouldShowTopDropIndicator {
                     Rectangle()
@@ -11051,7 +11060,7 @@ private struct SidebarEmptyArea: View {
     }
 
     private var shouldShowTopDropIndicator: Bool {
-        guard draggedTabId != nil, let indicator = dropIndicator else { return false }
+        guard let indicator = dropIndicator else { return false }
         if indicator.tabId == nil {
             return true
         }
@@ -11819,11 +11828,14 @@ private struct TabItemView: View, Equatable {
             dragAutoScrollController: dragAutoScrollController,
             dropIndicator: $dropIndicator
         ))
-        .onDrop(of: BonsplitTabDragPayload.dropContentTypes, delegate: SidebarBonsplitTabDropDelegate(
-            targetWorkspaceId: tab.id,
+        .onDrop(of: BonsplitTabDragPayload.dropContentTypes, delegate: SidebarBonsplitWorkspaceDropDelegate(
+            targetTabId: tab.id,
             tabManager: tabManager,
             selectedTabIds: $selectedTabIds,
-            lastSidebarSelectionIndex: $lastSidebarSelectionIndex
+            lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
+            targetRowHeight: rowHeight,
+            dragAutoScrollController: dragAutoScrollController,
+            dropIndicator: $dropIndicator
         ))
         .onTapGesture {
             updateSelection()
@@ -12112,7 +12124,7 @@ private struct TabItemView: View, Equatable {
     }
 
     private var showsCenteredTopDropIndicator: Bool {
-        guard draggedTabId != nil, let indicator = dropIndicator else { return false }
+        guard let indicator = dropIndicator else { return false }
         if indicator.tabId == tab.id && indicator.edge == .top {
             return true
         }
@@ -13304,51 +13316,213 @@ private enum BonsplitTabDragPayload {
     }
 }
 
-private struct SidebarBonsplitTabDropDelegate: DropDelegate {
-    let targetWorkspaceId: UUID
+enum SidebarBonsplitWorkspaceInsertPlanner {
+    static func indicator(
+        targetTabId: UUID?,
+        tabIds: [UUID],
+        pinnedTabIds: Set<UUID>,
+        pointerY: CGFloat? = nil,
+        targetHeight: CGFloat? = nil
+    ) -> SidebarDropIndicator? {
+        guard let insertionPosition = resolvedInsertionPosition(
+            targetTabId: targetTabId,
+            indicator: nil,
+            tabIds: tabIds,
+            pinnedTabIds: pinnedTabIds,
+            pointerY: pointerY,
+            targetHeight: targetHeight
+        ) else {
+            return nil
+        }
+        return indicatorForInsertionPosition(insertionPosition, tabIds: tabIds)
+    }
+
+    static func targetIndex(
+        targetTabId: UUID?,
+        indicator: SidebarDropIndicator?,
+        tabIds: [UUID],
+        pinnedTabIds: Set<UUID>,
+        pointerY: CGFloat? = nil,
+        targetHeight: CGFloat? = nil
+    ) -> Int? {
+        resolvedInsertionPosition(
+            targetTabId: targetTabId,
+            indicator: indicator,
+            tabIds: tabIds,
+            pinnedTabIds: pinnedTabIds,
+            pointerY: pointerY,
+            targetHeight: targetHeight
+        )
+    }
+
+    private static func resolvedInsertionPosition(
+        targetTabId: UUID?,
+        indicator: SidebarDropIndicator?,
+        tabIds: [UUID],
+        pinnedTabIds: Set<UUID>,
+        pointerY: CGFloat?,
+        targetHeight: CGFloat?
+    ) -> Int? {
+        let proposedInsertionPosition: Int
+        if let indicator,
+           let indicatorInsertion = insertionPositionForIndicator(indicator, tabIds: tabIds) {
+            proposedInsertionPosition = indicatorInsertion
+        } else if let targetTabId {
+            guard let targetTabIndex = tabIds.firstIndex(of: targetTabId) else { return nil }
+            let edge = (pointerY != nil && targetHeight != nil)
+                ? SidebarDropPlanner.edgeForPointer(
+                    locationY: pointerY ?? 0,
+                    targetHeight: targetHeight ?? 0
+                )
+                : .top
+            proposedInsertionPosition = (edge == .bottom) ? targetTabIndex + 1 : targetTabIndex
+        } else {
+            proposedInsertionPosition = tabIds.count
+        }
+
+        return legalInsertionPosition(
+            proposedInsertionPosition,
+            tabIds: tabIds,
+            pinnedTabIds: pinnedTabIds
+        )
+    }
+
+    private static func legalInsertionPosition(
+        _ proposedInsertionPosition: Int,
+        tabIds: [UUID],
+        pinnedTabIds: Set<UUID>
+    ) -> Int? {
+        let clampedInsertion = max(0, min(proposedInsertionPosition, tabIds.count))
+        guard !pinnedTabIds.isEmpty else { return clampedInsertion }
+
+        let pinnedCount = tabIds.reduce(into: 0) { count, tabId in
+            if pinnedTabIds.contains(tabId) {
+                count += 1
+            }
+        }
+        guard pinnedCount > 0 else { return clampedInsertion }
+        guard clampedInsertion >= pinnedCount else { return nil }
+        return clampedInsertion
+    }
+
+    private static func indicatorForInsertionPosition(
+        _ insertionPosition: Int,
+        tabIds: [UUID]
+    ) -> SidebarDropIndicator {
+        let clampedInsertion = max(0, min(insertionPosition, tabIds.count))
+        if clampedInsertion >= tabIds.count {
+            return SidebarDropIndicator(tabId: nil, edge: .bottom)
+        }
+        return SidebarDropIndicator(tabId: tabIds[clampedInsertion], edge: .top)
+    }
+
+    private static func insertionPositionForIndicator(
+        _ indicator: SidebarDropIndicator,
+        tabIds: [UUID]
+    ) -> Int? {
+        if let tabId = indicator.tabId {
+            guard let targetTabIndex = tabIds.firstIndex(of: tabId) else { return nil }
+            return indicator.edge == .bottom ? targetTabIndex + 1 : targetTabIndex
+        }
+        return tabIds.count
+    }
+}
+
+private struct SidebarBonsplitWorkspaceDropDelegate: DropDelegate {
+    let targetTabId: UUID?
     let tabManager: TabManager
     @Binding var selectedTabIds: Set<UUID>
     @Binding var lastSidebarSelectionIndex: Int?
+    let targetRowHeight: CGFloat?
+    let dragAutoScrollController: SidebarDragAutoScrollController
+    @Binding var dropIndicator: SidebarDropIndicator?
 
     func validateDrop(info: DropInfo) -> Bool {
         guard info.hasItemsConforming(to: [BonsplitTabDragPayload.typeIdentifier]) else { return false }
-        return BonsplitTabDragPayload.currentTransfer() != nil
+        guard BonsplitTabDragPayload.currentTransfer() != nil else { return false }
+        return plannedTargetIndex(for: info) != nil
+    }
+
+    func dropEntered(info: DropInfo) {
+        dragAutoScrollController.updateFromDragLocation()
+        updateDropIndicator(for: info)
+    }
+
+    func dropExited(info: DropInfo) {
+        if targetTabId == nil {
+            if dropIndicator?.tabId == nil {
+                dropIndicator = nil
+            }
+            return
+        }
+        if dropIndicator?.tabId == targetTabId {
+            dropIndicator = nil
+        }
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
+        dragAutoScrollController.updateFromDragLocation()
+        updateDropIndicator(for: info)
         guard validateDrop(info: info) else { return nil }
         return DropProposal(operation: .move)
     }
 
     func performDrop(info: DropInfo) -> Bool {
+        defer {
+            dropIndicator = nil
+            dragAutoScrollController.stop()
+        }
         guard validateDrop(info: info),
               let transfer = BonsplitTabDragPayload.currentTransfer(),
-              let app = AppDelegate.shared else {
+              let targetIndex = plannedTargetIndex(for: info),
+              let app = AppDelegate.shared,
+              let newWorkspaceId = app.moveBonsplitTabToNewWorkspace(
+                tabId: transfer.tab.id,
+                in: tabManager,
+                at: targetIndex,
+                focus: true,
+                focusWindow: true
+              ) else {
             return false
         }
 
-        if let source = app.locateBonsplitSurface(tabId: transfer.tab.id),
-           source.workspaceId == targetWorkspaceId {
-            syncSidebarSelection()
-            return true
-        }
-
-        guard app.moveBonsplitTab(
-            tabId: transfer.tab.id,
-            toWorkspace: targetWorkspaceId,
-            focus: true,
-            focusWindow: true
-        ) else {
-            return false
-        }
-
-        selectedTabIds = [targetWorkspaceId]
-        syncSidebarSelection()
+        selectedTabIds = [newWorkspaceId]
+        syncSidebarSelection(preferredSelectedTabId: newWorkspaceId)
         return true
     }
 
-    private func syncSidebarSelection() {
-        if let selectedId = tabManager.selectedTabId {
+    private func updateDropIndicator(for info: DropInfo) {
+        dropIndicator = proposedIndicator(for: info)
+    }
+
+    private func proposedIndicator(for info: DropInfo) -> SidebarDropIndicator? {
+        let tabIds = tabManager.tabs.map(\.id)
+        let pinnedTabIds = Set(tabManager.tabs.filter(\.isPinned).map(\.id))
+        return SidebarBonsplitWorkspaceInsertPlanner.indicator(
+            targetTabId: targetTabId,
+            tabIds: tabIds,
+            pinnedTabIds: pinnedTabIds,
+            pointerY: targetTabId == nil ? nil : info.location.y,
+            targetHeight: targetRowHeight
+        )
+    }
+
+    private func plannedTargetIndex(for info: DropInfo) -> Int? {
+        let tabIds = tabManager.tabs.map(\.id)
+        let pinnedTabIds = Set(tabManager.tabs.filter(\.isPinned).map(\.id))
+        return SidebarBonsplitWorkspaceInsertPlanner.targetIndex(
+            targetTabId: targetTabId,
+            indicator: proposedIndicator(for: info),
+            tabIds: tabIds,
+            pinnedTabIds: pinnedTabIds,
+            pointerY: targetTabId == nil ? nil : info.location.y,
+            targetHeight: targetRowHeight
+        )
+    }
+
+    private func syncSidebarSelection(preferredSelectedTabId: UUID? = nil) {
+        let selectedId = preferredSelectedTabId ?? tabManager.selectedTabId
+        if let selectedId {
             lastSidebarSelectionIndex = tabManager.tabs.firstIndex { $0.id == selectedId }
         } else {
             lastSidebarSelectionIndex = nil
