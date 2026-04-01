@@ -226,10 +226,31 @@ final class SerialConsoleAccessoryView: NSView {
     private let stopBitsButton = NSPopUpButton(frame: .zero, pullsDown: false)
     private let parityButton = NSPopUpButton(frame: .zero, pullsDown: false)
     private let flowControlButton = NSPopUpButton(frame: .zero, pullsDown: false)
+    private lazy var grid: NSGridView = {
+        let rows: [[NSView]] = [
+            [Self.label(text: String(localized: "serial.open.device", defaultValue: "Device")), deviceField],
+            [Self.label(text: String(localized: "serial.open.baudRate", defaultValue: "Baud Rate")), baudRateButton],
+            [Self.label(text: String(localized: "serial.open.dataBits", defaultValue: "Data Bits")), dataBitsButton],
+            [Self.label(text: String(localized: "serial.open.stopBits", defaultValue: "Stop Bits")), stopBitsButton],
+            [Self.label(text: String(localized: "serial.open.parity", defaultValue: "Parity")), parityButton],
+            [Self.label(text: String(localized: "serial.open.flowControl", defaultValue: "Flow Control")), flowControlButton],
+        ]
+        return NSGridView(views: rows)
+    }()
+
+    override var fittingSize: NSSize {
+        layoutSubtreeIfNeeded()
+        var size = grid.fittingSize
+        size.width = max(size.width, 470)
+        return size
+    }
+
+    override var intrinsicContentSize: NSSize {
+        fittingSize
+    }
 
     init(configuration: SerialConsoleConfiguration, discoveredDevicePaths: [String]) {
         super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
 
         deviceField.translatesAutoresizingMaskIntoConstraints = false
         deviceField.isEditable = true
@@ -279,16 +300,6 @@ final class SerialConsoleAccessoryView: NSView {
         }
         flowControlButton.selectItem(at: max(0, SerialConsoleFlowControl.allCases.firstIndex(of: configuration.flowControl) ?? 0))
 
-        let rows: [[NSView]] = [
-            [label(text: String(localized: "serial.open.device", defaultValue: "Device")), deviceField],
-            [label(text: String(localized: "serial.open.baudRate", defaultValue: "Baud Rate")), baudRateButton],
-            [label(text: String(localized: "serial.open.dataBits", defaultValue: "Data Bits")), dataBitsButton],
-            [label(text: String(localized: "serial.open.stopBits", defaultValue: "Stop Bits")), stopBitsButton],
-            [label(text: String(localized: "serial.open.parity", defaultValue: "Parity")), parityButton],
-            [label(text: String(localized: "serial.open.flowControl", defaultValue: "Flow Control")), flowControlButton],
-        ]
-
-        let grid = NSGridView(views: rows)
         grid.translatesAutoresizingMaskIntoConstraints = false
         grid.columnSpacing = 12
         grid.rowSpacing = 8
@@ -312,6 +323,9 @@ final class SerialConsoleAccessoryView: NSView {
             parityButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
             flowControlButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
         ])
+
+        invalidateIntrinsicContentSize()
+        setFrameSize(fittingSize)
     }
 
     @available(*, unavailable)
@@ -339,7 +353,7 @@ final class SerialConsoleAccessoryView: NSView {
         )
     }
 
-    private func label(text: String) -> NSTextField {
+    private static func label(text: String) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.alignment = .right
         label.lineBreakMode = .byClipping
