@@ -4703,6 +4703,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
     }
 
+    func requestCommandPaletteEditWorkspaceDescription(
+        preferredWindow: NSWindow? = nil,
+        source: String = "api.commandPaletteEditWorkspaceDescription"
+    ) {
+        postCommandPaletteRequest(
+            name: .commandPaletteEditWorkspaceDescriptionRequested,
+            preferredWindow: preferredWindow,
+            source: source,
+            markPending: true
+        )
+    }
+
     private func clearCommandPalettePendingOpen(for window: NSWindow?) {
         guard let window,
               let windowId = mainWindowId(for: window) else { return }
@@ -9906,6 +9918,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
         }
 
+        if matchShortcut(event: event, shortcut: KeyboardShortcutSettings.shortcut(for: .editWorkspaceDescription)) {
+            return requestEditWorkspaceDescriptionViaCommandPalette(
+                preferredWindow: commandPaletteTargetWindow ?? event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+            )
+        }
+
         if matchShortcut(
             event: event,
             shortcut: StoredShortcut(key: "t", command: true, shift: false, option: true, control: false)
@@ -10875,6 +10893,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         requestCommandPaletteRenameWorkspace(
             preferredWindow: targetWindow,
             source: "shortcut.renameWorkspace"
+        )
+        return true
+    }
+
+    @discardableResult
+    func requestEditWorkspaceDescriptionViaCommandPalette(preferredWindow: NSWindow? = nil) -> Bool {
+        let targetWindow = preferredWindow ?? NSApp.keyWindow ?? NSApp.mainWindow
+        requestCommandPaletteEditWorkspaceDescription(
+            preferredWindow: targetWindow,
+            source: "shortcut.editWorkspaceDescription"
         )
         return true
     }

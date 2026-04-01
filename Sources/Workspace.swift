@@ -280,6 +280,7 @@ extension Workspace {
         return SessionWorkspaceSnapshot(
             processTitle: processTitle,
             customTitle: customTitle,
+            customDescription: customDescription,
             customColor: customColor,
             isPinned: isPinned,
             currentDirectory: currentDirectory,
@@ -319,6 +320,7 @@ extension Workspace {
 
         applyProcessTitle(snapshot.processTitle)
         setCustomTitle(snapshot.customTitle)
+        setCustomDescription(snapshot.customDescription)
         setCustomColor(snapshot.customColor)
         isPinned = snapshot.isPinned
 
@@ -5464,6 +5466,7 @@ final class Workspace: Identifiable, ObservableObject {
     let id: UUID
     @Published var title: String
     @Published var customTitle: String?
+    @Published var customDescription: String?
     @Published var isPinned: Bool = false
     @Published var customColor: String?  // hex string, e.g. "#C0392B"
     @Published var currentDirectory: String
@@ -5604,6 +5607,7 @@ final class Workspace: Identifiable, ObservableObject {
     lazy var sidebarObservationPublisher: AnyPublisher<Void, Never> = {
         let publishers: [AnyPublisher<Void, Never>] = [
             sidebarObservationSignal($title),
+            sidebarObservationSignal($customDescription),
             sidebarObservationSignal($isPinned),
             sidebarObservationSignal($customColor),
             sidebarObservationSignal($currentDirectory),
@@ -5795,6 +5799,7 @@ final class Workspace: Identifiable, ObservableObject {
         self.processTitle = title
         self.title = title
         self.customTitle = nil
+        self.customDescription = nil
 
         let trimmedWorkingDirectory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let hasWorkingDirectory = !trimmedWorkingDirectory.isEmpty
@@ -6431,6 +6436,10 @@ final class Workspace: Identifiable, ObservableObject {
         return !trimmed.isEmpty
     }
 
+    var hasCustomDescription: Bool {
+        Self.normalizedCustomDescription(customDescription) != nil
+    }
+
     func applyProcessTitle(_ title: String) {
         processTitle = title
         guard customTitle == nil else { return }
@@ -6445,6 +6454,15 @@ final class Workspace: Identifiable, ObservableObject {
         }
     }
 
+    private static func normalizedCustomDescription(_ description: String?) -> String? {
+        let normalizedLineEndings = description?
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let trimmed = normalizedLineEndings?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
     func setCustomTitle(_ title: String?) {
         let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
@@ -6454,6 +6472,10 @@ final class Workspace: Identifiable, ObservableObject {
             customTitle = trimmed
             self.title = trimmed
         }
+    }
+
+    func setCustomDescription(_ description: String?) {
+        customDescription = Self.normalizedCustomDescription(description)
     }
 
     // MARK: - Directory Updates

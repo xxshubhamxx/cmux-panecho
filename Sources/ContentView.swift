@@ -1603,6 +1603,8 @@ struct ContentView: View {
     @State private var commandPaletteQuery: String = ""
     @State private var commandPaletteMode: CommandPaletteMode = .commands
     @State private var commandPaletteRenameDraft: String = ""
+    @State private var commandPaletteWorkspaceDescriptionDraft: String = ""
+    @State private var commandPaletteWorkspaceDescriptionHeight: CGFloat = CommandPaletteMultilineTextEditorRepresentable.defaultMinimumHeight
     @State private var commandPaletteSelectedResultIndex: Int = 0
     @State private var commandPaletteSelectionAnchorCommandID: String?
     @State private var commandPaletteHoveredResultIndex: Int?
@@ -1639,6 +1641,7 @@ struct ContentView: View {
     private var commandPaletteSearchAllSurfaces = CommandPaletteSwitcherSearchSettings.defaultSearchAllSurfaces
     @AppStorage(BrowserLinkOpenSettings.openSidebarPullRequestLinksInCmuxBrowserKey)
     private var openSidebarPullRequestLinksInCmuxBrowser = BrowserLinkOpenSettings.defaultOpenSidebarPullRequestLinksInCmuxBrowser
+    @State private var commandPaletteShouldFocusWorkspaceDescriptionEditor = false
     @FocusState private var isCommandPaletteSearchFocused: Bool
     @FocusState private var isCommandPaletteRenameFocused: Bool
 
@@ -1646,6 +1649,7 @@ struct ContentView: View {
         case commands
         case renameInput(CommandPaletteRenameTarget)
         case renameConfirm(CommandPaletteRenameTarget, proposedName: String)
+        case workspaceDescriptionInput(CommandPaletteWorkspaceDescriptionTarget)
     }
 
     private enum CommandPaletteListScope: String {
@@ -1697,6 +1701,25 @@ struct ContentView: View {
             case .tab:
                 return String(localized: "commandPalette.rename.tabPlaceholder", defaultValue: "Tab name")
             }
+        }
+    }
+
+    private struct CommandPaletteWorkspaceDescriptionTarget: Equatable {
+        let workspaceId: UUID
+        let currentDescription: String
+
+        var placeholder: String {
+            String(
+                localized: "commandPalette.description.workspacePlaceholder",
+                defaultValue: "Workspace description"
+            )
+        }
+
+        var inputHint: String {
+            String(
+                localized: "commandPalette.description.workspaceInputHint",
+                defaultValue: "Press Enter to save. Press Shift-Enter for a new line, or Escape to cancel."
+            )
         }
     }
 
@@ -1926,6 +1949,7 @@ struct ContentView: View {
         static let hasWorkspace = "workspace.hasSelection"
         static let workspaceName = "workspace.name"
         static let workspaceHasCustomName = "workspace.hasCustomName"
+        static let workspaceHasCustomDescription = "workspace.hasCustomDescription"
         static let workspaceMinimalModeEnabled = "workspace.minimalModeEnabled"
         static let workspaceShouldPin = "workspace.shouldPin"
         static let workspaceHasPullRequests = "workspace.hasPullRequests"
@@ -2997,6 +3021,17 @@ struct ContentView: View {
             openCommandPaletteRenameWorkspaceInput()
         })
 
+        view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .commandPaletteEditWorkspaceDescriptionRequested)) { notification in
+            let requestedWindow = notification.object as? NSWindow
+            guard Self.shouldHandleCommandPaletteRequest(
+                observedWindow: observedWindow,
+                requestedWindow: requestedWindow,
+                keyWindow: NSApp.keyWindow,
+                mainWindow: NSApp.mainWindow
+            ) else { return }
+            openCommandPaletteWorkspaceDescriptionInput()
+        })
+
         view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .commandPaletteMoveSelection)) { notification in
             guard isCommandPalettePresented else { return }
             guard case .commands = commandPaletteMode else { return }
@@ -3616,6 +3651,8 @@ struct ContentView: View {
                         commandPaletteRenameInputView(target: target)
                     case let .renameConfirm(target, proposedName):
                         commandPaletteRenameConfirmView(target: target, proposedName: proposedName)
+                    case .workspaceDescriptionInput(let target):
+                        commandPaletteWorkspaceDescriptionInputView(target: target)
                     }
                 }
                 .frame(width: targetWidth)
@@ -3807,25 +3844,77 @@ struct ContentView: View {
         }
     }
 
-    private func commandPaletteRenameInputView(target: CommandPaletteRenameTarget) -> some View {
-        VStack(spacing: 0) {
-            TextField(target.placeholder, text: $commandPaletteRenameDraft)
+    private enum CommandPaletteEditorFieldStyle {
+        case singleLine(
+            accessibilityIdentifier: String,
+            focus: FocusState<Bool>.Binding,
+            onDeleteBackward: ((EventModifiers) -> BackportKeyPressResult)?
+        )
+        case multiline(
+            accessibilityIdentifier: String,
+            accessibilityLabel: String,
+            focus: Binding<Bool>,
+            measuredHeight: Binding<CGFloat>
+        )
+    }
+
+    @ViewBuilder
+    private func commandPaletteEditorField(
+        style: CommandPaletteEditorFieldStyle,
+        placeholder: String,
+        text: Binding<String>,
+        onSubmit: @escaping () -> Void,
+        onEscape: @escaping () -> Void,
+        onInteraction: (() -> Void)? = nil
+    ) -> some View {
+        switch style {
+        case .singleLine(let accessibilityIdentifier, let focus, let onDeleteBackward):
+            TextField(placeholder, text: text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, weight: .regular))
                 .tint(Color(nsColor: sidebarActiveForegroundNSColor(opacity: 1.0)))
-                .focused($isCommandPaletteRenameFocused)
-                .accessibilityIdentifier("CommandPaletteRenameField")
+                .focused(focus)
+                .accessibilityIdentifier(accessibilityIdentifier)
                 .backport.onKeyPress(.delete) { modifiers in
-                    handleCommandPaletteRenameDeleteBackward(modifiers: modifiers)
+                    onDeleteBackward?(modifiers) ?? .ignored
                 }
                 .onSubmit {
-                    continueRenameFlow(target: target)
+                    onSubmit()
                 }
                 .onTapGesture {
-                    handleCommandPaletteRenameInputInteraction()
+                    onInteraction?()
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
+        case .multiline(let accessibilityIdentifier, let accessibilityLabel, let focus, let measuredHeight):
+            CommandPaletteMultilineTextEditorRepresentable(
+                placeholder: placeholder,
+                accessibilityLabel: accessibilityLabel,
+                accessibilityIdentifier: accessibilityIdentifier,
+                text: text,
+                isFocused: focus,
+                measuredHeight: measuredHeight,
+                onSubmit: onSubmit,
+                onEscape: onEscape
+            )
+            .frame(height: measuredHeight.wrappedValue)
+        }
+    }
+
+    private func commandPaletteRenameInputView(target: CommandPaletteRenameTarget) -> some View {
+        VStack(spacing: 0) {
+            commandPaletteEditorField(
+                style: .singleLine(
+                    accessibilityIdentifier: "CommandPaletteRenameField",
+                    focus: $isCommandPaletteRenameFocused,
+                    onDeleteBackward: handleCommandPaletteRenameDeleteBackward(modifiers:)
+                ),
+                placeholder: target.placeholder,
+                text: $commandPaletteRenameDraft,
+                onSubmit: { continueRenameFlow(target: target) },
+                onEscape: { dismissCommandPalette() },
+                onInteraction: handleCommandPaletteRenameInputInteraction
+            )
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
 
             Divider()
 
@@ -3888,6 +3977,48 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
             .opacity(0)
             .accessibilityHidden(true)
+        }
+    }
+
+    private func commandPaletteWorkspaceDescriptionInputView(
+        target: CommandPaletteWorkspaceDescriptionTarget
+    ) -> some View {
+        VStack(spacing: 0) {
+            commandPaletteEditorField(
+                style: .multiline(
+                    accessibilityIdentifier: "CommandPaletteWorkspaceDescriptionEditor",
+                    accessibilityLabel: String(
+                        localized: "command.editWorkspaceDescription.title",
+                        defaultValue: "Edit Workspace Description…"
+                    ),
+                    focus: $commandPaletteShouldFocusWorkspaceDescriptionEditor,
+                    measuredHeight: $commandPaletteWorkspaceDescriptionHeight
+                ),
+                placeholder: target.placeholder,
+                text: $commandPaletteWorkspaceDescriptionDraft,
+                onSubmit: {
+                    applyWorkspaceDescriptionFlow(
+                        target: target,
+                        proposedDescription: commandPaletteWorkspaceDescriptionDraft
+                    )
+                },
+                onEscape: { dismissCommandPalette() }
+            )
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+
+            Divider()
+
+            Text(target.inputHint)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+        }
+        .onAppear {
+            resetCommandPaletteWorkspaceDescriptionFocus()
         }
     }
 
@@ -4125,6 +4256,318 @@ struct ContentView: View {
             nsView.onHandleKeyEvent = nil
             coordinator.detachEditorTextDidChangeObserver()
             coordinator.parentField = nil
+        }
+    }
+
+    private final class CommandPalettePassthroughLabel: NSTextField {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    private final class CommandPaletteMultilineTextView: NSTextView {
+        var onHandleKeyEvent: ((NSEvent, NSTextView?) -> Bool)?
+        var onDidBecomeFirstResponder: (() -> Void)?
+
+        override func becomeFirstResponder() -> Bool {
+            let becameFirstResponder = super.becomeFirstResponder()
+            if becameFirstResponder {
+                onDidBecomeFirstResponder?()
+            }
+            return becameFirstResponder
+        }
+
+        override func keyDown(with event: NSEvent) {
+            if hasMarkedText() {
+                super.keyDown(with: event)
+                return
+            }
+            if onHandleKeyEvent?(event, self) == true {
+                return
+            }
+            super.keyDown(with: event)
+        }
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            if hasMarkedText() {
+                return super.performKeyEquivalent(with: event)
+            }
+            if onHandleKeyEvent?(event, self) == true {
+                return true
+            }
+            return super.performKeyEquivalent(with: event)
+        }
+    }
+
+    private final class CommandPaletteMultilineTextEditorView: NSView {
+        private static let font = NSFont.systemFont(ofSize: 13)
+        private static let textInset = NSSize(width: 0, height: 2)
+        static let defaultMinimumHeight: CGFloat = {
+            let lineHeight = ceil(font.ascender - font.descender + font.leading)
+            return lineHeight * 5 + textInset.height * 2
+        }()
+
+        let textView = CommandPaletteMultilineTextView(frame: .zero)
+        private let placeholderField = CommandPalettePassthroughLabel(labelWithString: "")
+        var onMeasuredHeightChange: ((CGFloat) -> Void)?
+        private var lastReportedHeight: CGFloat?
+
+        var placeholder: String = "" {
+            didSet {
+                placeholderField.stringValue = placeholder
+                updatePlaceholderVisibility()
+            }
+        }
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+
+            textView.translatesAutoresizingMaskIntoConstraints = false
+            textView.isEditable = true
+            textView.isSelectable = true
+            textView.isRichText = false
+            textView.importsGraphics = false
+            textView.isHorizontallyResizable = false
+            textView.isVerticallyResizable = false
+            textView.backgroundColor = .clear
+            textView.drawsBackground = false
+            textView.font = Self.font
+            textView.textColor = .labelColor
+            textView.insertionPointColor = .labelColor
+            textView.textContainerInset = Self.textInset
+            textView.textContainer?.lineFragmentPadding = 0
+            textView.textContainer?.widthTracksTextView = true
+            textView.textContainer?.heightTracksTextView = false
+            textView.maxSize = NSSize(
+                width: CGFloat.greatestFiniteMagnitude,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+            addSubview(textView)
+
+            placeholderField.translatesAutoresizingMaskIntoConstraints = false
+            placeholderField.font = Self.font
+            placeholderField.textColor = .secondaryLabelColor
+            placeholderField.lineBreakMode = .byWordWrapping
+            placeholderField.maximumNumberOfLines = 0
+            addSubview(placeholderField)
+
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(textDidChange(_:)),
+                name: NSText.didChangeNotification,
+                object: textView
+            )
+
+            NSLayoutConstraint.activate([
+                textView.topAnchor.constraint(equalTo: topAnchor),
+                textView.bottomAnchor.constraint(equalTo: bottomAnchor),
+                textView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                textView.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+                placeholderField.topAnchor.constraint(equalTo: topAnchor, constant: Self.textInset.height),
+                placeholderField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.textInset.width),
+                placeholderField.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Self.textInset.width),
+            ])
+
+            updatePlaceholderVisibility()
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        override func layout() {
+            super.layout()
+            textView.textContainer?.containerSize = NSSize(
+                width: bounds.width,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+            reportMeasuredHeightIfNeeded()
+        }
+
+        func refreshMetrics() {
+            updatePlaceholderVisibility()
+            needsLayout = true
+            layoutSubtreeIfNeeded()
+            reportMeasuredHeightIfNeeded()
+        }
+
+        func focusIfNeeded() {
+            guard let window, window.firstResponder !== textView else { return }
+            window.makeFirstResponder(textView)
+            let length = (textView.string as NSString).length
+            textView.setSelectedRange(NSRange(location: length, length: 0))
+        }
+
+        private func fittingHeight() -> CGFloat {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else {
+                return Self.defaultMinimumHeight
+            }
+            layoutManager.ensureLayout(for: textContainer)
+            let usedRect = layoutManager.usedRect(for: textContainer)
+            let lineHeight = ceil(Self.font.ascender - Self.font.descender + Self.font.leading)
+            let contentHeight = max(lineHeight, ceil(usedRect.height))
+            return max(
+                Self.defaultMinimumHeight,
+                ceil(contentHeight + Self.textInset.height * 2)
+            )
+        }
+
+        private func reportMeasuredHeightIfNeeded() {
+            let height = fittingHeight()
+            guard lastReportedHeight == nil || abs((lastReportedHeight ?? height) - height) > 0.5 else { return }
+            lastReportedHeight = height
+            onMeasuredHeightChange?(height)
+        }
+
+        @objc
+        private func textDidChange(_ notification: Notification) {
+            updatePlaceholderVisibility()
+            reportMeasuredHeightIfNeeded()
+        }
+
+        private func updatePlaceholderVisibility() {
+            placeholderField.isHidden = textView.string.isEmpty == false
+        }
+    }
+
+    private struct CommandPaletteMultilineTextEditorRepresentable: NSViewRepresentable {
+        static let defaultMinimumHeight = CommandPaletteMultilineTextEditorView.defaultMinimumHeight
+
+        let placeholder: String
+        let accessibilityLabel: String
+        let accessibilityIdentifier: String
+        @Binding var text: String
+        @Binding var isFocused: Bool
+        @Binding var measuredHeight: CGFloat
+        let onSubmit: () -> Void
+        let onEscape: () -> Void
+
+        final class Coordinator: NSObject, NSTextViewDelegate {
+            var parent: CommandPaletteMultilineTextEditorRepresentable
+            var isProgrammaticMutation = false
+            var pendingFocusRequest = false
+
+            init(parent: CommandPaletteMultilineTextEditorRepresentable) {
+                self.parent = parent
+            }
+
+            func textDidBeginEditing(_ notification: Notification) {
+                if !parent.isFocused {
+                    DispatchQueue.main.async {
+                        self.parent.isFocused = true
+                    }
+                }
+            }
+
+            func textDidChange(_ notification: Notification) {
+                guard !isProgrammaticMutation,
+                      let textView = notification.object as? NSTextView else { return }
+                parent.text = textView.string
+            }
+
+            func handleDidBecomeFirstResponder() {
+                if !parent.isFocused {
+                    parent.isFocused = true
+                }
+            }
+
+            func handleMeasuredHeight(_ height: CGFloat) {
+                guard abs(parent.measuredHeight - height) > 0.5 else { return }
+                DispatchQueue.main.async {
+                    self.parent.measuredHeight = height
+                }
+            }
+
+            func handleKeyEvent(_ event: NSEvent, editor: NSTextView?) -> Bool {
+                guard !(editor?.hasMarkedText() ?? false) else { return false }
+
+                let normalizedFlags = event.modifierFlags
+                    .intersection(.deviceIndependentFlagsMask)
+                    .subtracting([.numericPad, .function, .capsLock])
+
+                if event.keyCode == 36 || event.keyCode == 76 {
+                    if normalizedFlags.isEmpty {
+                        parent.onSubmit()
+                        return true
+                    }
+                    if normalizedFlags == [.shift] {
+                        return false
+                    }
+                }
+
+                if event.keyCode == 53, normalizedFlags.isEmpty {
+                    parent.onEscape()
+                    return true
+                }
+
+                return false
+            }
+        }
+
+        func makeCoordinator() -> Coordinator {
+            Coordinator(parent: self)
+        }
+
+        func makeNSView(context: Context) -> CommandPaletteMultilineTextEditorView {
+            let view = CommandPaletteMultilineTextEditorView(frame: .zero)
+            view.placeholder = placeholder
+            view.textView.string = text
+            view.textView.delegate = context.coordinator
+            view.textView.setAccessibilityLabel(accessibilityLabel)
+            view.textView.setAccessibilityIdentifier(accessibilityIdentifier)
+            view.setAccessibilityIdentifier(accessibilityIdentifier)
+            view.textView.onHandleKeyEvent = { [weak coordinator = context.coordinator] event, editor in
+                coordinator?.handleKeyEvent(event, editor: editor) ?? false
+            }
+            view.textView.onDidBecomeFirstResponder = { [weak coordinator = context.coordinator] in
+                coordinator?.handleDidBecomeFirstResponder()
+            }
+            view.onMeasuredHeightChange = { [weak coordinator = context.coordinator] height in
+                coordinator?.handleMeasuredHeight(height)
+            }
+            view.refreshMetrics()
+            return view
+        }
+
+        func updateNSView(_ nsView: CommandPaletteMultilineTextEditorView, context: Context) {
+            context.coordinator.parent = self
+            nsView.placeholder = placeholder
+            nsView.textView.setAccessibilityLabel(accessibilityLabel)
+            nsView.textView.setAccessibilityIdentifier(accessibilityIdentifier)
+            nsView.setAccessibilityIdentifier(accessibilityIdentifier)
+
+            if nsView.textView.string != text {
+                context.coordinator.isProgrammaticMutation = true
+                nsView.textView.string = text
+                context.coordinator.isProgrammaticMutation = false
+            }
+            nsView.onMeasuredHeightChange = { [weak coordinator = context.coordinator] height in
+                coordinator?.handleMeasuredHeight(height)
+            }
+            nsView.refreshMetrics()
+
+            guard let window = nsView.window else { return }
+            let isFirstResponder = window.firstResponder === nsView.textView
+            if isFocused, !isFirstResponder, !context.coordinator.pendingFocusRequest {
+                context.coordinator.pendingFocusRequest = true
+                DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
+                    guard let coordinator else { return }
+                    coordinator.pendingFocusRequest = false
+                    guard coordinator.parent.isFocused, let nsView else { return }
+                    nsView.focusIfNeeded()
+                }
+            }
+        }
+
+        static func dismantleNSView(_ nsView: CommandPaletteMultilineTextEditorView, coordinator: Coordinator) {
+            nsView.textView.delegate = nil
+            nsView.textView.onHandleKeyEvent = nil
+            nsView.textView.onDidBecomeFirstResponder = nil
+            nsView.onMeasuredHeightChange = nil
         }
     }
 
@@ -5045,7 +5488,8 @@ struct ContentView: View {
         return CommandPaletteSwitcherSearchMetadata(
             directories: directories,
             branches: branches,
-            ports: ports
+            ports: ports,
+            description: workspace.customDescription
         )
     }
 
@@ -5191,6 +5635,8 @@ struct ContentView: View {
             return .renameTab
         case "palette.renameWorkspace":
             return .renameWorkspace
+        case "palette.editWorkspaceDescription":
+            return .editWorkspaceDescription
         case "palette.nextWorkspace":
             return .nextSidebarTab
         case "palette.previousWorkspace":
@@ -5273,6 +5719,7 @@ struct ContentView: View {
             snapshot.setBool(CommandPaletteContextKeys.hasWorkspace, true)
             snapshot.setString(CommandPaletteContextKeys.workspaceName, workspaceDisplayName(workspace))
             snapshot.setBool(CommandPaletteContextKeys.workspaceHasCustomName, workspace.customTitle != nil)
+            snapshot.setBool(CommandPaletteContextKeys.workspaceHasCustomDescription, workspace.hasCustomDescription)
             snapshot.setBool(CommandPaletteContextKeys.workspaceShouldPin, !workspace.isPinned)
             snapshot.setBool(
                 CommandPaletteContextKeys.workspaceHasPullRequests,
@@ -5588,6 +6035,16 @@ struct ContentView: View {
         )
         contributions.append(
             CommandPaletteCommandContribution(
+                commandId: "palette.editWorkspaceDescription",
+                title: constant(String(localized: "command.editWorkspaceDescription.title", defaultValue: "Edit Workspace Description…")),
+                subtitle: workspaceSubtitle,
+                keywords: ["edit", "workspace", "description", "notes", "markdown"],
+                dismissOnRun: false,
+                when: { $0.bool(CommandPaletteContextKeys.hasWorkspace) }
+            )
+        )
+        contributions.append(
+            CommandPaletteCommandContribution(
                 commandId: "palette.clearWorkspaceName",
                 title: constant(String(localized: "command.clearWorkspaceName.title", defaultValue: "Clear Workspace Name")),
                 subtitle: workspaceSubtitle,
@@ -5595,6 +6052,18 @@ struct ContentView: View {
                 when: {
                     $0.bool(CommandPaletteContextKeys.hasWorkspace)
                         && $0.bool(CommandPaletteContextKeys.workspaceHasCustomName)
+                }
+            )
+        )
+        contributions.append(
+            CommandPaletteCommandContribution(
+                commandId: "palette.clearWorkspaceDescription",
+                title: constant(String(localized: "command.clearWorkspaceDescription.title", defaultValue: "Clear Workspace Description")),
+                subtitle: workspaceSubtitle,
+                keywords: ["clear", "workspace", "description", "notes"],
+                when: {
+                    $0.bool(CommandPaletteContextKeys.hasWorkspace)
+                        && $0.bool(CommandPaletteContextKeys.workspaceHasCustomDescription)
                 }
             )
         )
@@ -6214,12 +6683,22 @@ struct ContentView: View {
         registry.register(commandId: "palette.renameWorkspace") {
             beginRenameWorkspaceFlow()
         }
+        registry.register(commandId: "palette.editWorkspaceDescription") {
+            beginWorkspaceDescriptionFlow()
+        }
         registry.register(commandId: "palette.clearWorkspaceName") {
             guard let workspace = tabManager.selectedWorkspace else {
                 NSSound.beep()
                 return
             }
             tabManager.clearCustomTitle(tabId: workspace.id)
+        }
+        registry.register(commandId: "palette.clearWorkspaceDescription") {
+            guard let workspace = tabManager.selectedWorkspace else {
+                NSSound.beep()
+                return
+            }
+            tabManager.clearCustomDescription(tabId: workspace.id)
         }
         registry.register(commandId: "palette.toggleWorkspacePin") {
             guard let workspace = tabManager.selectedWorkspace else {
@@ -6605,6 +7084,7 @@ struct ContentView: View {
         for port in metadata.ports {
             hasher.combine(port)
         }
+        hasher.combine(metadata.description ?? "")
     }
 
     static func commandPaletteScrollPositionAnchor(
@@ -6796,6 +7276,11 @@ struct ContentView: View {
             continueRenameFlow(target: target)
         case .renameConfirm(let target, let proposedName):
             applyRenameFlow(target: target, proposedName: proposedName)
+        case .workspaceDescriptionInput(let target):
+            applyWorkspaceDescriptionFlow(
+                target: target,
+                proposedDescription: commandPaletteWorkspaceDescriptionDraft
+            )
         }
     }
 
@@ -6856,6 +7341,13 @@ struct ContentView: View {
         beginRenameWorkspaceFlow()
     }
 
+    private func openCommandPaletteWorkspaceDescriptionInput() {
+        if !isCommandPalettePresented {
+            presentCommandPalette(initialQuery: Self.commandPaletteCommandsPrefix)
+        }
+        beginWorkspaceDescriptionFlow()
+    }
+
     private func presentFeedbackComposer() {
         DispatchQueue.main.async {
             isFeedbackComposerPresented = true
@@ -6909,6 +7401,8 @@ struct ContentView: View {
             mode = "rename_input"
         case .renameConfirm:
             mode = "rename_confirm"
+        case .workspaceDescriptionInput:
+            mode = "workspace_description_input"
         }
 
         let rows = Array(commandPaletteVisibleResults.prefix(20)).map { result in
@@ -6947,11 +7441,14 @@ struct ContentView: View {
         commandPaletteMode = .commands
         commandPaletteQuery = initialQuery
         commandPaletteRenameDraft = ""
+        commandPaletteWorkspaceDescriptionDraft = ""
+        commandPaletteWorkspaceDescriptionHeight = CommandPaletteMultilineTextEditorRepresentable.defaultMinimumHeight
         commandPaletteSelectedResultIndex = 0
         commandPaletteSelectionAnchorCommandID = nil
         commandPaletteHoveredResultIndex = nil
         commandPaletteScrollTargetIndex = nil
         commandPaletteScrollTargetAnchor = nil
+        commandPaletteShouldFocusWorkspaceDescriptionEditor = false
         scheduleCommandPaletteResultsRefresh(forceSearchCorpusRefresh: true)
         resetCommandPaletteSearchFocus()
         syncCommandPaletteDebugStateForObservedWindow()
@@ -6972,11 +7469,14 @@ struct ContentView: View {
         commandPaletteMode = .commands
         commandPaletteQuery = ""
         commandPaletteRenameDraft = ""
+        commandPaletteWorkspaceDescriptionDraft = ""
+        commandPaletteWorkspaceDescriptionHeight = CommandPaletteMultilineTextEditorRepresentable.defaultMinimumHeight
         commandPaletteSelectedResultIndex = 0
         commandPaletteSelectionAnchorCommandID = nil
         commandPaletteHoveredResultIndex = nil
         commandPaletteScrollTargetIndex = nil
         commandPaletteScrollTargetAnchor = nil
+        commandPaletteShouldFocusWorkspaceDescriptionEditor = false
         isCommandPaletteSearchFocused = false
         isCommandPaletteRenameFocused = false
         commandPaletteRestoreFocusTarget = nil
@@ -7203,6 +7703,15 @@ struct ContentView: View {
         applyCommandPaletteInputFocusPolicy(commandPaletteRenameInputFocusPolicy())
     }
 
+    private func resetCommandPaletteWorkspaceDescriptionFocus() {
+        DispatchQueue.main.async {
+            isCommandPaletteSearchFocused = false
+            isCommandPaletteRenameFocused = false
+            commandPaletteShouldFocusWorkspaceDescriptionEditor = true
+            commandPalettePendingTextSelectionBehavior = nil
+        }
+    }
+
     private func handleCommandPaletteRenameInputInteraction() {
         guard isCommandPalettePresented else { return }
         guard case .renameInput = commandPaletteMode else { return }
@@ -7222,6 +7731,7 @@ struct ContentView: View {
 
     private func applyCommandPaletteInputFocusPolicy(_ policy: CommandPaletteInputFocusPolicy) {
         DispatchQueue.main.async {
+            commandPaletteShouldFocusWorkspaceDescriptionEditor = false
             switch policy.focusTarget {
             case .search:
                 isCommandPaletteRenameFocused = false
@@ -7253,6 +7763,8 @@ struct ContentView: View {
             case .commands, .renameInput:
                 break
             case .renameConfirm:
+                return
+            case .workspaceDescriptionInput:
                 return
             }
         }
@@ -7407,6 +7919,18 @@ struct ContentView: View {
         startRenameFlow(target)
     }
 
+    private func beginWorkspaceDescriptionFlow() {
+        guard let workspace = tabManager.selectedWorkspace else {
+            NSSound.beep()
+            return
+        }
+        let target = CommandPaletteWorkspaceDescriptionTarget(
+            workspaceId: workspace.id,
+            currentDescription: workspace.customDescription ?? ""
+        )
+        startWorkspaceDescriptionFlow(target)
+    }
+
     private func beginRenameTabFlow() {
         guard let panelContext = focusedPanelContext else {
             NSSound.beep()
@@ -7426,8 +7950,18 @@ struct ContentView: View {
 
     private func startRenameFlow(_ target: CommandPaletteRenameTarget) {
         commandPaletteRenameDraft = target.currentName
+        commandPaletteShouldFocusWorkspaceDescriptionEditor = false
         commandPaletteMode = .renameInput(target)
         resetCommandPaletteRenameFocus()
+        syncCommandPaletteDebugStateForObservedWindow()
+    }
+
+    private func startWorkspaceDescriptionFlow(_ target: CommandPaletteWorkspaceDescriptionTarget) {
+        commandPaletteWorkspaceDescriptionDraft = target.currentDescription
+        commandPaletteWorkspaceDescriptionHeight = CommandPaletteMultilineTextEditorRepresentable.defaultMinimumHeight
+        commandPalettePendingTextSelectionBehavior = nil
+        commandPaletteMode = .workspaceDescriptionInput(target)
+        resetCommandPaletteWorkspaceDescriptionFocus()
         syncCommandPaletteDebugStateForObservedWindow()
     }
 
@@ -7452,6 +7986,18 @@ struct ContentView: View {
             workspace.setPanelCustomTitle(panelId: panelId, title: normalizedName)
         }
 
+        dismissCommandPalette()
+    }
+
+    private func applyWorkspaceDescriptionFlow(
+        target: CommandPaletteWorkspaceDescriptionTarget,
+        proposedDescription: String
+    ) {
+        guard tabManager.tabs.contains(where: { $0.id == target.workspaceId }) else {
+            NSSound.beep()
+            return
+        }
+        tabManager.setCustomDescription(tabId: target.workspaceId, description: proposedDescription)
         dismissCommandPalette()
     }
 
@@ -7574,15 +8120,18 @@ struct CommandPaletteSwitcherSearchMetadata: Equatable, Sendable {
     let directories: [String]
     let branches: [String]
     let ports: [Int]
+    let description: String?
 
     init(
         directories: [String] = [],
         branches: [String] = [],
-        ports: [Int] = []
+        ports: [Int] = [],
+        description: String? = nil
     ) {
         self.directories = directories
         self.branches = branches
         self.ports = ports
+        self.description = description
     }
 }
 
@@ -7610,6 +8159,7 @@ enum CommandPaletteSwitcherSearchIndexer {
         let directoryTokens = metadata.directories.flatMap { directoryTokensForSearch($0, detail: detail) }
         let branchTokens = metadata.branches.flatMap { branchTokensForSearch($0, detail: detail) }
         let portTokens = metadata.ports.flatMap(portTokensForSearch)
+        let descriptionTokens = descriptionTokensForSearch(metadata.description)
 
         var contextKeywords: [String] = []
         if !directoryTokens.isEmpty {
@@ -7621,8 +8171,11 @@ enum CommandPaletteSwitcherSearchIndexer {
         if !portTokens.isEmpty {
             contextKeywords.append(contentsOf: ["port", "ports"])
         }
+        if !descriptionTokens.isEmpty {
+            contextKeywords.append(contentsOf: ["description", "descriptions", "notes", "note"])
+        }
 
-        return contextKeywords + directoryTokens + branchTokens + portTokens
+        return contextKeywords + directoryTokens + branchTokens + portTokens + descriptionTokens
     }
 
     private static func directoryTokensForSearch(
@@ -7666,6 +8219,18 @@ enum CommandPaletteSwitcherSearchIndexer {
         guard (1...65535).contains(port) else { return [] }
         let portText = String(port)
         return [portText, ":\(portText)"]
+    }
+
+    private static func descriptionTokensForSearch(_ rawDescription: String?) -> [String] {
+        let trimmed = rawDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return [] }
+        let normalizedWhitespace = trimmed.replacingOccurrences(
+            of: "\\s+",
+            with: " ",
+            options: .regularExpression
+        )
+        let components = normalizedWhitespace.components(separatedBy: metadataDelimiters).filter { !$0.isEmpty }
+        return uniqueNormalizedPreservingOrder([trimmed, normalizedWhitespace] + components)
     }
 
     private static func uniqueNormalizedPreservingOrder(_ values: [String]) -> [String] {
@@ -11582,6 +12147,13 @@ private struct TabItemView: View, Equatable {
                 .frame(width: trailingAccessoryWidth, height: 16, alignment: .trailing)
             }
 
+            if let description = tab.customDescription {
+                SidebarWorkspaceDescriptionText(
+                    markdown: description,
+                    isActive: usesInvertedActiveForeground
+                )
+            }
+
             if let subtitle = effectiveSubtitle {
                 Text(subtitle)
                     .font(.system(size: 10))
@@ -11910,6 +12482,7 @@ private struct TabItemView: View, Equatable {
             single: String(localized: "contextMenu.markWorkspaceUnread", defaultValue: "Mark Workspace as Unread"),
             isMulti: isMulti)
         let renameWorkspaceShortcut = KeyboardShortcutSettings.shortcut(for: .renameWorkspace)
+        let editWorkspaceDescriptionShortcut = KeyboardShortcutSettings.shortcut(for: .editWorkspaceDescription)
         let closeWorkspaceShortcut = KeyboardShortcutSettings.shortcut(for: .closeWorkspace)
         Button(pinLabel) {
             for id in targetIds {
@@ -11934,6 +12507,25 @@ private struct TabItemView: View, Equatable {
         if tab.hasCustomTitle {
             Button(String(localized: "contextMenu.removeCustomWorkspaceName", defaultValue: "Remove Custom Workspace Name")) {
                 tabManager.clearCustomTitle(tabId: tab.id)
+            }
+        }
+
+        if !isMulti {
+            if let key = editWorkspaceDescriptionShortcut.keyEquivalent {
+                Button(String(localized: "contextMenu.editWorkspaceDescription", defaultValue: "Edit Workspace Description…")) {
+                    beginWorkspaceDescriptionEditFromContextMenu()
+                }
+                .keyboardShortcut(key, modifiers: editWorkspaceDescriptionShortcut.eventModifiers)
+            } else {
+                Button(String(localized: "contextMenu.editWorkspaceDescription", defaultValue: "Edit Workspace Description…")) {
+                    beginWorkspaceDescriptionEditFromContextMenu()
+                }
+            }
+
+            if tab.hasCustomDescription {
+                Button(String(localized: "contextMenu.clearWorkspaceDescription", defaultValue: "Clear Workspace Description")) {
+                    tabManager.clearCustomDescription(tabId: tab.id)
+                }
             }
         }
 
@@ -12708,6 +13300,51 @@ private struct TabItemView: View, Equatable {
         let response = alert.runModal()
         guard response == .alertFirstButtonReturn else { return }
         tabManager.setCustomTitle(tabId: tab.id, title: input.stringValue)
+    }
+
+    private func beginWorkspaceDescriptionEditFromContextMenu() {
+        selectedTabIds = [tab.id]
+        lastSidebarSelectionIndex = index
+        tabManager.selectTab(tab)
+        setSelectionToTabs()
+        _ = AppDelegate.shared?.requestEditWorkspaceDescriptionViaCommandPalette()
+    }
+}
+
+private struct SidebarWorkspaceDescriptionText: View {
+    let markdown: String
+    let isActive: Bool
+
+    @State private var renderedMarkdown: AttributedString?
+
+    var body: some View {
+        Group {
+            if let renderedMarkdown {
+                Text(renderedMarkdown)
+            } else {
+                Text(markdown)
+            }
+        }
+        .font(.system(size: 10.5))
+        .foregroundColor(foregroundColor)
+        .multilineTextAlignment(.leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear(perform: renderMarkdown)
+        .onChange(of: markdown) { _ in
+            renderMarkdown()
+        }
+    }
+
+    private var foregroundColor: Color {
+        isActive ? .white.opacity(0.84) : .secondary.opacity(0.95)
+    }
+
+    private func renderMarkdown() {
+        renderedMarkdown = try? AttributedString(
+            markdown: markdown,
+            options: .init(interpretedSyntax: .full)
+        )
     }
 }
 
