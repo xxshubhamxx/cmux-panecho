@@ -7142,7 +7142,7 @@ struct CMUXCLI {
             """
         case "claude-hook":
             return """
-            Usage: cmux claude-hook <session-start|active|stop|idle|notification|notify|prompt-submit> [flags]
+            Usage: cmux claude-hook <session-start|active|stop|idle|stop-failure|session-end|notification|notify|prompt-submit|pre-tool-use> [flags]
 
             Hook for Claude Code integration. Reads JSON from stdin.
 
@@ -7151,9 +7151,12 @@ struct CMUXCLI {
               active          Alias for session-start
               stop            Signal that a Claude session has stopped
               idle            Alias for stop
+              stop-failure    Signal that a Claude turn failed
+              session-end     Final session cleanup after Claude exits
               notification    Forward a Claude notification
               notify          Alias for notification
               prompt-submit   Clear notification and set Running on user prompt
+              pre-tool-use    Clear Needs input when Claude resumes work
 
             Flags:
               --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
@@ -7175,7 +7178,7 @@ struct CMUXCLI {
             """
         case "codex-hook":
             return """
-            Usage: cmux codex-hook <session-start|prompt-submit|stop> [flags]
+            Usage: cmux codex-hook <session-start|prompt-submit|stop|session-end> [flags]
 
             Hook for Codex CLI integration. Reads JSON from stdin.
             Gracefully no-ops when not running inside cmux.
@@ -7184,6 +7187,7 @@ struct CMUXCLI {
               session-start   Register a Codex session
               prompt-submit   Set Running status on user prompt
               stop            Send completion notification, set Idle
+              session-end     Wrapper-managed cleanup after Codex exits
 
             Flags:
               --workspace <id|ref>   Target workspace (default: $CMUX_WORKSPACE_ID)
@@ -11446,6 +11450,64 @@ struct CMUXCLI {
                 throw error
             }
 
+        case "stop-failure":
+            telemetry.breadcrumb("claude-hook.stop-failure")
+            do {
+                let mappedSession = parsedInput.sessionId.flatMap { try? sessionStore.lookup(sessionId: $0) }
+                let workspaceId = try resolvePreferredWorkspaceIdForClaudeHook(
+                    preferred: mappedSession?.workspaceId,
+                    fallback: workspaceArg,
+                    client: client
+                )
+                let surfaceId = try resolvePreferredSurfaceIdForClaudeHook(
+                    preferred: mappedSession?.surfaceId,
+                    fallback: surfaceArg,
+                    workspaceId: workspaceId,
+                    client: client
+                )
+
+                let summary = summarizeClaudeHookStopFailure(
+                    parsedInput: parsedInput,
+                    sessionRecord: mappedSession
+                )
+                if let sessionId = parsedInput.sessionId {
+                    try? sessionStore.upsert(
+                        sessionId: sessionId,
+                        workspaceId: workspaceId,
+                        surfaceId: surfaceId,
+                        cwd: parsedInput.cwd,
+                        lastSubtitle: summary.subtitle,
+                        lastBody: summary.body
+                    )
+                }
+
+                _ = try? sendV1Command("clear_notifications --tab=\(workspaceId)", client: client)
+                sendAgentNotification(
+                    client: client,
+                    workspaceId: workspaceId,
+                    surfaceId: surfaceId,
+                    title: "Claude Code",
+                    subtitle: summary.subtitle,
+                    body: summary.body
+                )
+                try? setClaudeStatus(
+                    client: client,
+                    workspaceId: workspaceId,
+                    value: "Interrupted",
+                    icon: "xmark.octagon.fill",
+                    color: "#FF3B30",
+                    pid: mappedSession?.pid
+                )
+                print("OK")
+            } catch {
+                if shouldIgnoreClaudeHookTeardownError(error) {
+                    telemetry.breadcrumb("claude-hook.stop-failure.ignored", data: ["error": String(describing: error)])
+                    print("OK")
+                    return
+                }
+                throw error
+            }
+
         case "prompt-submit":
             telemetry.breadcrumb("claude-hook.prompt-submit")
             let mappedSession = parsedInput.sessionId.flatMap { try? sessionStore.lookup(sessionId: $0) }
@@ -11515,10 +11577,6 @@ struct CMUXCLI {
 
         case "session-end":
             telemetry.breadcrumb("claude-hook.session-end")
-            // Final cleanup when Claude process exits.
-            // Only clear when we are the primary cleanup path (Stop didn't fire first).
-            // If Stop already consumed the session, consumedSession is nil and we skip
-            // to avoid wiping the completion notification that Stop just delivered.
             let mappedSession = parsedInput.sessionId.flatMap { try? sessionStore.lookup(sessionId: $0) }
             let fallbackWorkspaceId = try? resolvePreferredWorkspaceIdForClaudeHook(
                 preferred: mappedSession?.workspaceId,
@@ -11540,10 +11598,49 @@ struct CMUXCLI {
                 surfaceId: fallbackSurfaceId
             )
             if let consumedSession {
-                let workspaceId = consumedSession.workspaceId
-                _ = try? clearClaudeStatus(client: client, workspaceId: workspaceId)
-                _ = try? sendV1Command("clear_agent_pid claude_code --tab=\(workspaceId)", client: client)
-                _ = try? sendV1Command("clear_notifications --tab=\(workspaceId)", client: client)
+                let currentWorkspaceId = fallbackWorkspaceId ?? consumedSession.workspaceId
+                let currentStatus = currentSidebarStatusValue(
+                    key: "claude_code",
+                    workspaceId: currentWorkspaceId,
+                    client: client
+                )
+                let currentState = agentStatusState(for: currentStatus)
+                let reason = firstString(in: parsedInput.object ?? [:], keys: ["reason"])
+
+                switch currentState {
+                case .interrupted:
+                    _ = try? sendV1Command("clear_agent_pid claude_code --tab=\(currentWorkspaceId)", client: client)
+                case .active where shouldTreatClaudeSessionEndAsInterrupted(reason: reason):
+                    let summary = summarizeInterruptedSession(
+                        agentName: "Claude",
+                        cwd: parsedInput.cwd ?? consumedSession.cwd,
+                        detail: nil,
+                        lastBody: consumedSession.lastBody
+                    )
+                    _ = try? sendV1Command("clear_agent_pid claude_code --tab=\(currentWorkspaceId)", client: client)
+                    _ = try? sendV1Command("clear_notifications --tab=\(currentWorkspaceId)", client: client)
+                    if let surfaceId = fallbackSurfaceId ?? (consumedSession.surfaceId.isEmpty ? nil : consumedSession.surfaceId) {
+                        sendAgentNotification(
+                            client: client,
+                            workspaceId: currentWorkspaceId,
+                            surfaceId: surfaceId,
+                            title: "Claude Code",
+                            subtitle: summary.subtitle,
+                            body: summary.body
+                        )
+                    }
+                    try? setClaudeStatus(
+                        client: client,
+                        workspaceId: currentWorkspaceId,
+                        value: "Interrupted",
+                        icon: "xmark.octagon.fill",
+                        color: "#FF3B30"
+                    )
+                default:
+                    _ = try? clearClaudeStatus(client: client, workspaceId: currentWorkspaceId)
+                    _ = try? sendV1Command("clear_agent_pid claude_code --tab=\(currentWorkspaceId)", client: client)
+                    _ = try? sendV1Command("clear_notifications --tab=\(currentWorkspaceId)", client: client)
+                }
             }
             print("OK")
 
@@ -11606,7 +11703,7 @@ struct CMUXCLI {
             telemetry.breadcrumb("claude-hook.help")
             print(
                 """
-                cmux claude-hook <session-start|stop|session-end|notification|prompt-submit|pre-tool-use> [--workspace <id|index>] [--surface <id|index>]
+                cmux claude-hook <session-start|stop|stop-failure|session-end|notification|prompt-submit|pre-tool-use> [--workspace <id|index>] [--surface <id|index>]
                 """
             )
 
@@ -11632,6 +11729,155 @@ struct CMUXCLI {
 
     private func clearClaudeStatus(client: SocketClient, workspaceId: String) throws {
         _ = try client.send(command: "clear_status claude_code --tab=\(workspaceId)")
+    }
+
+    private enum AgentSidebarStatusState {
+        case missing
+        case idle
+        case interrupted
+        case active
+    }
+
+    private func currentSidebarStatusValue(
+        key: String,
+        workspaceId: String,
+        client: SocketClient
+    ) -> String? {
+        guard let response = try? sendV1Command("list_status --tab=\(workspaceId)", client: client),
+              !response.isEmpty,
+              response != "No status entries" else {
+            return nil
+        }
+
+        for rawLine in response.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let value = extractSidebarStatusValue(line: String(rawLine), key: key) else { continue }
+            return value
+        }
+        return nil
+    }
+
+    private func extractSidebarStatusValue(line: String, key: String) -> String? {
+        let prefix = "\(key)="
+        guard line.hasPrefix(prefix) else { return nil }
+
+        var value = String(line.dropFirst(prefix.count))
+        for marker in [" icon=", " color=", " url=", " priority=", " format="] {
+            if let range = value.range(of: marker) {
+                value = String(value[..<range.lowerBound])
+                break
+            }
+        }
+
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func agentStatusState(for value: String?) -> AgentSidebarStatusState {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !normalized.isEmpty else {
+            return .missing
+        }
+        if normalized == "idle" {
+            return .idle
+        }
+        if normalized == "interrupted" {
+            return .interrupted
+        }
+        return .active
+    }
+
+    private func shouldTreatClaudeSessionEndAsInterrupted(reason: String?) -> Bool {
+        guard let normalized = reason?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !normalized.isEmpty else {
+            return true
+        }
+        switch normalized {
+        case "clear", "resume", "logout", "prompt_input_exit", "bypass_permissions_disabled":
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func projectName(from cwd: String?) -> String? {
+        guard let cwd, !cwd.isEmpty else { return nil }
+        let path = NSString(string: cwd).expandingTildeInPath
+        let tail = URL(fileURLWithPath: path).lastPathComponent
+        return tail.isEmpty ? path : tail
+    }
+
+    private func sendAgentNotification(
+        client: SocketClient,
+        workspaceId: String,
+        surfaceId: String,
+        title: String,
+        subtitle: String,
+        body: String
+    ) {
+        let payload = "\(sanitizeNotificationField(title))|\(sanitizeNotificationField(subtitle))|\(sanitizeNotificationField(body))"
+        _ = try? sendV1Command("notify_target \(workspaceId) \(surfaceId) \(payload)", client: client)
+    }
+
+    private func summarizeInterruptedSession(
+        agentName: String,
+        cwd: String?,
+        detail: String?,
+        lastBody: String?
+    ) -> (subtitle: String, body: String) {
+        var body = "\(agentName) session interrupted"
+        if let projectName = projectName(from: cwd), !projectName.isEmpty {
+            body += " in \(projectName)"
+        }
+
+        if let detail = detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
+            body += ". \(detail)"
+        } else if let lastBody = lastBody?.trimmingCharacters(in: .whitespacesAndNewlines), !lastBody.isEmpty {
+            body += ". Last: \(lastBody)"
+        }
+
+        return ("Interrupted", truncate(normalizedSingleLine(body), maxLength: 200))
+    }
+
+    private func summarizeClaudeHookStopFailure(
+        parsedInput: ClaudeHookParsedInput,
+        sessionRecord: ClaudeHookSessionRecord?
+    ) -> (subtitle: String, body: String) {
+        let object = parsedInput.object ?? [:]
+        let errorType = firstString(in: object, keys: ["error"])
+        let errorDetails = firstString(in: object, keys: ["error_details", "errorDetails"])
+        let lastMessage = firstString(in: object, keys: ["last_assistant_message", "lastAssistantMessage"])
+
+        let detail: String? = {
+            if let lastMessage, !lastMessage.isEmpty {
+                return lastMessage
+            }
+            if let errorDetails, !errorDetails.isEmpty {
+                return errorDetails
+            }
+            switch errorType?.lowercased() {
+            case "rate_limit":
+                return "API rate limit reached"
+            case "authentication_failed":
+                return "Authentication failed"
+            case "billing_error":
+                return "Billing error"
+            case "invalid_request":
+                return "Invalid request"
+            case "server_error":
+                return "Server error"
+            case "max_output_tokens":
+                return "Max output tokens reached"
+            default:
+                return nil
+            }
+        }()
+
+        return summarizeInterruptedSession(
+            agentName: "Claude",
+            cwd: parsedInput.cwd ?? sessionRecord?.cwd,
+            detail: detail,
+            lastBody: sessionRecord?.lastBody
+        )
     }
 
     private func resolvePreferredWorkspaceIdForClaudeHook(
@@ -11944,6 +12190,8 @@ struct CMUXCLI {
             "tool_name",
             "last_assistant_message",
             "lastAssistantMessage",
+            "error_details",
+            "errorDetails",
             "event",
             "event_name",
             "hook_event_name",
@@ -11958,6 +12206,11 @@ struct CMUXCLI {
             "prompt",
             "error",
             "description",
+            "exit_status",
+            "exitStatus",
+            "signal",
+            "signal_name",
+            "signalName",
         ] {
             if let value = compactClaudeHookStringValue(
                 object[key],
@@ -12003,7 +12256,7 @@ struct CMUXCLI {
         for key in ["notification", "data"] {
             guard let nested = object[key] as? [String: Any] else { continue }
             var compactNested: [String: Any] = [:]
-            for nestedKey in ["type", "kind", "reason", "message", "body", "text", "prompt", "error", "description"] {
+            for nestedKey in ["type", "kind", "reason", "message", "body", "text", "prompt", "error", "error_details", "description"] {
                 if let value = compactClaudeHookStringValue(
                     nested[nestedKey],
                     maxLength: claudeHookCompactFieldLimit(for: nestedKey)
@@ -12021,10 +12274,12 @@ struct CMUXCLI {
 
     private func claudeHookCompactFieldLimit(for key: String) -> Int {
         switch key {
-        case "tool_name", "event", "event_name", "hook_event_name", "type", "kind", "notification_type", "matcher", "reason":
+        case "tool_name", "event", "event_name", "hook_event_name", "type", "kind", "notification_type", "matcher", "reason", "signal", "signal_name", "signalName":
             return 80
-        case "last_assistant_message", "lastAssistantMessage", "message", "body", "text", "prompt", "error", "description":
+        case "last_assistant_message", "lastAssistantMessage", "message", "body", "text", "prompt", "error", "error_details", "errorDetails", "description":
             return 240
+        case "exit_status", "exitStatus":
+            return 16
         default:
             return 160
         }
@@ -12856,8 +13111,89 @@ struct CMUXCLI {
                 throw error
             }
 
+        case "session-end":
+            telemetry.breadcrumb("codex-hook.session-end")
+            do {
+                let mappedSession = parsedInput.sessionId.flatMap { try? sessionStore.lookup(sessionId: $0) }
+                let fallbackWorkspaceId = try resolvePreferredWorkspaceIdForClaudeHook(
+                    preferred: mappedSession?.workspaceId,
+                    fallback: workspaceArg,
+                    client: client
+                )
+                let fallbackSurfaceId = try resolvePreferredSurfaceIdForClaudeHook(
+                    preferred: mappedSession?.surfaceId,
+                    fallback: surfaceArg,
+                    workspaceId: fallbackWorkspaceId,
+                    client: client
+                )
+                let consumedSession = try sessionStore.consume(
+                    sessionId: parsedInput.sessionId,
+                    workspaceId: fallbackWorkspaceId,
+                    surfaceId: fallbackSurfaceId
+                )
+                if let consumedSession {
+                    let currentWorkspaceId = fallbackWorkspaceId ?? consumedSession.workspaceId
+                    let currentStatus = currentSidebarStatusValue(
+                        key: "codex",
+                        workspaceId: currentWorkspaceId,
+                        client: client
+                    )
+                    let currentState = agentStatusState(for: currentStatus)
+                    let exitStatus = firstString(in: parsedInput.object ?? [:], keys: ["exit_status", "exitStatus"])
+                    let signal = firstString(in: parsedInput.object ?? [:], keys: ["signal", "signal_name", "signalName"])
+                    let isInterrupted = exitStatus.map { $0 != "0" } ?? false
+
+                    if isInterrupted,
+                       currentState != .interrupted,
+                       (currentState == .active || currentState == .missing) {
+                        let detail: String? = {
+                            if let signal, !signal.isEmpty {
+                                return "Exited on \(signal)"
+                            }
+                            if let exitStatus, !exitStatus.isEmpty {
+                                return "Exited with status \(exitStatus)"
+                            }
+                            return nil
+                        }()
+                        let summary = summarizeInterruptedSession(
+                            agentName: "Codex",
+                            cwd: parsedInput.cwd ?? consumedSession.cwd,
+                            detail: detail,
+                            lastBody: consumedSession.lastBody
+                        )
+                        _ = try? sendV1Command("clear_notifications --tab=\(currentWorkspaceId)", client: client)
+                        sendAgentNotification(
+                            client: client,
+                            workspaceId: currentWorkspaceId,
+                            surfaceId: fallbackSurfaceId,
+                            title: "Codex",
+                            subtitle: summary.subtitle,
+                            body: summary.body
+                        )
+                        try? setCodexStatus(
+                            client: client,
+                            workspaceId: currentWorkspaceId,
+                            value: "Interrupted",
+                            icon: "xmark.octagon.fill",
+                            color: "#FF3B30"
+                        )
+                    } else if currentState != .interrupted {
+                        _ = try? clearCodexStatus(client: client, workspaceId: currentWorkspaceId)
+                        _ = try? sendV1Command("clear_notifications --tab=\(currentWorkspaceId)", client: client)
+                    }
+                }
+                print("{}")
+            } catch {
+                if shouldIgnoreClaudeHookTeardownError(error) {
+                    telemetry.breadcrumb("codex-hook.session-end.ignored", data: ["error": String(describing: error)])
+                    print("{}")
+                    return
+                }
+                throw error
+            }
+
         case "help", "--help", "-h":
-            print("cmux codex-hook <session-start|prompt-submit|stop> [--workspace <id>] [--surface <id>]")
+            print("cmux codex-hook <session-start|prompt-submit|stop|session-end> [--workspace <id>] [--surface <id>]")
 
         default:
             throw CLIError(message: "Unknown codex-hook subcommand: \(subcommand)")
@@ -12873,6 +13209,10 @@ struct CMUXCLI {
     ) throws {
         let cmd = "set_status codex \(value) --icon=\(icon) --color=\(color) --tab=\(workspaceId)"
         _ = try client.send(command: cmd)
+    }
+
+    private func clearCodexStatus(client: SocketClient, workspaceId: String) throws {
+        _ = try client.send(command: "clear_status codex --tab=\(workspaceId)")
     }
 
     private func versionSummary() -> String {
@@ -13306,7 +13646,8 @@ struct CMUXCLI {
           notify --title <text> [--subtitle <text>] [--body <text>] [--workspace <id|ref>] [--surface <id|ref>]
           list-notifications
           clear-notifications
-          claude-hook <session-start|stop|notification> [--workspace <id|ref>] [--surface <id|ref>]
+          claude-hook <session-start|stop|stop-failure|session-end|notification> [--workspace <id|ref>] [--surface <id|ref>]
+          codex-hook <session-start|prompt-submit|stop|session-end> [--workspace <id|ref>] [--surface <id|ref>]
           set-app-focus <active|inactive|clear>
           simulate-app-active
 

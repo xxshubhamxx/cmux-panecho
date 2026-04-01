@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# cmux codex wrapper - reports process exit back into cmux
+#
+# When running inside a cmux terminal (CMUX_SURFACE_ID is set), this wrapper
+# runs the real `codex` binary and reports the final process exit back into
+# cmux so sidebar status can distinguish clean exits from interruptions.
+# Outside cmux, it passes through unchanged.
+
+find_real_codex() {
+    local self_dir
+    self_dir="$(cd "$(dirname "$0")" && pwd)"
+    local IFS=:
+    for d in $PATH; do
+        [[ "$d" == "$self_dir" ]] && continue
+        [[ -x "$d/codex" ]] && printf '%s' "$d/codex" && return 0
+    done
+    return 1
+}
+
+cmux_socket_available() {
+    local socket="${CMUX_SOCKET_PATH:-}"
+    [[ -n "$socket" && -S "$socket" ]] || return 1
+
+    local self_dir cmux_bin
+    self_dir="$(cd "$(dirname "$0")" && pwd)"
+    cmux_bin="$self_dir/cmux"
+    [[ -x "$cmux_bin" ]] || cmux_bin="$(command -v cmux || true)"
+    [[ -n "$cmux_bin" ]] || return 1
+
+    CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC=0.75 \
+        "$cmux_bin" --socket "$socket" ping >/dev/null 2>&1
+}
+
+resolve_hook_cmux_bin() {
+    local self_dir bundled_cli
+    bundled_cli="${CMUX_BUNDLED_CLI_PATH:-}"
+    if [[ -n "$bundled_cli" && -x "$bundled_cli" ]]; then
+        printf '%s' "$bundled_cli"
+        return 0
+    fi
+
+    self_dir="$(cd "$(dirname "$0")" && pwd)"
+    bundled_cli="$self_dir/cmux"
+    if [[ -x "$bundled_cli" ]]; then
+        printf '%s' "$bundled_cli"
+        return 0
+    fi
+
+    bundled_cli="$(command -v cmux || true)"
+    if [[ -n "$bundled_cli" ]]; then
+        printf '%s' "$bundled_cli"
+        return 0
+    fi
+
+    printf '%s' "cmux"
+}
+
+json_escape() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '%s' "$value"
+}
+
+signal_name_for_status() {
+    local status="$1"
+    if [[ "$status" =~ ^[0-9]+$ ]] && (( status > 128 )); then
+        case $((status - 128)) in
+            1) printf '%s' "HUP" ;;
+            2) printf '%s' "INT" ;;
+            3) printf '%s' "QUIT" ;;
+            9) printf '%s' "KILL" ;;
+            15) printf '%s' "TERM" ;;
+            *) printf '%s' "SIG$((status - 128))" ;;
+        esac
+    fi
+}
+
+IN_CMUX=0
+if [[ -n "$CMUX_SURFACE_ID" ]]; then
+    IN_CMUX=1
+fi
+
+REAL_CODEX="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
+
+if [[ "$IN_CMUX" == "0" ]] || ! cmux_socket_available; then
+    exec "$REAL_CODEX" "$@"
+fi
+
+"$REAL_CODEX" "$@"
+codex_status=$?
+
+cmux_bin="$(resolve_hook_cmux_bin)"
+if [[ -n "$cmux_bin" && -n "${CMUX_SOCKET_PATH:-}" ]]; then
+    signal_name="$(signal_name_for_status "$codex_status")"
+    payload="{\"cwd\":\"$(json_escape "$PWD")\",\"exit_status\":\"$codex_status\""
+    if [[ -n "$signal_name" ]]; then
+        payload+=",\"signal\":\"$(json_escape "$signal_name")\""
+    fi
+    payload+="}"
+    printf '%s' "$payload" | \
+        "$cmux_bin" --socket "$CMUX_SOCKET_PATH" codex-hook session-end \
+            --workspace "${CMUX_WORKSPACE_ID:-}" \
+            --surface "${CMUX_SURFACE_ID:-}" \
+            >/dev/null 2>&1 || true
+fi
+
+exit "$codex_status"
