@@ -2930,7 +2930,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // The automation socket is a core testing primitive, so ensure it's started here when
         // we detect XCTest, even if the main view lifecycle is flaky.
         let env = ProcessInfo.processInfo.environment
-        if isRunningUnderXCTest(env) || env.keys.contains(where: { $0.hasPrefix("CMUX_UI_TEST_") }) {
+        if isRunningUnderXCTest(env) {
             let raw = UserDefaults.standard.string(forKey: SocketControlSettings.appStorageKey)
                 ?? SocketControlSettings.defaultMode.rawValue
             let userMode = SocketControlSettings.migrateMode(raw)
