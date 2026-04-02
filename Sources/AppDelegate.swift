@@ -9994,10 +9994,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Numeric shortcuts for specific workspaces (9 = last workspace)
         // Always consume the event when the digit matches to prevent Ghostty's
         // goto_tab fallback from creating a new window when the index is out of bounds.
-        if let digit = numberedShortcutDigit(
+        switch numberedShortcutMatch(
             event: event,
-            shortcut: KeyboardShortcutSettings.shortcut(for: .selectWorkspaceByNumber)
+            shortcut: KeyboardShortcutSettings.shortcut(for: .selectWorkspaceByNumber),
+            disabledFallback: KeyboardShortcutSettings.Action.selectWorkspaceByNumber.defaultShortcut
         ) {
+        case .digit(let digit):
             if let manager = tabManager,
                let targetIndex = WorkspaceShortcutMapper.workspaceIndex(forDigit: digit, workspaceCount: manager.tabs.count) {
 #if DEBUG
@@ -10008,19 +10010,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 manager.selectTab(at: targetIndex)
             }
             return true
+        case .disabledMatch:
+            return true
+        case .noMatch:
+            break
         }
 
         // Numeric shortcuts for surfaces within the focused pane (9 = last)
-        if let digit = numberedShortcutDigit(
+        switch numberedShortcutMatch(
             event: event,
-            shortcut: KeyboardShortcutSettings.shortcut(for: .selectSurfaceByNumber)
+            shortcut: KeyboardShortcutSettings.shortcut(for: .selectSurfaceByNumber),
+            disabledFallback: KeyboardShortcutSettings.Action.selectSurfaceByNumber.defaultShortcut
         ) {
+        case .digit(let digit):
             if digit == 9 {
                 tabManager?.selectLastSurface()
             } else {
                 tabManager?.selectSurface(at: digit - 1)
             }
             return true
+        case .disabledMatch:
+            return true
+        case .noMatch:
+            break
         }
 
         // Pane focus navigation (defaults to Cmd+Option+Arrow, but can be customized to letter/number keys).
@@ -11044,6 +11056,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return event.keyCode == expectedKeyCode
         }
         return false
+    }
+
+    private enum NumberedShortcutMatch {
+        case noMatch
+        case disabledMatch
+        case digit(Int)
+    }
+
+    private func numberedShortcutMatch(
+        event: NSEvent,
+        shortcut: StoredShortcut,
+        disabledFallback: StoredShortcut? = nil
+    ) -> NumberedShortcutMatch {
+        if !shortcut.isDisabled,
+           let digit = numberedShortcutDigit(event: event, shortcut: shortcut) {
+            return .digit(digit)
+        }
+
+        if shortcut.isDisabled,
+           let disabledFallback,
+           numberedShortcutDigit(event: event, shortcut: disabledFallback) != nil {
+            return .disabledMatch
+        }
+
+        return .noMatch
     }
 
     private func numberedShortcutDigit(event: NSEvent, shortcut: StoredShortcut) -> Int? {

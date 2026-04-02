@@ -104,7 +104,10 @@ The fork branch HEAD is now the section 7 cmux theme picker helper commit.
 
 ### 8) macos-background-from-layer config flag
 
-- Branch: `feat-layer-bg`
+- Commits:
+  - `41e796064` (Add macos-background-from-layer config flag)
+  - `f9030b5c5` (Skip fullscreen bg draw call in layer-background mode)
+  - `8e1d2ff88` (Preserve bg images in layer background mode)
 - Files:
   - `src/config/Config.zig`
   - `src/renderer/generic.zig`
@@ -112,6 +115,9 @@ The fork branch HEAD is now the section 7 cmux theme picker helper commit.
   - Adds a `macos-background-from-layer` bool config (default false).
   - When true, sets `bg_color[3] = 0` in the per-frame uniform update so the Metal renderer skips the full-screen background fill.
   - Allows the host app to provide the terminal background via `CALayer.backgroundColor` for instant coverage during view resizes, avoiding alpha double-stacking.
+  - Keeps Ghostty-owned background images rendering in that mode by skipping only the plain color fill.
+
+The fork branch HEAD is now the section 8 background-image follow-up commit.
 
 ## Upstreamed fork changes
 
@@ -143,7 +149,8 @@ These files change frequently upstream; be careful when rebasing the fork:
 
 - `src/renderer/generic.zig`
   - The `macos-background-from-layer` check sits next to the glass-style check in `updateFrame`.
-    If upstream refactors the bg_color uniform update or the glass conditional, re-check that both
-    paths still zero out `bg_color[3]` correctly.
+    If upstream refactors the bg_color uniform update, the glass conditional, or the background draw
+    pass ordering, re-check that both paths still zero out `bg_color[3]` correctly without skipping
+    Ghostty-managed background images.
 
 If you resolve a conflict, update this doc with what changed.
