@@ -9966,6 +9966,11 @@ struct CMUXCLI {
             .appendingPathComponent("omo-config", isDirectory: true)
     }
 
+    private func omoBridgeConfigVersionURL() -> URL {
+        omoShadowConfigDir()
+            .appendingPathComponent(".cmux-omo-layout-version", isDirectory: false)
+    }
+
     private func omoBridgePluginURL() -> URL {
         omoShadowConfigDir()
             .appendingPathComponent("plugins", isDirectory: true)
@@ -10191,9 +10196,28 @@ struct CMUXCLI {
 
     private func omoEnsureBridgeConfig() throws -> URL {
         let shadowDir = omoShadowConfigDir()
+        let fileManager = FileManager.default
+        let versionURL = omoBridgeConfigVersionURL()
+        let expectedVersion = "2"
+
+        let currentVersion: String? = {
+            guard let data = try? Data(contentsOf: versionURL),
+                  let raw = String(data: data, encoding: .utf8) else {
+                return nil
+            }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }()
+
+        if currentVersion != expectedVersion,
+           fileManager.fileExists(atPath: shadowDir.path) {
+            try? fileManager.removeItem(at: shadowDir)
+        }
+
         let pluginsDir = shadowDir.appendingPathComponent("plugins", isDirectory: true)
-        try FileManager.default.createDirectory(at: pluginsDir, withIntermediateDirectories: true, attributes: nil)
+        try fileManager.createDirectory(at: pluginsDir, withIntermediateDirectories: true, attributes: nil)
         try writeShimIfChanged(omoBridgePluginSource(), to: omoBridgePluginURL())
+        try (expectedVersion + "\n").write(to: versionURL, atomically: true, encoding: .utf8)
         return shadowDir
     }
 
