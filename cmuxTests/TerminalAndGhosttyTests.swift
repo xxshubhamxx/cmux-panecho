@@ -3752,8 +3752,41 @@ final class TerminalOpenURLTargetResolutionTests: XCTestCase {
         }
     }
 
+    func testBlocksAbsolutePathWhenLocalFileTargetsDisallowed() throws {
+        try withTemporaryDirectory { root in
+            let imageURL = root.appendingPathComponent("preview.png")
+            try Data().write(to: imageURL)
+
+            XCTAssertNil(
+                resolveTerminalOpenURLTarget(
+                    imageURL.path,
+                    allowLocalFileTargets: false
+                )
+            )
+        }
+    }
+
+    func testBlocksLocalFileURLWhenLocalFileTargetsDisallowed() throws {
+        try withTemporaryDirectory { root in
+            let imageURL = root.appendingPathComponent("preview.png")
+            try Data().write(to: imageURL)
+
+            XCTAssertNil(
+                resolveTerminalOpenURLTarget(
+                    imageURL.absoluteString,
+                    allowLocalFileTargets: false
+                )
+            )
+        }
+    }
+
     func testLeavesNonLocalFileURLAsExternal() throws {
-        let target = try XCTUnwrap(resolveTerminalOpenURLTarget("file://example.com/etc/hosts"))
+        let target = try XCTUnwrap(
+            resolveTerminalOpenURLTarget(
+                "file://example.com/etc/hosts",
+                allowLocalFileTargets: false
+            )
+        )
         switch target {
         case let .external(url):
             XCTAssertTrue(url.isFileURL)

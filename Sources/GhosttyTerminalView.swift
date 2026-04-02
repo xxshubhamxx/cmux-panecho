@@ -783,7 +783,11 @@ final class GhosttyDefaultBackgroundNotificationDispatcher {
     }
 }
 
-func resolveTerminalOpenURLTarget(_ rawValue: String, currentDirectory: String? = nil) -> TerminalOpenURLTarget? {
+func resolveTerminalOpenURLTarget(
+    _ rawValue: String,
+    currentDirectory: String? = nil,
+    allowLocalFileTargets: Bool = true
+) -> TerminalOpenURLTarget? {
     let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
     #if DEBUG
     dlog("link.resolve input=\(trimmed)")
@@ -795,7 +799,8 @@ func resolveTerminalOpenURLTarget(_ rawValue: String, currentDirectory: String? 
         return nil
     }
 
-    if let localFileURL = resolveTerminalLocalFileURL(trimmed, currentDirectory: currentDirectory) {
+    if allowLocalFileTargets,
+       let localFileURL = resolveTerminalLocalFileURL(trimmed, currentDirectory: currentDirectory) {
         #if DEBUG
         dlog("link.resolve result=revealInFinder(localFile) url=\(localFileURL)")
         #endif
@@ -803,6 +808,12 @@ func resolveTerminalOpenURLTarget(_ rawValue: String, currentDirectory: String? 
     }
 
     if NSString(string: trimmed).isAbsolutePath {
+        guard allowLocalFileTargets else {
+            #if DEBUG
+            dlog("link.resolve result=nil (absolutePath-disallowed)")
+            #endif
+            return nil
+        }
         #if DEBUG
         dlog("link.resolve result=external(absolutePath) url=\(trimmed)")
         #endif
@@ -811,6 +822,14 @@ func resolveTerminalOpenURLTarget(_ rawValue: String, currentDirectory: String? 
 
     if let parsed = URL(string: trimmed),
        let scheme = parsed.scheme?.lowercased() {
+        if scheme == "file",
+           !allowLocalFileTargets,
+           terminalFileURLUsesLocalHost(parsed) {
+            #if DEBUG
+            dlog("link.resolve result=nil (localFileURL-disallowed) url=\(parsed)")
+            #endif
+            return nil
+        }
         if scheme == "http" || scheme == "https" {
             guard BrowserInsecureHTTPSettings.normalizeHost(parsed.host ?? "") != nil else {
                 #if DEBUG
@@ -3011,7 +3030,8 @@ class GhosttyApp {
             #endif
             guard let target = resolveTerminalOpenURLTarget(
                 urlString,
-                currentDirectory: surfaceView.currentDirectoryForWordPathResolution()
+                currentDirectory: surfaceView.currentDirectoryForWordPathResolution(),
+                allowLocalFileTargets: surfaceView.allowsLocalFileTargetsForOpenURLAction()
             ) else {
                 #if DEBUG
                 dlog("link.openURL resolve failed, returning false")
@@ -6825,6 +6845,12 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             let dir = workspace.currentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
             return dir.isEmpty ? nil : dir
         }()
+    }
+
+    fileprivate func allowsLocalFileTargetsForOpenURLAction() -> Bool {
+        guard let termSurface = terminalSurface,
+              let workspace = termSurface.owningWorkspace() else { return true }
+        return !workspace.isRemoteTerminalSurface(termSurface.id)
     }
 
     private func resolvedLinePathUnderCursor(at point: CGPoint, currentDirectory: String?) -> URL? {
