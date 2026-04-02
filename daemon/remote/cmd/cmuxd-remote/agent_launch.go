@@ -375,7 +375,7 @@ func configureAgentEnvironment(cfg agentConfig) {
 	// Terminal settings
 	fakeTerm := os.Getenv(cfg.termEnvVar)
 	if fakeTerm == "" {
-		fakeTerm = "xterm-256color"
+		fakeTerm = "xterm-ghostty"
 	}
 	os.Setenv("TERM", fakeTerm)
 	os.Setenv("COLORTERM", "truecolor")
