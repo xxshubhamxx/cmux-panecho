@@ -7,6 +7,8 @@ struct TerminalSidebarRootView: View {
     @State private var searchText = ""
     @State private var editorDraft: TerminalHostEditorDraft?
     @State private var pendingStartHostID: TerminalHost.ID?
+    @State private var renamingHost: TerminalHost?
+    @State private var renameText = ""
     private let inboxCacheRepository: InboxCacheRepository?
 
     init(
@@ -132,6 +134,10 @@ struct TerminalSidebarRootView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu {
+                                    Button(TerminalHomeStrings.renameServerLabel) {
+                                        renameText = host.name
+                                        renamingHost = host
+                                    }
                                     if host.source == .custom {
                                         Button(TerminalHomeStrings.editServerLabel) {
                                             editorDraft = TerminalHostEditorDraft(
@@ -164,13 +170,9 @@ struct TerminalSidebarRootView: View {
                     .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
-                } header: {
-                    Text(TerminalHomeStrings.serversHeader)
-                } footer: {
-                    Text(TerminalHomeStrings.serversFooter)
                 }
 
-                Section(TerminalHomeStrings.workspacesHeader) {
+                Section {
                     if filteredWorkspaces.isEmpty {
                         ContentUnavailableView(
                             TerminalHomeStrings.emptyTitle,
@@ -277,6 +279,26 @@ struct TerminalSidebarRootView: View {
                 editorDraft = nil
             }
         }
+        .alert(
+            TerminalHomeStrings.renameServerLabel,
+            isPresented: Binding(
+                get: { renamingHost != nil },
+                set: { if !$0 { renamingHost = nil } }
+            )
+        ) {
+            TextField(TerminalHomeStrings.renameServerPlaceholder, text: $renameText)
+            Button(TerminalHomeStrings.editorSave) {
+                if let host = renamingHost {
+                    var updatedHost = host
+                    updatedHost.name = renameText
+                    store.saveHost(updatedHost, credentials: store.credentials(for: host))
+                }
+                renamingHost = nil
+            }
+            Button(TerminalHomeStrings.editorCancel, role: .cancel) {
+                renamingHost = nil
+            }
+        }
         .onAppear {
             handlePendingRouteIfPossible()
         }
@@ -334,7 +356,7 @@ private struct TerminalHostEditorDraft: Identifiable {
 }
 
 private enum TerminalHomeStrings {
-    static let navigationTitle = String(localized: "terminal.home.navigation_title", defaultValue: "Terminals")
+    static let navigationTitle = String(localized: "terminal.home.navigation_title", defaultValue: "Workspaces")
     static let searchPrompt = String(localized: "terminal.home.search_prompt", defaultValue: "Search workspaces")
     static let serversHeader = String(localized: "terminal.home.servers_header", defaultValue: "Servers")
     static let serversFooter = String(localized: "terminal.home.servers_footer", defaultValue: "Tap a server to start a workspace.")
@@ -351,6 +373,8 @@ private enum TerminalHomeStrings {
     static let addServerLabel = String(localized: "terminal.home.add_server", defaultValue: "Add Server")
     static let editServerLabel = String(localized: "terminal.home.edit_server", defaultValue: "Edit Server")
     static let deleteServerLabel = String(localized: "terminal.home.delete_server", defaultValue: "Delete Server")
+    static let renameServerLabel = String(localized: "terminal.home.rename_server", defaultValue: "Rename")
+    static let renameServerPlaceholder = String(localized: "terminal.home.rename_server.placeholder", defaultValue: "Server name")
     static let notReadyLabel = String(localized: "terminal.home.server_not_ready", defaultValue: "Setup")
     static let connectedLabel = String(localized: "terminal.home.status.connected", defaultValue: "Connected")
     static let connectingLabel = String(localized: "terminal.home.status.connecting", defaultValue: "Connecting")
@@ -779,20 +803,44 @@ struct TerminalWorkspaceDestinationView: View {
     }
 }
 
+private struct ArrowNubRepresentable: UIViewRepresentable {
+    let onArrowKey: (Data) -> Void
+
+    func makeUIView(context: Context) -> TerminalArrowNubView {
+        let nub = TerminalArrowNubView()
+        nub.onArrowKey = onArrowKey
+        return nub
+    }
+
+    func updateUIView(_ uiView: TerminalArrowNubView, context: Context) {
+        uiView.onArrowKey = onArrowKey
+    }
+}
+
 struct TerminalWorkspaceScreen: View {
     let workspace: TerminalWorkspace
     let host: TerminalHost
     @ObservedObject var controller: TerminalSessionController
 
+    private static let monokaiBackground = Color(red: 0x27/255.0, green: 0x28/255.0, blue: 0x22/255.0)
+
     var body: some View {
         ZStack {
-            Color.black
+            Self.monokaiBackground
                 .ignoresSafeArea()
 
             if let surfaceView = controller.surfaceView {
                 GhosttySurfaceRepresentable(surfaceView: surfaceView)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(edges: [.horizontal, .bottom])
+                    .overlay(alignment: .bottomTrailing) {
+                        ArrowNubRepresentable { data in
+                            surfaceView.handleOutboundBytes(data)
+                        }
+                        .frame(width: 44, height: 44)
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 16)
+                    }
             } else {
                 ProgressView(TerminalHomeStrings.terminalOpening)
                     .tint(.white)
@@ -810,6 +858,9 @@ struct TerminalWorkspaceScreen: View {
         }
         .navigationTitle(workspace.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(Self.monokaiBackground, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(TerminalHomeStrings.reconnectLabel) {

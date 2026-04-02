@@ -82,8 +82,8 @@
     "terminal.home.navigation_title" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Terminals" } },
-        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ターミナル" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Workspaces" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ワークスペース" } }
       }
     },
     "terminal.home.search_prompt" : {
