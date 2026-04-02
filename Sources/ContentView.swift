@@ -994,6 +994,30 @@ private func debugCommandPaletteWindowSummary(_ window: NSWindow?) -> String {
     return "num=\(window.windowNumber) ident=\(ident) key=\(window.isKeyWindow ? 1 : 0) main=\(window.isMainWindow ? 1 : 0)"
 }
 
+private func debugCommandPaletteNormalizedModifierFlags(_ flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
+    flags
+        .intersection(.deviceIndependentFlagsMask)
+        .subtracting([.numericPad, .function, .capsLock])
+}
+
+private func debugCommandPaletteModifierFlagsSummary(_ flags: NSEvent.ModifierFlags) -> String {
+    let normalized = debugCommandPaletteNormalizedModifierFlags(flags)
+    var parts: [String] = []
+    if normalized.contains(.command) { parts.append("cmd") }
+    if normalized.contains(.shift) { parts.append("shift") }
+    if normalized.contains(.option) { parts.append("opt") }
+    if normalized.contains(.control) { parts.append("ctrl") }
+    return parts.isEmpty ? "none" : parts.joined(separator: "+")
+}
+
+private func debugCommandPaletteKeyEventSummary(_ event: NSEvent) -> String {
+    let chars = event.characters.map(String.init(reflecting:)) ?? "nil"
+    let charsIgnoring = event.charactersIgnoringModifiers.map(String.init(reflecting:)) ?? "nil"
+    return
+        "type=\(event.type) keyCode=\(event.keyCode) flags=\(debugCommandPaletteModifierFlagsSummary(event.modifierFlags)) " +
+        "chars=\(chars) charsIgnoring=\(charsIgnoring)"
+}
+
 private func debugCommandPaletteResponderSummary(_ responder: NSResponder?) -> String {
     guard let responder else { return "nil" }
 
@@ -4498,10 +4522,23 @@ struct ContentView: View {
 
         override func keyDown(with event: NSEvent) {
             if hasMarkedText() {
+#if DEBUG
+                dlog(
+                    "palette.wsDescription.editor.keyDown markedText=1 " +
+                    "\(debugCommandPaletteKeyEventSummary(event))"
+                )
+#endif
                 super.keyDown(with: event)
                 return
             }
-            if onHandleKeyEvent?(event, self) == true {
+            let handled = onHandleKeyEvent?(event, self) == true
+#if DEBUG
+            dlog(
+                "palette.wsDescription.editor.keyDown handled=\(handled ? 1 : 0) " +
+                "\(debugCommandPaletteKeyEventSummary(event))"
+            )
+#endif
+            if handled {
                 return
             }
             super.keyDown(with: event)
@@ -4509,12 +4546,32 @@ struct ContentView: View {
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             if hasMarkedText() {
+#if DEBUG
+                dlog(
+                    "palette.wsDescription.editor.performKeyEquivalent markedText=1 " +
+                    "\(debugCommandPaletteKeyEventSummary(event))"
+                )
+#endif
                 return super.performKeyEquivalent(with: event)
             }
-            if onHandleKeyEvent?(event, self) == true {
+            let handled = onHandleKeyEvent?(event, self) == true
+#if DEBUG
+            dlog(
+                "palette.wsDescription.editor.performKeyEquivalent handled=\(handled ? 1 : 0) " +
+                "\(debugCommandPaletteKeyEventSummary(event))"
+            )
+#endif
+            if handled {
                 return true
             }
-            return super.performKeyEquivalent(with: event)
+            let result = super.performKeyEquivalent(with: event)
+#if DEBUG
+            dlog(
+                "palette.wsDescription.editor.performKeyEquivalent superResult=\(result ? 1 : 0) " +
+                "\(debugCommandPaletteKeyEventSummary(event))"
+            )
+#endif
+            return result
         }
     }
 
@@ -4674,6 +4731,15 @@ struct ContentView: View {
         private func textDidChange(_ notification: Notification) {
             updatePlaceholderVisibility()
             reportMeasuredHeightIfNeeded()
+#if DEBUG
+            let newlineCount = textView.string.reduce(into: 0) { count, character in
+                if character == "\n" { count += 1 }
+            }
+            dlog(
+                "palette.wsDescription.editor.textDidChange len=\((textView.string as NSString).length) " +
+                "newlines=\(newlineCount)"
+            )
+#endif
         }
 
         private func updatePlaceholderVisibility() {
@@ -4722,6 +4788,17 @@ struct ContentView: View {
                 parent.text = textView.string
             }
 
+            func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+#if DEBUG
+                dlog(
+                    "palette.wsDescription.editor.command selector=\(NSStringFromSelector(commandSelector)) " +
+                    "len=\((textView.string as NSString).length) " +
+                    "sel=\(textView.selectedRange().location):\(textView.selectedRange().length)"
+                )
+#endif
+                return false
+            }
+
             func handleDidBecomeFirstResponder() {
 #if DEBUG
                 dlog(
@@ -4747,21 +4824,41 @@ struct ContentView: View {
                     .intersection(.deviceIndependentFlagsMask)
                     .subtracting([.numericPad, .function, .capsLock])
 
+#if DEBUG
+                dlog(
+                    "palette.wsDescription.editor.handleKeyEvent " +
+                    "\(debugCommandPaletteKeyEventSummary(event)) " +
+                    "normalized=\(debugCommandPaletteModifierFlagsSummary(normalizedFlags))"
+                )
+#endif
+
                 if event.keyCode == 36 || event.keyCode == 76 {
                     if normalizedFlags.isEmpty {
+#if DEBUG
+                        dlog("palette.wsDescription.editor.handleKeyEvent action=submit")
+#endif
                         parent.onSubmit()
                         return true
                     }
                     if normalizedFlags == [.shift] {
+#if DEBUG
+                        dlog("palette.wsDescription.editor.handleKeyEvent action=allowShiftReturn")
+#endif
                         return false
                     }
                 }
 
                 if event.keyCode == 53, normalizedFlags.isEmpty {
+#if DEBUG
+                    dlog("palette.wsDescription.editor.handleKeyEvent action=escape")
+#endif
                     parent.onEscape()
                     return true
                 }
 
+#if DEBUG
+                dlog("palette.wsDescription.editor.handleKeyEvent action=passThrough")
+#endif
                 return false
             }
         }
