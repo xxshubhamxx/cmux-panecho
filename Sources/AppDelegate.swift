@@ -2007,10 +2007,18 @@ func cmuxOwningGhosttyView(for responder: NSResponder?) -> GhosttyNSView? {
         return ghosttyView
     }
 
-    if let textView = responder as? NSTextView,
-       let delegateView = textView.delegate as? NSView,
-       let ghosttyView = cmuxOwningGhosttyView(for: delegateView) {
-        return ghosttyView
+    if let textView = responder as? NSTextView {
+        if textView.isFieldEditor,
+           let ownerView = cmuxFieldEditorOwnerView(textView),
+           let ghosttyView = cmuxOwningGhosttyView(for: ownerView) {
+            return ghosttyView
+        }
+
+        if !textView.isFieldEditor,
+           let delegateView = textView.delegate as? NSView,
+           let ghosttyView = cmuxOwningGhosttyView(for: delegateView) {
+            return ghosttyView
+        }
     }
 
     var current = responder.nextResponder
@@ -2026,6 +2034,20 @@ func cmuxOwningGhosttyView(for responder: NSResponder?) -> GhosttyNSView? {
     }
 
     return nil
+}
+
+private func cmuxFieldEditorOwnerView(_ editor: NSTextView) -> NSView? {
+    guard editor.isFieldEditor else { return nil }
+
+    var current = editor.nextResponder
+    while let next = current {
+        if let view = next as? NSView {
+            return view
+        }
+        current = next.nextResponder
+    }
+
+    return editor.superview
 }
 
 private func cmuxOwningGhosttyView(for view: NSView) -> GhosttyNSView? {
@@ -5614,9 +5636,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func keyRoutingOwnerView(for responder: NSResponder?) -> NSView? {
         guard let responder else { return nil }
         if let editor = responder as? NSTextView,
-           editor.isFieldEditor,
-           let delegateView = editor.delegate as? NSView {
-            return delegateView
+           editor.isFieldEditor {
+            return cmuxFieldEditorOwnerView(editor) ?? editor
         }
         return responder as? NSView
     }
@@ -5665,18 +5686,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
         if hostedView.responderMatchesPreferredKeyboardFocus(responder) {
-            return false
-        }
-        if cmuxOwningGhosttyView(for: responder) != nil {
-            return true
-        }
-        guard let ownerView = keyRoutingOwnerView(for: responder) else {
-            return true
-        }
-        if ownerView === window.contentView {
-            return true
-        }
-        if ownerView is NSControl || responder is NSTextView {
             return false
         }
         return true
@@ -5793,6 +5802,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         var refreshedCount = 0
         forEachTerminalPanel { terminalPanel in
             terminalPanel.hostedView.reconcileGeometryNow()
+            terminalPanel.hostedView.refreshHostBackgroundAfterGhosttyConfigReload()
             terminalPanel.surface.forceRefresh(reason: "appDelegate.refreshAfterGhosttyConfigReload")
             refreshedCount += 1
         }
