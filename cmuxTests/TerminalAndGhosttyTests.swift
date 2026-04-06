@@ -2153,9 +2153,12 @@ final class GhosttySurfaceOverlayTests: XCTestCase {
         let scrollbackScrollbar = makeScrollbar(total: 100, offset: 40, len: 10)
 
         surfaceView.enqueueScrollbarUpdate(bottomScrollbar)
-        guard waitUntil(description: "initial bottom scrollbar packet") {
-            surfaceView.scrollbar == bottomScrollbar
-        } else {
+        guard waitUntil(
+            description: "initial bottom scrollbar packet",
+            {
+                surfaceView.scrollbar == bottomScrollbar
+            }
+        ) else {
             return
         }
         XCTAssertEqual(scrollView.contentView.bounds.origin.y, 0, accuracy: 0.01)
@@ -2175,17 +2178,23 @@ final class GhosttySurfaceOverlayTests: XCTestCase {
         }
 
         scrollView.scrollWheel(with: scrollEvent)
-        guard waitUntil(description: "wheel-driven scrollback packet") {
-            abs(scrollView.contentView.bounds.origin.y - 500) <= 0.01
-        } else {
+        guard waitUntil(
+            description: "wheel-driven scrollback packet",
+            {
+                abs(scrollView.contentView.bounds.origin.y - 500) <= 0.01
+            }
+        ) else {
             return
         }
         XCTAssertEqual(scrollView.contentView.bounds.origin.y, 500, accuracy: 0.01)
 
         surfaceView.enqueueScrollbarUpdate(bottomScrollbar)
-        guard waitUntil(description: "later passive bottom packet") {
-            surfaceView.scrollbar == bottomScrollbar
-        } else {
+        guard waitUntil(
+            description: "later passive bottom packet",
+            {
+                surfaceView.scrollbar == bottomScrollbar
+            }
+        ) else {
             return
         }
 
@@ -2233,9 +2242,12 @@ final class GhosttySurfaceOverlayTests: XCTestCase {
         let scrollbackScrollbar = makeScrollbar(total: 100, offset: 40, len: 10)
 
         surfaceView.enqueueScrollbarUpdate(bottomScrollbar)
-        guard waitUntil(description: "initial bottom scrollbar packet") {
-            surfaceView.scrollbar == bottomScrollbar
-        } else {
+        guard waitUntil(
+            description: "initial bottom scrollbar packet",
+            {
+                surfaceView.scrollbar == bottomScrollbar
+            }
+        ) else {
             return
         }
         XCTAssertEqual(scrollView.contentView.bounds.origin.y, 0, accuracy: 0.01)
@@ -2261,9 +2273,12 @@ final class GhosttySurfaceOverlayTests: XCTestCase {
         surfaceView.enqueueScrollbarUpdate(scrollbackScrollbar)
         surfaceView.enqueueScrollbarUpdate(bottomScrollbar)
 
-        guard waitUntil(description: "first non-duplicate wheel packet to win") {
-            abs(scrollView.contentView.bounds.origin.y - 500) <= 0.01
-        } else {
+        guard waitUntil(
+            description: "first non-duplicate wheel packet to win",
+            {
+                abs(scrollView.contentView.bounds.origin.y - 500) <= 0.01
+            }
+        ) else {
             return
         }
 
