@@ -2477,7 +2477,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 800, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 840, height: 520),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -2729,8 +2729,10 @@ private struct SettingsTOCSidebar: View {
         return SettingsSection.allCases.filter { $0.matches(searchText) }
     }
 
+    @State private var selection: SettingsSection?
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11, weight: .medium))
@@ -2762,46 +2764,37 @@ private struct SettingsTOCSidebar: View {
                             .stroke(Color(nsColor: .separatorColor).opacity(0.3), lineWidth: 1)
                     )
             )
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .padding(.top, 52)
-            .padding(.bottom, 10)
+            .padding(.bottom, 6)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(filteredSections) { section in
-                        Button {
-                            onSelect(section)
-                        } label: {
-                            HStack(spacing: 7) {
-                                Image(systemName: section.icon)
-                                    .font(.system(size: 10.5, weight: .medium))
-                                    .foregroundStyle(activeSection == section ? .primary : .secondary)
-                                    .frame(width: 16)
-                                Text(section.title)
-                                    .font(.system(size: 12, weight: activeSection == section ? .semibold : .regular))
-                                    .foregroundStyle(activeSection == section ? .primary : .secondary)
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(
-                                Group {
-                                    if activeSection == section {
-                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                            .fill(Color(nsColor: .controlBackgroundColor).opacity(0.8))
-                                    }
-                                }
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
+            List(filteredSections, selection: $selection) { section in
+                Label {
+                    Text(section.title)
+                        .font(.system(size: 13))
+                } icon: {
+                    Image(systemName: section.icon)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 6)
+                .tag(section)
             }
-
-            Spacer(minLength: 0)
+            .listStyle(.sidebar)
+            .onChange(of: selection) { _, newValue in
+                if let section = newValue {
+                    onSelect(section)
+                }
+            }
+            .onChange(of: activeSection) { _, newValue in
+                if selection != newValue {
+                    selection = newValue
+                }
+            }
+            .onAppear {
+                selection = activeSection
+            }
         }
-        .frame(width: 160)
+        .frame(width: 200)
     }
 }
 
