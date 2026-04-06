@@ -224,28 +224,6 @@ struct WorkspaceRemoteDaemonManifest: Decodable, Equatable {
     }
 }
 
-private struct BonsplitCompatibilityTabIDPayload: Codable {
-    let id: UUID
-}
-
-extension TabID {
-    var uuid: UUID {
-        if let id = Mirror(reflecting: self).children.first(where: { $0.label == "id" })?.value as? UUID {
-            return id
-        }
-
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-
-        do {
-            let data = try encoder.encode(self)
-            return try decoder.decode(BonsplitCompatibilityTabIDPayload.self, from: data).id
-        } catch {
-            preconditionFailure("Failed to read Bonsplit TabID compatibility payload: \(error)")
-        }
-    }
-}
-
 extension Workspace {
     private static var compatibilityToggleZoomContextAction: TabContextAction? {
         TabContextAction(rawValue: "toggleZoom")
