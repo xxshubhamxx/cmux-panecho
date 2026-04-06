@@ -6,7 +6,7 @@ func TestSessionManagerReattachKeepsExistingSessionState(t *testing.T) {
 	t.Parallel()
 
 	mgr := NewManager()
-	sessionID, attachmentID := mgr.Open(120, 40)
+	sessionID, attachmentID := mgr.Open("", 120, 40)
 
 	if err := mgr.Resize(sessionID, attachmentID, 100, 30); err != nil {
 		t.Fatalf("resize existing attachment: %v", err)

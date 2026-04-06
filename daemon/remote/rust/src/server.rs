@@ -1395,6 +1395,7 @@ impl Daemon {
         }
     }
 
+    #[cfg(test)]
     fn current_event_cursor(&self) -> u64 {
         let state = self.inner.state.lock().unwrap();
         state.event_base_cursor + state.events.len() as u64
@@ -1402,26 +1403,28 @@ impl Daemon {
 
     fn wait_for_busy(
         &self,
-        session_id: &str,
-        pane_id: &str,
+        _session_id: &str,
+        _pane_id: &str,
         pane: &PaneHandle,
         timeout: Duration,
     ) -> Result<(), String> {
-        if pane.shared.state.lock().unwrap().busy {
-            return Ok(());
-        }
-        let mut filters = BTreeSet::new();
-        filters.insert("busy".to_string());
-        let cursor = self.current_event_cursor();
-        let (_next_cursor, events) =
-            self.read_events(cursor, timeout, &filters, Some(session_id), Some(pane_id));
-        if events
-            .iter()
-            .any(|event| event.get("kind").and_then(Value::as_str) == Some("busy"))
-        {
-            Ok(())
-        } else {
-            Err("busy wait timed out".to_string())
+        let deadline = Instant::now() + timeout;
+        let mut guard = pane.shared.state.lock().unwrap();
+        let start_generation = guard.busy_generation;
+        loop {
+            if guard.busy || guard.busy_generation != start_generation {
+                return Ok(());
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err("busy wait timed out".to_string());
+            }
+            let (next_guard, wait_result) =
+                pane.shared.cv.wait_timeout(guard, deadline - now).unwrap();
+            guard = next_guard;
+            if wait_result.timed_out() {
+                return Err("busy wait timed out".to_string());
+            }
         }
     }
 
@@ -1478,7 +1481,7 @@ impl Daemon {
     }
 
     fn consume_nonce(&self, nonce: &str, expires_at: i64) -> Result<(), String> {
-        let now = unix_now() as i64;
+        let now = unix_now_secs();
         let mut state = self.inner.state.lock().unwrap();
         state.used_nonces.retain(|_, expiry| *expiry > now);
         if state.used_nonces.contains_key(nonce) {
@@ -2504,8 +2507,11 @@ impl Daemon {
             if inner.windows.is_empty() {
                 inner.active_window = 0;
                 inner.last_window = None;
-            } else if inner.active_window >= inner.windows.len() {
-                inner.active_window = inner.windows.len() - 1;
+            } else {
+                inner.active_window =
+                    rebase_index(inner.active_window, window_index, inner.windows.len());
+                inner.last_window =
+                    rebase_optional_index(inner.last_window, window_index, inner.windows.len());
             }
             (
                 window
@@ -2551,9 +2557,10 @@ impl Daemon {
             if window.panes.is_empty() {
                 (pane.handle, pane.pane_id, true)
             } else {
-                if window.active_pane >= window.panes.len() {
-                    window.active_pane = window.panes.len() - 1;
-                }
+                window.active_pane =
+                    rebase_index(window.active_pane, pane_index, window.panes.len());
+                window.last_pane =
+                    rebase_optional_index(window.last_pane, pane_index, window.panes.len());
                 (pane.handle, pane.pane_id, false)
             }
         };
@@ -2575,7 +2582,10 @@ impl Daemon {
 
     fn tmux_last_window(&self, session: &Arc<Session>) -> Result<(), String> {
         let mut inner = session.inner.lock().unwrap();
-        if let Some(last_window) = inner.last_window {
+        if let Some(last_window) = inner
+            .last_window
+            .filter(|value| *value < inner.windows.len())
+        {
             let current = inner.active_window;
             inner.active_window = last_window;
             inner.last_window = Some(current);
@@ -2600,7 +2610,7 @@ impl Daemon {
             .windows
             .get_mut(window_index)
             .ok_or_else(|| "window not found".to_string())?;
-        if let Some(last_pane) = window.last_pane {
+        if let Some(last_pane) = window.last_pane.filter(|value| *value < window.panes.len()) {
             let current = window.active_pane;
             window.active_pane = last_pane;
             window.last_pane = Some(current);
@@ -3365,10 +3375,42 @@ fn join_history(history: &str, visible: &str) -> String {
     }
 }
 
+fn rebase_index(index: usize, removed: usize, len_after_remove: usize) -> usize {
+    if len_after_remove == 0 {
+        return 0;
+    }
+    if index > removed {
+        index - 1
+    } else if index >= len_after_remove {
+        len_after_remove - 1
+    } else {
+        index
+    }
+}
+
+fn rebase_optional_index(
+    index: Option<usize>,
+    removed: usize,
+    len_after_remove: usize,
+) -> Option<usize> {
+    let index = index?;
+    if len_after_remove == 0 || index == removed {
+        return None;
+    }
+    Some(rebase_index(index, removed, len_after_remove))
+}
+
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+fn unix_now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
         .unwrap_or_default()
 }
 

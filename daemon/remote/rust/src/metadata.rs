@@ -111,22 +111,22 @@ fn decode_pwd(value: &str) -> Option<String> {
 
 fn percent_decode(input: &str) -> String {
     let bytes = input.as_bytes();
-    let mut output = String::with_capacity(input.len());
+    let mut output = Vec::with_capacity(input.len());
     let mut idx = 0;
     while idx < bytes.len() {
         if bytes[idx] == b'%' && idx + 2 < bytes.len() {
             let hi = from_hex(bytes[idx + 1]);
             let lo = from_hex(bytes[idx + 2]);
             if let (Some(hi), Some(lo)) = (hi, lo) {
-                output.push((hi << 4 | lo) as char);
+                output.push(hi << 4 | lo);
                 idx += 3;
                 continue;
             }
         }
-        output.push(bytes[idx] as char);
+        output.push(bytes[idx]);
         idx += 1;
     }
-    output
+    String::from_utf8_lossy(&output).into_owned()
 }
 
 fn from_hex(value: u8) -> Option<u8> {
@@ -135,5 +135,18 @@ fn from_hex(value: u8) -> Option<u8> {
         b'a'..=b'f' => Some(value - b'a' + 10),
         b'A'..=b'F' => Some(value - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_pwd;
+
+    #[test]
+    fn decode_pwd_preserves_utf8_paths() {
+        assert_eq!(
+            decode_pwd("file:///tmp/caf%C3%A9").as_deref(),
+            Some("/tmp/café")
+        );
     }
 }

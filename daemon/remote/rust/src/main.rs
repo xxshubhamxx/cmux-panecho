@@ -165,10 +165,15 @@ fn run_tmux_cli(args: &[String]) -> i32 {
 }
 
 fn run_cli_relay(args: &[String]) -> i32 {
-    let socket = match find_socket_flag(args).or_else(|| env::var("CMUX_SOCKET_PATH").ok()) {
+    let socket = match find_socket_flag(args)
+        .or_else(|| env::var("CMUX_SOCKET_PATH").ok())
+        .or_else(read_socket_addr_file)
+    {
         Some(value) if !value.trim().is_empty() => value,
         _ => {
-            eprintln!("cmux: CMUX_SOCKET_PATH not set and --socket not provided");
+            eprintln!(
+                "cmux: CMUX_SOCKET_PATH not set, ~/.cmux/socket_addr missing, and --socket not provided"
+            );
             return 1;
         }
     };
@@ -233,6 +238,14 @@ fn strip_socket_flag(args: &[String]) -> Vec<String> {
         idx += 1;
     }
     out
+}
+
+fn read_socket_addr_file() -> Option<String> {
+    let home = env::var("HOME").ok()?;
+    let path = Path::new(&home).join(".cmux").join("socket_addr");
+    let value = std::fs::read_to_string(path).ok()?;
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn usage(stderr: &mut dyn Write) {

@@ -225,6 +225,34 @@ fn now_ms() -> u64 {
 }
 
 fn format_iso8601(timestamp_ms: u64) -> String {
-    let secs = timestamp_ms / 1000;
-    format!("{secs}Z")
+    let secs = (timestamp_ms / 1000) as libc::time_t;
+    let millis = timestamp_ms % 1000;
+    let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+    let tm_ptr = unsafe { libc::gmtime_r(&secs, &mut tm) };
+    if tm_ptr.is_null() {
+        return format!("{}", timestamp_ms / 1000);
+    }
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
+        millis
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_iso8601;
+
+    #[test]
+    fn format_iso8601_emits_rfc3339_timestamp() {
+        assert_eq!(
+            format_iso8601(1_704_067_445_678),
+            "2024-01-01T00:04:05.678Z"
+        );
+    }
 }

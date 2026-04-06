@@ -1,8 +1,8 @@
 package main
 
 import (
-	"encoding/base64"
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -131,8 +131,8 @@ func TestServeStdioSupportsTerminalOpenReadAndWrite(t *testing.T) {
 		t.Fatalf("terminal.read echo result missing: %+v", readEcho)
 	}
 	echoChunk := decodeBase64Field(t, echoResult, "data")
-	if string(echoChunk) != "hello\r\n" {
-		t.Fatalf("echo chunk = %q, want %q", string(echoChunk), "hello\r\n")
+	if string(echoChunk) != "hello\n" {
+		t.Fatalf("echo chunk = %q, want %q", string(echoChunk), "hello\n")
 	}
 
 	_ = stdinW.Close()

@@ -75,8 +75,7 @@ impl ProxyManager {
     }
 
     pub fn write(&self, stream_id: &str, data: &[u8]) -> Result<usize, ProxyError> {
-        let mut streams = self.streams.lock().unwrap();
-        let stream = streams.get_mut(stream_id).ok_or(ProxyError::NotFound)?;
+        let mut stream = self.clone_stream(stream_id)?;
         stream.write_all(data).map_err(ProxyError::Io)?;
         Ok(data.len())
     }
@@ -87,12 +86,13 @@ impl ProxyManager {
         max_bytes: usize,
         timeout_ms: i32,
     ) -> Result<ProxyReadResult, ProxyError> {
-        let mut streams = self.streams.lock().unwrap();
-        let stream = streams.get_mut(stream_id).ok_or(ProxyError::NotFound)?;
+        let mut stream = self.clone_stream(stream_id)?;
         if timeout_ms >= 0 {
             stream
                 .set_read_timeout(Some(Duration::from_millis(timeout_ms as u64)))
                 .map_err(ProxyError::Io)?;
+        } else {
+            stream.set_read_timeout(None).map_err(ProxyError::Io)?;
         }
 
         let mut buf = vec![0_u8; max_bytes];
@@ -119,5 +119,11 @@ impl ProxyManager {
             }
             Err(err) => Err(ProxyError::Io(err)),
         }
+    }
+
+    fn clone_stream(&self, stream_id: &str) -> Result<TcpStream, ProxyError> {
+        let streams = self.streams.lock().unwrap();
+        let stream = streams.get(stream_id).ok_or(ProxyError::NotFound)?;
+        stream.try_clone().map_err(ProxyError::Io)
     }
 }

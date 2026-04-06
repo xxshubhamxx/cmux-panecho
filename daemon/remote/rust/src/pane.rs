@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::capture::{TerminalCapture, capture_terminal};
 use crate::ghostty::GhosttyTerminal;
@@ -94,6 +94,15 @@ enum PaneCommand {
     Close(mpsc::Sender<()>),
 }
 
+struct PaneRuntime {
+    child: Box<dyn Child + Send>,
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    terminal: GhosttyTerminal,
+    metadata: OscTracker,
+    reader_rx: Receiver<ReaderEvent>,
+}
+
 impl PaneHandle {
     pub fn spawn(
         session_id: &str,
@@ -128,6 +137,7 @@ impl PaneHandle {
         let session_id_owned = session_id.to_string();
         let pane_id_owned = pane_id.to_string();
         let command_owned = command.to_string();
+        let (startup_tx, startup_rx) = mpsc::channel();
         thread::spawn(move || {
             run_pane_actor(
                 session_id_owned,
@@ -138,9 +148,13 @@ impl PaneHandle {
                 shared,
                 command_rx,
                 events,
+                startup_tx,
             );
         });
 
+        startup_rx
+            .recv()
+            .map_err(|_| "pane runtime startup failed".to_string())??;
         Ok(handle)
     }
 
@@ -261,55 +275,33 @@ fn run_pane_actor(
     shared: Arc<PaneShared>,
     command_rx: Receiver<PaneCommand>,
     events: EventCallback,
+    startup_tx: mpsc::Sender<Result<(), String>>,
 ) {
-    let pty_system = native_pty_system();
-    let pair = match pty_system.openpty(PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    }) {
-        Ok(value) => value,
-        Err(_) => return,
+    let mut runtime = match spawn_runtime(&command, cols, rows) {
+        Ok(runtime) => {
+            let _ = startup_tx.send(Ok(()));
+            runtime
+        }
+        Err(err) => {
+            {
+                let mut state = shared.state.lock().unwrap();
+                state.closed = true;
+            }
+            shared.cv.notify_all();
+            let _ = startup_tx.send(Err(err));
+            return;
+        }
     };
-
-    let mut cmd = CommandBuilder::new("/bin/sh");
-    cmd.arg("-lc");
-    cmd.arg(command.as_str());
-    let mut child = match pair.slave.spawn_command(cmd) {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-    drop(pair.slave);
-
-    let master = pair.master;
-    let reader = match master.try_clone_reader() {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-    let mut writer = match master.take_writer() {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-    let mut terminal = match GhosttyTerminal::new(cols, rows, 100_000) {
-        Ok(value) => value,
-        Err(_) => return,
-    };
-    let mut metadata = OscTracker::default();
-
-    let (reader_tx, reader_rx) = crossbeam_channel::unbounded();
-    thread::spawn(move || reader_loop(reader, reader_tx));
-
     let mut runtime_closed = false;
-    let mut reader_rx = reader_rx;
+    let mut reader_rx = runtime.reader_rx;
     while !runtime_closed {
         crossbeam_channel::select! {
             recv(reader_rx) -> message => {
                 match message {
                     Ok(ReaderEvent::Data(data)) => {
                         let mut emit_busy = false;
-                        let _ = terminal.feed(&data);
-                        metadata.feed(&data);
+                        let _ = runtime.terminal.feed(&data);
+                        runtime.metadata.feed(&data);
                         {
                             let mut state = shared.state.lock().unwrap();
                             if !state.busy {
@@ -317,8 +309,8 @@ fn run_pane_actor(
                                 state.busy_generation += 1;
                                 emit_busy = true;
                             }
-                            state.title = metadata.title().to_string();
-                            state.pwd = metadata.pwd().to_string();
+                            state.title = runtime.metadata.title().to_string();
+                            state.pwd = runtime.metadata.pwd().to_string();
                             state.buffer.extend_from_slice(&data);
                             state.next_offset += data.len() as u64;
                             state.last_output_at = Instant::now();
@@ -359,15 +351,15 @@ fn run_pane_actor(
             recv(command_rx) -> message => {
                 match message {
                     Ok(PaneCommand::Write(data, reply)) => {
-                        let result = writer
+                        let result = runtime.writer
                             .write_all(&data)
-                            .and_then(|_| writer.flush())
+                            .and_then(|_| runtime.writer.flush())
                             .map(|_| data.len())
                             .map_err(|err| err.to_string());
                         let _ = reply.send(result);
                     }
                     Ok(PaneCommand::Resize(cols, rows, reply)) => {
-                        let result = master
+                        let result = runtime.master
                             .resize(PtySize {
                                 rows: rows.max(1),
                                 cols: cols.max(2),
@@ -375,17 +367,27 @@ fn run_pane_actor(
                                 pixel_height: 0,
                             })
                             .map_err(|err| err.to_string())
-                            .and_then(|_| terminal.resize(cols.max(2), rows.max(1)));
+                            .and_then(|_| runtime.terminal.resize(cols.max(2), rows.max(1)));
                         let _ = reply.send(result);
                     }
                     Ok(PaneCommand::Capture(include_history, reply)) => {
-                        let result = terminal.capture(include_history).map(|raw| {
-                            capture_terminal(raw, metadata.title().to_string(), metadata.pwd().to_string())
+                        let result = runtime.terminal.capture(include_history).map(|raw| {
+                            capture_terminal(
+                                raw,
+                                runtime.metadata.title().to_string(),
+                                runtime.metadata.pwd().to_string(),
+                            )
                         });
                         let _ = reply.send(result);
                     }
                     Ok(PaneCommand::Close(reply)) => {
-                        let _ = child.kill();
+                        {
+                            let mut state = shared.state.lock().unwrap();
+                            state.closed = true;
+                            state.busy = false;
+                        }
+                        shared.cv.notify_all();
+                        let _ = runtime.child.kill();
                         let _ = reply.send(());
                         runtime_closed = true;
                     }
@@ -413,8 +415,47 @@ fn run_pane_actor(
         }
     }
 
-    let _ = child.kill();
-    let _ = child.wait();
+    let _ = runtime.child.kill();
+    let _ = runtime.child.wait();
+}
+
+fn spawn_runtime(command: &str, cols: u16, rows: u16) -> Result<PaneRuntime, String> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|err| err.to_string())?;
+
+    let mut cmd = CommandBuilder::new("/bin/sh");
+    cmd.arg("-lc");
+    cmd.arg(command);
+    let child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|err| err.to_string())?;
+    drop(pair.slave);
+
+    let master = pair.master;
+    let reader = master.try_clone_reader().map_err(|err| err.to_string())?;
+    let writer = master.take_writer().map_err(|err| err.to_string())?;
+    let terminal = GhosttyTerminal::new(cols, rows, 100_000)?;
+    let metadata = OscTracker::default();
+
+    let (reader_tx, reader_rx) = crossbeam_channel::unbounded();
+    thread::spawn(move || reader_loop(reader, reader_tx));
+
+    Ok(PaneRuntime {
+        child,
+        master,
+        writer,
+        terminal,
+        metadata,
+        reader_rx,
+    })
 }
 
 fn reader_loop(mut reader: Box<dyn Read + Send>, tx: Sender<ReaderEvent>) {

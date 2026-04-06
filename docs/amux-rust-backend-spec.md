@@ -16,7 +16,7 @@ The Rust daemon must:
 ## Inputs Used For The Rewrite
 
 - Current backend and transport code in `task-move-ios-app-into-cmux-repo`
-- Existing tmux compatibility behavior in [`CLI/cmux.swift`](/Users/lawrence/fun/cmuxterm-hq/worktrees/feat-amux-rust-backend/CLI/cmux.swift)
+- Existing tmux compatibility behavior in [`CLI/cmux.swift`](../CLI/cmux.swift)
 - `weill-labs/amux` for the capture/events/wait model
 - `libghostty-rs` as a design reference only
 
@@ -207,7 +207,7 @@ The older cmux subset from `CLI/cmux.swift` must remain included inside this lis
 - `wait-for` is implemented as named signal generation tracking, not tmux control mode
 - `capture-pane -p` prints captured text, otherwise stores the text in the default buffer
 - `set-buffer` and `paste-buffer` operate on daemon-owned buffers
-- `pipe-pane` runs a shell command and pipes the current pane capture to stdin
+- `pipe-pane` runs a shell command and pipes the current pane capture to stdin, so it is only safe for trusted callers
 - `resize-pane` is direct PTY resizing, not a real tmux layout engine
 - `respawn-pane` recreates the pane process in place
 

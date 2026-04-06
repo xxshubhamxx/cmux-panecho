@@ -59,11 +59,12 @@ func NewManager() *Manager {
 	}
 }
 
-func (m *Manager) Open(cols, rows int) (sessionID, attachmentID string) {
+func (m *Manager) Open(sessionID string, cols, rows int) (resolvedSessionID, attachmentID string) {
+	cols, rows = normalizeSize(cols, rows)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	sessionID, state := m.ensureLocked("")
+	resolvedSessionID, state := m.ensureLocked(sessionID)
 	attachmentID = m.nextAttachmentIDLocked()
 	state.attachments[attachmentID] = attachmentState{
 		cols:      cols,
@@ -72,7 +73,7 @@ func (m *Manager) Open(cols, rows int) (sessionID, attachmentID string) {
 	}
 	recomputeSessionSize(state)
 
-	return sessionID, attachmentID
+	return resolvedSessionID, attachmentID
 }
 
 func (m *Manager) Ensure(sessionID string) SessionStatus {
@@ -98,6 +99,7 @@ func (m *Manager) Attach(sessionID, attachmentID string, cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return ErrInvalidSize
 	}
+	cols, rows = normalizeSize(cols, rows)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,6 +122,7 @@ func (m *Manager) Resize(sessionID, attachmentID string, cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return ErrInvalidSize
 	}
+	cols, rows = normalizeSize(cols, rows)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -170,6 +173,23 @@ func (m *Manager) Status(sessionID string) (SessionStatus, error) {
 	return snapshotLocked(sessionID, state), nil
 }
 
+func (m *Manager) List() []SessionStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sessionIDs := make([]string, 0, len(m.sessions))
+	for sessionID := range m.sessions {
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	sort.Strings(sessionIDs)
+
+	out := make([]SessionStatus, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		out = append(out, snapshotLocked(sessionID, m.sessions[sessionID]))
+	}
+	return out
+}
+
 func (m *Manager) ensureLocked(sessionID string) (string, *sessionState) {
 	if sessionID == "" {
 		sessionID = fmt.Sprintf("sess-%d", m.nextSessionID)
@@ -215,6 +235,16 @@ func recomputeSessionSize(state *sessionState) {
 	state.effectiveRows = minRows
 	state.lastKnownCols = minCols
 	state.lastKnownRows = minRows
+}
+
+func normalizeSize(cols, rows int) (int, int) {
+	if cols > 0 && cols < 2 {
+		cols = 2
+	}
+	if rows > 0 && rows < 1 {
+		rows = 1
+	}
+	return cols, rows
 }
 
 func snapshotLocked(sessionID string, state *sessionState) SessionStatus {

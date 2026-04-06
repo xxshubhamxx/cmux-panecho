@@ -56,11 +56,12 @@ pub fn verify_ticket(
         return Err(TicketError::Malformed);
     }
 
-    let expected = sign(encoded_payload.as_bytes(), secret);
     let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(encoded_signature)
         .map_err(|_| TicketError::Malformed)?;
-    if signature != expected {
+    let mut mac = HmacSha256::new_from_slice(secret).expect("hmac key");
+    mac.update(encoded_payload.as_bytes());
+    if mac.verify_slice(&signature).is_err() {
         return Err(TicketError::InvalidSignature);
     }
 
@@ -84,6 +85,7 @@ pub fn has_session_capability(capabilities: &[String]) -> bool {
         .any(|value| value == "session.attach" || value == "session.open")
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn sign(payload: &[u8], secret: &[u8]) -> Vec<u8> {
     let mut mac = HmacSha256::new_from_slice(secret).expect("hmac key");
     mac.update(payload);
@@ -95,4 +97,31 @@ fn now_unix() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_secs() as i64)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode(value: &[u8]) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value)
+    }
+
+    #[test]
+    fn verify_ticket_accepts_valid_signature() {
+        let payload = encode(br#"{"server_id":"srv","exp":4102444800,"nonce":"n"}"#);
+        let signature = encode(&sign(payload.as_bytes(), b"secret"));
+        let token = format!("{payload}.{signature}");
+        assert!(verify_ticket(&token, b"secret", "srv").is_ok());
+    }
+
+    #[test]
+    fn verify_ticket_rejects_invalid_signature() {
+        let payload = encode(br#"{"server_id":"srv","exp":4102444800,"nonce":"n"}"#);
+        let token = format!("{payload}.{}", encode(b"wrong"));
+        assert!(matches!(
+            verify_ticket(&token, b"secret", "srv"),
+            Err(TicketError::InvalidSignature)
+        ));
+    }
 }
