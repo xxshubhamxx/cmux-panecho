@@ -15,6 +15,7 @@ final class TerminalCmdClickUITests: XCTestCase {
 
     private struct SetupData {
         let expectedPath: String
+        let payload: [String: Any]
     }
 
     private var hoverDiagnosticsPath = ""
@@ -289,7 +290,7 @@ final class TerminalCmdClickUITests: XCTestCase {
     }
 
     func testCmdClickLsStylePathOpensFullConsultantAgreementDocx() throws {
-        try assertCommandClickOpens(
+        try assertCommandClickOpensAcrossEveryCharacter(
             fileName: "Standard - Consultant Agreement - Form of Consulting Agreement.docx",
             lineFormat: .grid,
             linePrefix: "",
@@ -307,7 +308,24 @@ final class TerminalCmdClickUITests: XCTestCase {
     }
 
     func testCmdClickLsStylePathOpensFullNintendoMkv() throws {
-        try assertCommandClickOpens(
+        try assertCommandClickOpensAcrossEveryCharacter(
+            fileName: "(NINTENDO) BOTW Guardian Sound Effect.mkv",
+            lineFormat: .grid,
+            linePrefix: ""
+        )
+    }
+
+    func testCmdClickLsStyleInvalidCellsDoNothingForConsultantAgreementDocx() throws {
+        try assertCommandClickDoesNothingAtInvalidOffsets(
+            fileName: "Standard - Consultant Agreement - Form of Consulting Agreement.docx",
+            lineFormat: .grid,
+            linePrefix: "",
+            extraFileNames: ["Agreement.docx"]
+        )
+    }
+
+    func testCmdClickLsStyleInvalidCellsDoNothingForNintendoMkv() throws {
+        try assertCommandClickDoesNothingAtInvalidOffsets(
             fileName: "(NINTENDO) BOTW Guardian Sound Effect.mkv",
             lineFormat: .grid,
             linePrefix: ""
@@ -487,8 +505,117 @@ final class TerminalCmdClickUITests: XCTestCase {
         }
     }
 
+    private func assertCommandClickOpensAcrossEveryCharacter(
+        fileName: String,
+        lineFormat: LineFormat,
+        linePrefix: String,
+        extraFileNames: [String] = [],
+        disallowedFileName: String? = nil
+    ) throws {
+        let app = launchApp(
+            displayMode: .raw,
+            lineFormat: lineFormat,
+            fileName: fileName,
+            linePrefix: linePrefix,
+            extraFileNames: extraFileNames,
+            captureOpenPaths: true,
+            captureHoverDiagnostics: false
+        )
+        defer { app.terminate() }
+
+        let setup = try waitForReadySetup()
+        let expectedResolvedPath = expectedPath(for: fileName)
+        XCTAssertEqual(setup.expectedPath, expectedResolvedPath)
+
+        var previousOpenCount = loadCapturedOpenPaths().count
+        for tokenColumnOffset in 0..<fileName.count {
+            let result = try runCommand(
+                action: "cmd_click_token",
+                additionalPayload: ["tokenColumnOffset": tokenColumnOffset]
+            )
+            XCTAssertEqual(
+                result["lastCommandSucceeded"] as? String,
+                "1",
+                "Expected cmd-click to open the full spaced path from token column \(tokenColumnOffset). result=\(result)"
+            )
+            XCTAssertEqual(
+                result["lastCommandOpenedPath"] as? String,
+                expectedResolvedPath,
+                "Expected cmd-click at token column \(tokenColumnOffset) to open the full spaced path. result=\(result)"
+            )
+
+            let openedPaths = try waitForOpenCount(previousOpenCount + 1, timeout: 5.0)
+            XCTAssertEqual(
+                openedPaths.last,
+                expectedResolvedPath,
+                "Expected cmd-click at token column \(tokenColumnOffset) to open the intended spaced path. opened=\(openedPaths)"
+            )
+
+            if let disallowedFileName {
+                XCTAssertNotEqual(
+                    openedPaths.last,
+                    expectedPath(for: disallowedFileName),
+                    "Expected cmd-click at token column \(tokenColumnOffset) to reject suffix-token decoys. opened=\(openedPaths)"
+                )
+            }
+
+            previousOpenCount = openedPaths.count
+        }
+    }
+
+    private func assertCommandClickDoesNothingAtInvalidOffsets(
+        fileName: String,
+        lineFormat: LineFormat,
+        linePrefix: String,
+        extraFileNames: [String] = []
+    ) throws {
+        let app = launchApp(
+            displayMode: .raw,
+            lineFormat: lineFormat,
+            fileName: fileName,
+            linePrefix: linePrefix,
+            extraFileNames: extraFileNames,
+            captureOpenPaths: true,
+            captureHoverDiagnostics: false
+        )
+        defer { app.terminate() }
+
+        let setup = try waitForReadySetup()
+        let expectedResolvedPath = expectedPath(for: fileName)
+        XCTAssertEqual(setup.expectedPath, expectedResolvedPath)
+
+        let invalidOffsets = invalidTokenColumnOffsets(for: fileName)
+        let previousOpenCount = loadCapturedOpenPaths().count
+        for tokenColumnOffset in invalidOffsets {
+            let result = try runCommand(
+                action: "cmd_click_token",
+                additionalPayload: ["tokenColumnOffset": tokenColumnOffset]
+            )
+            XCTAssertNil(
+                result["lastCommandOpenedPath"] as? String,
+                "Expected cmd-click on invalid token column \(tokenColumnOffset) to open nothing. result=\(result)"
+            )
+            XCTAssertEqual(
+                result["lastCommandSucceeded"] as? String,
+                "0",
+                "Expected cmd-click on invalid token column \(tokenColumnOffset) to stay unresolved. result=\(result)"
+            )
+            XCTAssertTrue(
+                waitForOpenCountToStay(previousOpenCount, timeout: 0.75),
+                "Expected cmd-click on invalid token column \(tokenColumnOffset) to leave open count unchanged. opened=\(loadCapturedOpenPaths())"
+            )
+        }
+    }
+
     private func expectedPath(for fileName: String) -> String {
         fixtureDirectoryURL.appendingPathComponent(fileName).path
+    }
+
+    private func invalidTokenColumnOffsets(for fileName: String) -> [Int] {
+        let separatorStart = fileName.count
+        let separatorOffsets = Array(separatorStart..<(separatorStart + 4))
+        let trailingBlankOffset = separatorStart + 4 + "OtherFile".count + 2
+        return separatorOffsets + [trailingBlankOffset]
     }
 
     private func launchApp(
@@ -539,18 +666,52 @@ final class TerminalCmdClickUITests: XCTestCase {
     private func waitForCapturedOpenPaths(timeout: TimeInterval) -> [String]? {
         var openedPaths: [String]?
         let matched = waitForCondition(timeout: timeout) {
-            guard let contents = try? String(contentsOfFile: self.openCapturePath, encoding: .utf8) else {
-                return false
-            }
-            let lines = contents
-                .split(separator: "\n")
-                .map(String.init)
-                .filter { !$0.isEmpty }
+            let lines = self.loadCapturedOpenPaths()
             guard !lines.isEmpty else { return false }
             openedPaths = lines
             return true
         }
         return matched ? openedPaths : nil
+    }
+
+    private func loadCapturedOpenPaths() -> [String] {
+        guard let contents = try? String(contentsOfFile: openCapturePath, encoding: .utf8) else {
+            return []
+        }
+
+        return contents
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+    }
+
+    private func waitForOpenCount(_ expectedCount: Int, timeout: TimeInterval) throws -> [String] {
+        var openedPaths: [String] = []
+        let matched = waitForCondition(timeout: timeout) {
+            let lines = self.loadCapturedOpenPaths()
+            guard lines.count >= expectedCount else { return false }
+            openedPaths = lines
+            return true
+        }
+
+        guard matched else {
+            throw NSError(domain: "TerminalCmdClickUITests", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Expected at least \(expectedCount) opened paths. opened=\(loadCapturedOpenPaths())"
+            ])
+        }
+
+        return openedPaths
+    }
+
+    private func waitForOpenCountToStay(_ expectedCount: Int, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if loadCapturedOpenPaths().count != expectedCount {
+                return false
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return loadCapturedOpenPaths().count == expectedCount
     }
 
     private func waitForHoverDiagnostics(timeout: TimeInterval) -> [String: Any]? {
@@ -575,7 +736,7 @@ final class TerminalCmdClickUITests: XCTestCase {
                   let expectedPath = payload["expectedPath"] as? String else {
                 return false
             }
-            setup = SetupData(expectedPath: expectedPath)
+            setup = SetupData(expectedPath: expectedPath, payload: payload)
             return true
         }
 
@@ -589,13 +750,17 @@ final class TerminalCmdClickUITests: XCTestCase {
 
     private func runCommand(
         action: String,
+        additionalPayload: [String: Any] = [:],
         timeout: TimeInterval = 10.0
     ) throws -> [String: Any] {
-        let commandID = UUID().uuidString
-        let request: [String: Any] = [
-            "id": commandID,
+        var request: [String: Any] = [
+            "id": UUID().uuidString,
             "action": action,
         ]
+        for (key, value) in additionalPayload {
+            request[key] = value
+        }
+        let commandID = request["id"] as! String
         let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
         try data.write(to: URL(fileURLWithPath: commandPath))
 

@@ -3111,6 +3111,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
         }
 
+        func pointForTokenColumnOffset(_ offset: Int, in terminalPanel: TerminalPanel) -> NSPoint? {
+            guard let selectionStart = pointFromPayload("tokenSelectionStartInTerminal", in: terminalPanel),
+                  let tokenCellMetrics = tokenPointPayload?["tokenCellMetrics"] as? [String: Any],
+                  let cellWidth = tokenCellMetrics["cellWidth"] as? Double else {
+                return nil
+            }
+
+            let unclampedX = selectionStart.x + (CGFloat(offset) * CGFloat(cellWidth))
+            let clampedX = min(max(unclampedX, 1), max(terminalPanel.hostedView.bounds.width - 1, 1))
+            return NSPoint(x: clampedX, y: selectionStart.y)
+        }
+
+        func commandPoint(
+            from command: [String: Any],
+            defaultPayloadKey: String,
+            in terminalPanel: TerminalPanel
+        ) -> NSPoint? {
+            if let tokenColumnOffset = command["tokenColumnOffset"] as? Int {
+                return pointForTokenColumnOffset(tokenColumnOffset, in: terminalPanel)
+            }
+            if let tokenColumnOffset = command["tokenColumnOffset"] as? NSNumber {
+                return pointForTokenColumnOffset(tokenColumnOffset.intValue, in: terminalPanel)
+            }
+            return pointFromPayload(defaultPayloadKey, in: terminalPanel)
+        }
+
         func loadCommand(at path: String) -> [String: Any]? {
             let url = URL(fileURLWithPath: path)
             guard let data = try? Data(contentsOf: url),
@@ -3308,8 +3334,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
             switch action {
             case "hover_token":
-                guard let hitPoint = pointFromPayload("tokenHitPointInTerminal", in: terminalPanel) else {
-                    payload["lastCommandError"] = "Missing token hit point"
+                guard let hitPoint = commandPoint(
+                    from: command,
+                    defaultPayloadKey: "tokenHitPointInTerminal",
+                    in: terminalPanel
+                ) else {
+                    payload["lastCommandError"] = "Missing command point"
                     break
                 }
 
@@ -3326,8 +3356,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
 
             case "cmd_click_token":
-                guard let hitPoint = pointFromPayload("tokenHitPointInTerminal", in: terminalPanel) else {
-                    payload["lastCommandError"] = "Missing token hit point"
+                guard let hitPoint = commandPoint(
+                    from: command,
+                    defaultPayloadKey: "tokenHitPointInTerminal",
+                    in: terminalPanel
+                ) else {
+                    payload["lastCommandError"] = "Missing command point"
                     break
                 }
 
@@ -3373,8 +3407,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 additionalPayload: payload
             )
             lastHandledCommandID = commandID
-            resolved = true
-            cleanup()
         }
 
         @MainActor
