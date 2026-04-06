@@ -213,7 +213,7 @@ final class CommandPaletteKeyboardNavigationTests: XCTestCase {
         )
     }
 
-    func testControlLetterNavigationSupportsPrintableAndControlChars() {
+    func testControlLetterNavigationSupportsPrintableAndControlCharsForNPOnly() {
         XCTAssertEqual(
             commandPaletteSelectionDeltaForKeyboardNavigation(
                 flags: [.control],
@@ -246,37 +246,36 @@ final class CommandPaletteKeyboardNavigationTests: XCTestCase {
             ),
             -1
         )
-        XCTAssertEqual(
+    }
+
+    func testDoesNotTreatControlJKAsPaletteNavigation() {
+        XCTAssertNil(
             commandPaletteSelectionDeltaForKeyboardNavigation(
                 flags: [.control],
                 chars: "j",
                 keyCode: 38
-            ),
-            1
+            )
         )
-        XCTAssertEqual(
+        XCTAssertNil(
             commandPaletteSelectionDeltaForKeyboardNavigation(
                 flags: [.control],
                 chars: "\u{0a}",
                 keyCode: 38
-            ),
-            1
+            )
         )
-        XCTAssertEqual(
+        XCTAssertNil(
             commandPaletteSelectionDeltaForKeyboardNavigation(
                 flags: [.control],
                 chars: "k",
                 keyCode: 40
-            ),
-            -1
+            )
         )
-        XCTAssertEqual(
+        XCTAssertNil(
             commandPaletteSelectionDeltaForKeyboardNavigation(
                 flags: [.control],
                 chars: "\u{0b}",
                 keyCode: 40
-            ),
-            -1
+            )
         )
     }
 
@@ -300,6 +299,37 @@ final class CommandPaletteKeyboardNavigationTests: XCTestCase {
                 flags: [.control],
                 chars: "x",
                 keyCode: 7
+            )
+        )
+    }
+
+    func testInlineTextHandlingDisablesPaletteSelectionNavigationRouting() {
+        XCTAssertTrue(
+            shouldRouteCommandPaletteSelectionNavigation(
+                delta: -1,
+                isInteractive: true,
+                usesInlineTextHandling: false
+            )
+        )
+        XCTAssertFalse(
+            shouldRouteCommandPaletteSelectionNavigation(
+                delta: -1,
+                isInteractive: true,
+                usesInlineTextHandling: true
+            )
+        )
+        XCTAssertFalse(
+            shouldRouteCommandPaletteSelectionNavigation(
+                delta: nil,
+                isInteractive: true,
+                usesInlineTextHandling: false
+            )
+        )
+        XCTAssertFalse(
+            shouldRouteCommandPaletteSelectionNavigation(
+                delta: 1,
+                isInteractive: false,
+                usesInlineTextHandling: false
             )
         )
     }
@@ -591,6 +621,26 @@ final class ShortcutHintModifierPolicyTests: XCTestCase {
     func testCommandHintDefaultsToEnabledWhenSettingMissing() {
         withDefaultsSuite { defaults in
             defaults.removeObject(forKey: ShortcutHintDebugSettings.showHintsOnCommandHoldKey)
+
+            XCTAssertTrue(ShortcutHintModifierPolicy.shouldShowHints(for: [.command], defaults: defaults))
+            XCTAssertFalse(ShortcutHintModifierPolicy.shouldShowHints(for: [.control], defaults: defaults))
+        }
+    }
+
+    func testShortcutHintStaysCommandOnlyWhenWorkspaceShortcutIsCustomized() {
+        let action = KeyboardShortcutSettings.Action.selectWorkspaceByNumber
+        let originalShortcut = KeyboardShortcutSettings.shortcut(for: action)
+        defer {
+            KeyboardShortcutSettings.setShortcut(originalShortcut, for: action)
+        }
+
+        KeyboardShortcutSettings.setShortcut(
+            StoredShortcut(key: "1", command: false, shift: false, option: false, control: true),
+            for: action
+        )
+
+        withDefaultsSuite { defaults in
+            defaults.set(true, forKey: ShortcutHintDebugSettings.showHintsOnCommandHoldKey)
 
             XCTAssertTrue(ShortcutHintModifierPolicy.shouldShowHints(for: [.command], defaults: defaults))
             XCTAssertFalse(ShortcutHintModifierPolicy.shouldShowHints(for: [.control], defaults: defaults))
