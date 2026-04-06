@@ -42,7 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: "0"
-      CMUX_REMOTE_DEBUG_LOG: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

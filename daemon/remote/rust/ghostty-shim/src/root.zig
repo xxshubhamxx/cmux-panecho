@@ -1,5 +1,6 @@
 const std = @import("std");
 const ghostty_vt = @import("ghostty-vt");
+const testing = std.testing;
 
 const Allocator = std.mem.Allocator;
 
@@ -9,16 +10,18 @@ const Handle = struct {
     stream: ghostty_vt.ReadonlyStream,
 
     fn init(alloc: Allocator, cols: u16, rows: u16, max_scrollback: usize) !Handle {
-        var terminal = try ghostty_vt.Terminal.init(alloc, .{
+        var handle: Handle = undefined;
+        handle.alloc = alloc;
+        handle.terminal = try ghostty_vt.Terminal.init(alloc, .{
             .cols = @max(@as(u16, 2), cols),
             .rows = @max(@as(u16, 1), rows),
             .max_scrollback = max_scrollback,
         });
-        return .{
-            .alloc = alloc,
-            .stream = terminal.vtStream(),
-            .terminal = terminal,
-        };
+
+        // The readonly stream stores a pointer to the terminal, so it must be
+        // created from the terminal in its final storage location.
+        handle.stream = handle.terminal.vtStream();
+        return handle;
     }
 
     fn deinit(self: *Handle) void {
@@ -119,4 +122,11 @@ fn dumpOrEmpty(screen: *const ghostty_vt.Screen, alloc: Allocator, point: ghostt
         error.UnknownPoint => alloc.dupe(u8, ""),
         else => err,
     };
+}
+
+test "Handle.init keeps vt stream bound to stored terminal" {
+    var handle = try Handle.init(testing.allocator, 80, 24, 1_000);
+    defer handle.deinit();
+
+    try testing.expectEqual(@intFromPtr(&handle.terminal), @intFromPtr(handle.stream.handler.terminal));
 }
