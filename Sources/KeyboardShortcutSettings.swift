@@ -528,18 +528,15 @@ final class SystemWideHotkeyController {
     }
 
     private func matchesShortcut(_ event: CGEvent) -> Bool {
-        let eventModifiers = StoredShortcut.normalizedModifierFlags(
-            from: NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
-        )
-        guard eventModifiers == shortcut.modifierFlags else { return false }
-
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        if let expectedKeyCode = shortcut.expectedKeyCode {
-            return keyCode == expectedKeyCode
-        }
+        let eventModifiers = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
+        let eventCharacter = NSEvent(cgEvent: event)?.charactersIgnoringModifiers
 
-        guard let event = NSEvent(cgEvent: event) else { return false }
-        return shortcut.matches(event: event)
+        return shortcut.matches(
+            keyCode: keyCode,
+            modifierFlags: eventModifiers,
+            eventCharacter: eventCharacter
+        )
     }
 
     private func toggleApplicationVisibility() {
@@ -632,66 +629,6 @@ struct StoredShortcut: Codable, Equatable {
         command || option || control
     }
 
-    var expectedKeyCode: UInt16? {
-        switch key {
-        case "a": return 0
-        case "s": return 1
-        case "d": return 2
-        case "f": return 3
-        case "h": return 4
-        case "g": return 5
-        case "z": return 6
-        case "x": return 7
-        case "c": return 8
-        case "v": return 9
-        case "b": return 11
-        case "q": return 12
-        case "w": return 13
-        case "e": return 14
-        case "r": return 15
-        case "y": return 16
-        case "t": return 17
-        case "1": return 18
-        case "2": return 19
-        case "3": return 20
-        case "4": return 21
-        case "6": return 22
-        case "5": return 23
-        case "=": return 24
-        case "9": return 25
-        case "7": return 26
-        case "-": return 27
-        case "8": return 28
-        case "0": return 29
-        case "]": return 30
-        case "o": return 31
-        case "u": return 32
-        case "[": return 33
-        case "i": return 34
-        case "p": return 35
-        case "\r": return 36
-        case "l": return 37
-        case "j": return 38
-        case "'": return 39
-        case "k": return 40
-        case ";": return 41
-        case "\\": return 42
-        case ",": return 43
-        case "/": return 44
-        case "n": return 45
-        case "m": return 46
-        case ".": return 47
-        case "\t": return 48
-        case "`": return 50
-        case "←": return 123
-        case "→": return 124
-        case "↓": return 125
-        case "↑": return 126
-        default:
-            return nil
-        }
-    }
-
     var keyEquivalent: KeyEquivalent? {
         switch key {
         case "←":
@@ -777,16 +714,93 @@ struct StoredShortcut: Codable, Equatable {
 
     static func normalizedModifierFlags(from flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
         flags.intersection(.deviceIndependentFlagsMask)
-            .subtracting([.numericPad, .function])
+            .subtracting([.numericPad, .function, .capsLock])
     }
 
-    func matches(event: NSEvent) -> Bool {
-        StoredShortcut.from(event: event) == self
+    func matches(
+        event: NSEvent,
+        layoutCharacterProvider: (UInt16, NSEvent.ModifierFlags) -> String? = KeyboardLayout.character(forKeyCode:modifierFlags:)
+    ) -> Bool {
+        matches(
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags,
+            eventCharacter: event.charactersIgnoringModifiers,
+            layoutCharacterProvider: layoutCharacterProvider
+        )
+    }
+
+    func matches(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        eventCharacter: String?,
+        layoutCharacterProvider: (UInt16, NSEvent.ModifierFlags) -> String? = KeyboardLayout.character(forKeyCode:modifierFlags:)
+    ) -> Bool {
+        let flags = StoredShortcut.normalizedModifierFlags(from: modifierFlags)
+        guard flags == self.modifierFlags else { return false }
+
+        let shortcutKey = key.lowercased()
+        if shortcutKey == "\r" {
+            return keyCode == 36 || keyCode == 76
+        }
+
+        if StoredShortcut.shortcutCharacterMatches(
+            eventCharacter: eventCharacter,
+            shortcutKey: shortcutKey,
+            applyShiftSymbolNormalization: flags.contains(.shift),
+            eventKeyCode: keyCode
+        ) {
+            return true
+        }
+
+        let hasEventChars = !(eventCharacter?.isEmpty ?? true)
+        let eventCharsAreASCII = eventCharacter?.allSatisfy(\.isASCII) ?? true
+        if hasEventChars,
+           eventCharsAreASCII,
+           flags.contains(.command),
+           !flags.contains(.control),
+           StoredShortcut.shouldRequireCharacterMatchForCommandShortcut(shortcutKey: shortcutKey) {
+            return false
+        }
+
+        let layoutCharacter = layoutCharacterProvider(keyCode, modifierFlags)
+        if StoredShortcut.shortcutCharacterMatches(
+            eventCharacter: layoutCharacter,
+            shortcutKey: shortcutKey,
+            applyShiftSymbolNormalization: false,
+            eventKeyCode: keyCode
+        ) {
+            return true
+        }
+
+        let allowANSIKeyCodeFallback = flags.contains(.control)
+            || (flags.contains(.command)
+                && !flags.contains(.control)
+                && (
+                    !StoredShortcut.shouldRequireCharacterMatchForCommandShortcut(shortcutKey: shortcutKey)
+                        || (hasEventChars && !eventCharsAreASCII)
+                        || (!hasEventChars && (layoutCharacter?.isEmpty ?? true))
+                ))
+        if allowANSIKeyCodeFallback,
+           let expectedKeyCode = StoredShortcut.keyCodeForShortcutKey(shortcutKey) {
+            return keyCode == expectedKeyCode
+        }
+
+        return false
     }
 
     private static func storedKey(from event: NSEvent) -> String? {
+        storedKey(
+            keyCode: event.keyCode,
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers
+        )
+    }
+
+    private static func storedKey(
+        keyCode: UInt16,
+        charactersIgnoringModifiers: String?
+    ) -> String? {
         // Prefer keyCode mapping so shifted symbol keys (e.g. "}") record as "]".
-        switch event.keyCode {
+        switch keyCode {
         case 123: return "←" // left arrow
         case 124: return "→" // right arrow
         case 125: return "↓" // down arrow
@@ -808,7 +822,7 @@ struct StoredShortcut: Codable, Equatable {
             break
         }
 
-        guard let chars = event.charactersIgnoringModifiers?.lowercased(),
+        guard let chars = charactersIgnoringModifiers?.lowercased(),
               let char = chars.first else {
             return nil
         }
@@ -818,6 +832,120 @@ struct StoredShortcut: Codable, Equatable {
             return String(char)
         }
         return nil
+    }
+
+    static func normalizedShortcutEventCharacter(
+        _ eventCharacter: String,
+        applyShiftSymbolNormalization: Bool,
+        eventKeyCode: UInt16
+    ) -> String {
+        let lowered = eventCharacter.lowercased()
+        guard applyShiftSymbolNormalization else { return lowered }
+
+        switch lowered {
+        case "{": return "["
+        case "}": return "]"
+        case "<": return eventKeyCode == 43 ? "," : lowered // kVK_ANSI_Comma
+        case ">": return eventKeyCode == 47 ? "." : lowered // kVK_ANSI_Period
+        case "?": return "/"
+        case ":": return ";"
+        case "\"": return "'"
+        case "|": return "\\"
+        case "~": return "`"
+        case "+": return "="
+        case "_": return "-"
+        case "!": return eventKeyCode == 18 ? "1" : lowered // kVK_ANSI_1
+        case "@": return eventKeyCode == 19 ? "2" : lowered // kVK_ANSI_2
+        case "#": return eventKeyCode == 20 ? "3" : lowered // kVK_ANSI_3
+        case "$": return eventKeyCode == 21 ? "4" : lowered // kVK_ANSI_4
+        case "%": return eventKeyCode == 23 ? "5" : lowered // kVK_ANSI_5
+        case "^": return eventKeyCode == 22 ? "6" : lowered // kVK_ANSI_6
+        case "&": return eventKeyCode == 26 ? "7" : lowered // kVK_ANSI_7
+        case "*": return eventKeyCode == 28 ? "8" : lowered // kVK_ANSI_8
+        case "(": return eventKeyCode == 25 ? "9" : lowered // kVK_ANSI_9
+        case ")": return eventKeyCode == 29 ? "0" : lowered // kVK_ANSI_0
+        default: return lowered
+        }
+    }
+
+    private static func shouldRequireCharacterMatchForCommandShortcut(shortcutKey: String) -> Bool {
+        guard shortcutKey.count == 1, let scalar = shortcutKey.unicodeScalars.first else {
+            return false
+        }
+        return CharacterSet.letters.contains(scalar)
+    }
+
+    private static func shortcutCharacterMatches(
+        eventCharacter: String?,
+        shortcutKey: String,
+        applyShiftSymbolNormalization: Bool,
+        eventKeyCode: UInt16
+    ) -> Bool {
+        guard let eventCharacter, !eventCharacter.isEmpty else { return false }
+        return normalizedShortcutEventCharacter(
+            eventCharacter,
+            applyShiftSymbolNormalization: applyShiftSymbolNormalization,
+            eventKeyCode: eventKeyCode
+        ) == shortcutKey
+    }
+
+    private static func keyCodeForShortcutKey(_ key: String) -> UInt16? {
+        switch key {
+        case "a": return 0
+        case "s": return 1
+        case "d": return 2
+        case "f": return 3
+        case "h": return 4
+        case "g": return 5
+        case "z": return 6
+        case "x": return 7
+        case "c": return 8
+        case "v": return 9
+        case "b": return 11
+        case "q": return 12
+        case "w": return 13
+        case "e": return 14
+        case "r": return 15
+        case "y": return 16
+        case "t": return 17
+        case "1": return 18
+        case "2": return 19
+        case "3": return 20
+        case "4": return 21
+        case "6": return 22
+        case "5": return 23
+        case "=": return 24
+        case "9": return 25
+        case "7": return 26
+        case "-": return 27
+        case "8": return 28
+        case "0": return 29
+        case "]": return 30
+        case "o": return 31
+        case "u": return 32
+        case "[": return 33
+        case "i": return 34
+        case "p": return 35
+        case "l": return 37
+        case "j": return 38
+        case "'": return 39
+        case "k": return 40
+        case ";": return 41
+        case "\\": return 42
+        case ",": return 43
+        case "/": return 44
+        case "n": return 45
+        case "m": return 46
+        case ".": return 47
+        case "\t": return 48
+        case "`": return 50
+        case "←": return 123
+        case "→": return 124
+        case "↓": return 125
+        case "↑": return 126
+        default:
+            return nil
+        }
     }
 }
 

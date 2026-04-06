@@ -195,6 +195,70 @@ final class WorkspaceRenameShortcutDefaultsTests: XCTestCase {
     }
 }
 
+final class StoredShortcutMatchingTests: XCTestCase {
+    func testMatchingIgnoresCapsLock() {
+        let shortcut = StoredShortcut(key: "q", command: true, shift: false, option: false, control: false)
+
+        XCTAssertTrue(
+            shortcut.matches(
+                keyCode: 12,
+                modifierFlags: [.command, .capsLock],
+                eventCharacter: "q",
+                layoutCharacterProvider: { _, _ in nil }
+            )
+        )
+    }
+
+    func testMatchingUsesRecordedCharacterForRemappedCommandLetter() {
+        let shortcut = StoredShortcut(key: "q", command: true, shift: false, option: false, control: false)
+
+        XCTAssertTrue(
+            shortcut.matches(
+                keyCode: 13,
+                modifierFlags: [.command],
+                eventCharacter: "q",
+                layoutCharacterProvider: { _, _ in nil }
+            )
+        )
+        XCTAssertFalse(
+            StoredShortcut(key: "w", command: true, shift: false, option: false, control: false).matches(
+                keyCode: 13,
+                modifierFlags: [.command],
+                eventCharacter: "q",
+                layoutCharacterProvider: { _, _ in nil }
+            )
+        )
+    }
+
+    func testMatchingTreatsKeypadEnterAsReturn() {
+        let shortcut = StoredShortcut(key: "\r", command: true, shift: false, option: false, control: false)
+
+        XCTAssertTrue(
+            shortcut.matches(
+                keyCode: 76,
+                modifierFlags: [.command],
+                eventCharacter: "\r",
+                layoutCharacterProvider: { _, _ in nil }
+            )
+        )
+    }
+
+    func testMatchingFallsBackToLayoutCharacterForNonLatinInput() {
+        let shortcut = StoredShortcut(key: "t", command: true, shift: false, option: false, control: false)
+
+        XCTAssertTrue(
+            shortcut.matches(
+                keyCode: 17,
+                modifierFlags: [.command],
+                eventCharacter: "е",
+                layoutCharacterProvider: { keyCode, _ in
+                    keyCode == 17 ? "t" : nil
+                }
+            )
+        )
+    }
+}
+
 
 final class WorkspaceShortcutMapperTests: XCTestCase {
     func testCommandNineMapsToLastWorkspaceIndex() {
