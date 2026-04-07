@@ -2210,9 +2210,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     struct PersistedWindowGeometry: Codable, Sendable {
+        struct StoredGeometry: Codable, Sendable {
+            let frame: SessionRectSnapshot
+            let display: SessionDisplaySnapshot?
+        }
+
         let version: Int
         let frame: SessionRectSnapshot
         let display: SessionDisplaySnapshot?
+        let displayConfigurations: [String: StoredGeometry]?
+
+        init(
+            version: Int,
+            frame: SessionRectSnapshot,
+            display: SessionDisplaySnapshot?,
+            displayConfigurations: [String: StoredGeometry]? = nil
+        ) {
+            self.version = version
+            self.frame = frame
+            self.display = display
+            self.displayConfigurations = displayConfigurations
+        }
+
+        var storedGeometry: StoredGeometry {
+            StoredGeometry(frame: frame, display: display)
+        }
     }
 
     nonisolated static let persistedWindowGeometrySchemaVersion = 2
@@ -2220,6 +2242,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private nonisolated static let legacyPersistedWindowGeometryDefaultsKeys = [
         "cmux.session.lastWindowGeometry.v1"
     ]
+    private nonisolated static let minimumVisibleRestoredWindowWidth: CGFloat = 480
+    private nonisolated static let minimumVisibleRestoredWindowHeight: CGFloat = 320
+    private nonisolated static let defaultRestoredWindowSize = CGSize(width: 960, height: 720)
+    private nonisolated static let defaultRestoredWindowMargin: CGFloat = 80
+    private nonisolated static let mainWindowMinimumContentSize = NSSize(
+        width: CGFloat(SessionPersistencePolicy.minimumWindowWidth),
+        height: CGFloat(SessionPersistencePolicy.minimumWindowHeight)
+    )
 
     weak var tabManager: TabManager?
     weak var notificationStore: TerminalNotificationStore?
@@ -2233,6 +2263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var shortcutMonitor: Any?
     private var shortcutDefaultsObserver: NSObjectProtocol?
     private var menuBarVisibilityObserver: NSObjectProtocol?
+    private var screenParametersObserver: NSObjectProtocol?
     private var splitButtonTooltipRefreshScheduled = false
     private struct PendingConfiguredShortcutChord {
         let firstStroke: ShortcutStroke
@@ -2584,6 +2615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         titlebarAccessoryController.start()
         windowDecorationsController.start()
         installMainWindowKeyObserver()
+        installScreenParametersObserver()
         refreshGhosttyGotoSplitShortcuts()
         installGhosttyConfigObserver()
         installWindowResponderSwizzles()
@@ -3738,13 +3770,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return payload
     }
 
+    private func persistedWindowGeometryEntry(
+        defaults: UserDefaults = .standard,
+        availableDisplays: [SessionDisplayGeometry]? = nil,
+        matchingOnly: Bool = false
+    ) -> PersistedWindowGeometry.StoredGeometry? {
+        guard let payload = persistedWindowGeometry(defaults: defaults) else {
+            return nil
+        }
+        let fingerprint = Self.displayConfigurationFingerprint(
+            for: availableDisplays ?? currentDisplayGeometries().available
+        )
+        return Self.persistedWindowGeometryEntry(
+            from: payload,
+            displayConfigurationFingerprint: fingerprint,
+            matchingOnly: matchingOnly
+        )
+    }
+
     private func persistWindowGeometry(
         frame: SessionRectSnapshot?,
         display: SessionDisplaySnapshot?,
         defaults: UserDefaults = .standard
     ) {
         Self.removeLegacyPersistedWindowGeometry(defaults: defaults)
-        guard let data = Self.encodedPersistedWindowGeometryData(frame: frame, display: display) else {
+        let existingDisplayConfigurations = persistedWindowGeometry(defaults: defaults)?.displayConfigurations
+        let displayConfigurationFingerprint = Self.displayConfigurationFingerprint(
+            for: currentDisplayGeometries().available
+        )
+        guard let data = Self.encodedPersistedWindowGeometryData(
+            frame: frame,
+            display: display,
+            displayConfigurationFingerprint: displayConfigurationFingerprint,
+            existingDisplayConfigurations: existingDisplayConfigurations
+        ) else {
             return
         }
         defaults.set(data, forKey: Self.persistedWindowGeometryDefaultsKey)
@@ -3752,13 +3811,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private nonisolated static func encodedPersistedWindowGeometryData(
         frame: SessionRectSnapshot?,
-        display: SessionDisplaySnapshot?
+        display: SessionDisplaySnapshot?,
+        displayConfigurationFingerprint: String? = nil,
+        existingDisplayConfigurations: [String: PersistedWindowGeometry.StoredGeometry]? = nil
     ) -> Data? {
         guard let frame else { return nil }
+        var displayConfigurations = existingDisplayConfigurations ?? [:]
+        if let displayConfigurationFingerprint, !displayConfigurationFingerprint.isEmpty {
+            displayConfigurations[displayConfigurationFingerprint] = PersistedWindowGeometry.StoredGeometry(
+                frame: frame,
+                display: display
+            )
+        }
         let payload = PersistedWindowGeometry(
             version: persistedWindowGeometrySchemaVersion,
             frame: frame,
-            display: display
+            display: display,
+            displayConfigurations: displayConfigurations.isEmpty ? nil : displayConfigurations
         )
         return try? JSONEncoder().encode(payload)
     }
@@ -3785,6 +3854,143 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
     }
 
+    private func installScreenParametersObserver() {
+        guard screenParametersObserver == nil else { return }
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleScreenParametersDidChange()
+        }
+    }
+
+    private func handleScreenParametersDidChange() {
+        let displays = currentDisplayGeometries()
+        let primaryWindow = preferredPrimaryMainWindowForGeometryRestore()
+        let matchingPersistedGeometry = persistedWindowGeometryEntry(
+            availableDisplays: displays.available,
+            matchingOnly: true
+        )
+
+        for context in mainWindowContexts.values {
+            guard let window = resolvedWindow(for: context),
+                  shouldReconcileMainWindowFrameOnScreenParameterChange(window) else {
+                continue
+            }
+
+            let resolvedFrame: CGRect? = {
+                if window === primaryWindow, let matchingPersistedGeometry {
+                    return Self.resolvedWindowFrame(
+                        from: matchingPersistedGeometry.frame,
+                        display: matchingPersistedGeometry.display,
+                        availableDisplays: displays.available,
+                        fallbackDisplay: displays.fallback
+                    )
+                }
+                return Self.resolvedWindowFrame(
+                    from: SessionRectSnapshot(window.frame),
+                    display: nil,
+                    availableDisplays: displays.available,
+                    fallbackDisplay: displays.fallback
+                )
+            }()
+
+            guard let resolvedFrame else { continue }
+            guard !Self.rectApproximatelyEqual(window.frame, resolvedFrame) else { continue }
+
+            applyValidatedMainWindowFrame(resolvedFrame, to: window, display: true)
+#if DEBUG
+            dlog(
+                "window.frame.reconciled reason=screenParameters window={\(debugWindowToken(window))} " +
+                    "frame={\(debugNSRectDescription(window.frame))}"
+            )
+#endif
+        }
+
+        if let primaryWindow {
+            persistWindowGeometry(from: primaryWindow)
+        }
+    }
+
+    private func preferredPrimaryMainWindowForGeometryRestore() -> NSWindow? {
+        if let keyWindow = NSApp.keyWindow,
+           let context = contextForMainTerminalWindow(keyWindow) {
+            return resolvedWindow(for: context)
+        }
+        if let mainWindow = NSApp.mainWindow,
+           let context = contextForMainTerminalWindow(mainWindow) {
+            return resolvedWindow(for: context)
+        }
+        if let activeManager = tabManager,
+           let context = mainWindowContexts.values.first(where: { $0.tabManager === activeManager }) {
+            return resolvedWindow(for: context)
+        }
+        return mainWindowContexts.values.compactMap { resolvedWindow(for: $0) }.first
+    }
+
+    private func shouldReconcileMainWindowFrameOnScreenParameterChange(_ window: NSWindow) -> Bool {
+        guard !window.isMiniaturized else { return false }
+        guard !window.styleMask.contains(.fullScreen) else { return false }
+        return true
+    }
+
+    private func enforceMainWindowMinimumSize(on window: NSWindow) {
+        let contentMinSize = Self.mainWindowMinimumContentSize
+        window.contentMinSize = contentMinSize
+        let minimumFrameSize = window.frameRect(
+            forContentRect: NSRect(origin: .zero, size: contentMinSize)
+        ).size
+        if window.minSize.width < minimumFrameSize.width || window.minSize.height < minimumFrameSize.height {
+            window.minSize = NSSize(
+                width: max(window.minSize.width, minimumFrameSize.width),
+                height: max(window.minSize.height, minimumFrameSize.height)
+            )
+        }
+    }
+
+    private func applyValidatedMainWindowFrame(
+        _ frame: CGRect,
+        to window: NSWindow,
+        display: Bool
+    ) {
+        enforceMainWindowMinimumSize(on: window)
+
+        let minimumFrameSize = window.frameRect(
+            forContentRect: NSRect(origin: .zero, size: Self.mainWindowMinimumContentSize)
+        ).size
+        var targetFrame = frame.standardized
+        targetFrame.size.width = max(targetFrame.width, minimumFrameSize.width)
+        targetFrame.size.height = max(targetFrame.height, minimumFrameSize.height)
+
+        if let screen = Self.screenForConstrainingFrame(targetFrame, currentWindow: window) {
+            targetFrame = window.constrainFrameRect(targetFrame, to: screen)
+            if targetFrame.width < minimumFrameSize.width || targetFrame.height < minimumFrameSize.height {
+                targetFrame.size.width = max(targetFrame.width, minimumFrameSize.width)
+                targetFrame.size.height = max(targetFrame.height, minimumFrameSize.height)
+                targetFrame = window.constrainFrameRect(targetFrame, to: screen)
+            }
+        }
+
+        window.setFrame(targetFrame.integral, display: display, animate: false)
+    }
+
+    private nonisolated static func screenForConstrainingFrame(
+        _ frame: CGRect,
+        currentWindow: NSWindow?
+    ) -> NSScreen? {
+        let bestScreen = NSScreen.screens.max { lhs, rhs in
+            intersectionArea(frame, lhs.visibleFrame) < intersectionArea(frame, rhs.visibleFrame)
+        }
+        if let bestScreen, intersectionArea(frame, bestScreen.visibleFrame) > 0 {
+            return bestScreen
+        }
+        if let currentScreen = currentWindow?.screen {
+            return currentScreen
+        }
+        return NSScreen.main ?? NSScreen.screens.first
+    }
+
     private func currentDisplayGeometries() -> (
         available: [SessionDisplayGeometry],
         fallback: SessionDisplayGeometry?
@@ -3804,6 +4010,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
         }
         return (available, fallback)
+    }
+
+    nonisolated static func persistedWindowGeometryEntry(
+        from payload: PersistedWindowGeometry,
+        displayConfigurationFingerprint: String?,
+        matchingOnly: Bool = false
+    ) -> PersistedWindowGeometry.StoredGeometry? {
+        if let displayConfigurationFingerprint,
+           let matching = payload.displayConfigurations?[displayConfigurationFingerprint] {
+            return matching
+        }
+        return matchingOnly ? nil : payload.storedGeometry
+    }
+
+    nonisolated static func displayConfigurationFingerprint(
+        for displays: [SessionDisplayGeometry]
+    ) -> String? {
+        guard !displays.isEmpty else { return nil }
+        let components = displays.map { display in
+            [
+                display.displayID.map(String.init) ?? "nil",
+                rectFingerprintComponent(display.frame),
+                rectFingerprintComponent(display.visibleFrame),
+            ].joined(separator: "@")
+        }
+        return components.sorted().joined(separator: "|")
+    }
+
+    private nonisolated static func rectFingerprintComponent(_ rect: CGRect) -> String {
+        let standardized = rect.standardized
+        return [
+            standardized.origin.x,
+            standardized.origin.y,
+            standardized.width,
+            standardized.height,
+        ]
+        .map { String(Int(($0 * 2).rounded())) }
+        .joined(separator: ",")
     }
 
     private func attemptStartupSessionRestoreIfNeeded(primaryWindow: NSWindow) {
@@ -3830,7 +4074,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
         } else {
             let displays = currentDisplayGeometries()
-            let fallbackGeometry = persistedWindowGeometry()
+            let fallbackGeometry = persistedWindowGeometryEntry(availableDisplays: displays.available)
             if let restoredFrame = Self.resolvedStartupPrimaryWindowFrame(
                 primarySnapshot: nil,
                 fallbackFrame: fallbackGeometry?.frame,
@@ -3838,7 +4082,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 availableDisplays: displays.available,
                 fallbackDisplay: displays.fallback
             ) {
-                primaryWindow.setFrame(restoredFrame, display: true)
+                applyValidatedMainWindowFrame(restoredFrame, to: primaryWindow, display: true)
             }
         }
 
@@ -3897,7 +4141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         context.sidebarSelectionState.selection = snapshot.sidebar.selection.sidebarSelection
 
         if let restoredFrame = resolvedWindowFrame(from: snapshot), let window {
-            window.setFrame(restoredFrame, display: true)
+            applyValidatedMainWindowFrame(restoredFrame, to: window, display: true)
 #if DEBUG
             dlog(
                 "session.restore.frameApplied window=\(context.windowId.uuidString.prefix(8)) " +
@@ -3948,7 +4192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         fallbackDisplay: SessionDisplayGeometry?
     ) -> CGRect? {
         guard let frameSnapshot else { return nil }
-        let frame = frameSnapshot.cgRect
+        let frame = frameSnapshot.cgRect.standardized
         guard frame.width.isFinite,
               frame.height.isFinite,
               frame.origin.x.isFinite,
@@ -3958,18 +4202,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let minWidth = CGFloat(SessionPersistencePolicy.minimumWindowWidth)
         let minHeight = CGFloat(SessionPersistencePolicy.minimumWindowHeight)
-        guard frame.width >= minWidth,
-              frame.height >= minHeight else {
-            return nil
+        guard !availableDisplays.isEmpty else {
+            return CGRect(
+                x: frame.minX,
+                y: frame.minY,
+                width: max(frame.width, minWidth),
+                height: max(frame.height, minHeight)
+            )
         }
 
-        guard !availableDisplays.isEmpty else { return frame }
+        let minimumVisibleWidth = Self.minimumVisibleRestoredWindowWidth
+        let minimumVisibleHeight = max(Self.minimumVisibleRestoredWindowHeight, minHeight)
+        let fallbackTargetDisplay = fallbackDisplay ?? availableDisplays.first
+
+        if frame.width < minWidth || frame.height < minHeight {
+            guard let fallbackTargetDisplay else { return nil }
+            return fallbackFrameForInvalidRestore(
+                frame,
+                in: fallbackTargetDisplay.visibleFrame,
+                minWidth: minWidth,
+                minHeight: minHeight
+            )
+        }
 
         if let targetDisplay = display(for: displaySnapshot, in: availableDisplays) {
             if shouldPreserveExactFrame(
                 frame: frame,
                 displaySnapshot: displaySnapshot,
                 targetDisplay: targetDisplay
+            ),
+            hasSufficientVisibleFrame(
+                frame,
+                in: [targetDisplay],
+                minWidth: minWidth,
+                minHeight: minHeight,
+                minimumVisibleWidth: minimumVisibleWidth,
+                minimumVisibleHeight: minimumVisibleHeight
             ) {
                 return frame
             }
@@ -3977,12 +4245,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 frame: frame,
                 displaySnapshot: displaySnapshot,
                 targetDisplay: targetDisplay,
+                fallbackDisplay: fallbackTargetDisplay,
                 minWidth: minWidth,
-                minHeight: minHeight
+                minHeight: minHeight,
+                minimumVisibleWidth: minimumVisibleWidth,
+                minimumVisibleHeight: minimumVisibleHeight
             )
         }
 
-        if let intersectingDisplay = availableDisplays.first(where: { $0.visibleFrame.intersects(frame) }) {
+        if hasSufficientVisibleFrame(
+            frame,
+            in: availableDisplays,
+            minWidth: minWidth,
+            minHeight: minHeight,
+            minimumVisibleWidth: minimumVisibleWidth,
+            minimumVisibleHeight: minimumVisibleHeight
+        ),
+        let intersectingDisplay = bestIntersectingDisplay(for: frame, in: availableDisplays) {
             return clampFrame(
                 frame,
                 within: intersectingDisplay.visibleFrame,
@@ -3991,20 +4270,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
         }
 
-        guard let fallbackDisplay else { return frame }
-        if let sourceReference = displaySnapshot?.visibleFrame?.cgRect ?? displaySnapshot?.frame?.cgRect {
-            return remappedFrame(
+        if let sourceReference = displaySnapshot?.visibleFrame?.cgRect ?? displaySnapshot?.frame?.cgRect,
+           let fallbackTargetDisplay {
+            let remapped = remappedFrame(
                 frame,
                 from: sourceReference,
-                to: fallbackDisplay.visibleFrame,
+                to: fallbackTargetDisplay.visibleFrame,
+                minWidth: minWidth,
+                minHeight: minHeight
+            )
+            if hasSufficientVisibleFrame(
+                remapped,
+                in: [fallbackTargetDisplay],
+                minWidth: minWidth,
+                minHeight: minHeight,
+                minimumVisibleWidth: minimumVisibleWidth,
+                minimumVisibleHeight: minimumVisibleHeight
+            ) {
+                return remapped
+            }
+            return fallbackFrameForInvalidRestore(
+                frame,
+                in: fallbackTargetDisplay.visibleFrame,
                 minWidth: minWidth,
                 minHeight: minHeight
             )
         }
 
-        return centeredFrame(
+        guard let fallbackTargetDisplay else { return nil }
+        return fallbackFrameForInvalidRestore(
             frame,
-            in: fallbackDisplay.visibleFrame,
+            in: fallbackTargetDisplay.visibleFrame,
             minWidth: minWidth,
             minHeight: minHeight
         )
@@ -4014,10 +4310,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         frame: CGRect,
         displaySnapshot: SessionDisplaySnapshot?,
         targetDisplay: SessionDisplayGeometry,
+        fallbackDisplay: SessionDisplayGeometry?,
         minWidth: CGFloat,
-        minHeight: CGFloat
+        minHeight: CGFloat,
+        minimumVisibleWidth: CGFloat,
+        minimumVisibleHeight: CGFloat
     ) -> CGRect {
-        if targetDisplay.visibleFrame.intersects(frame) {
+        if hasSufficientVisibleFrame(
+            frame,
+            in: [targetDisplay],
+            minWidth: minWidth,
+            minHeight: minHeight,
+            minimumVisibleWidth: minimumVisibleWidth,
+            minimumVisibleHeight: minimumVisibleHeight
+        ) {
             // Preserve the user's exact frame when enough of the top of the window
             // remains reachable on-screen; only clamp when the saved frame would
             // reopen with an inaccessible titlebar/top strip.
@@ -4036,21 +4342,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if let sourceReference = displaySnapshot?.visibleFrame?.cgRect ?? displaySnapshot?.frame?.cgRect {
-            return remappedFrame(
+            let remapped = remappedFrame(
                 frame,
                 from: sourceReference,
                 to: targetDisplay.visibleFrame,
                 minWidth: minWidth,
                 minHeight: minHeight
             )
+            if hasSufficientVisibleFrame(
+                remapped,
+                in: [targetDisplay],
+                minWidth: minWidth,
+                minHeight: minHeight,
+                minimumVisibleWidth: minimumVisibleWidth,
+                minimumVisibleHeight: minimumVisibleHeight
+            ) {
+                return remapped
+            }
         }
 
-        return centeredFrame(
+        let fallbackTargetDisplay = fallbackDisplay ?? targetDisplay
+        return fallbackFrameForInvalidRestore(
             frame,
-            in: targetDisplay.visibleFrame,
+            in: fallbackTargetDisplay.visibleFrame,
             minWidth: minWidth,
             minHeight: minHeight
         )
+    }
+
+    private nonisolated static func bestIntersectingDisplay(
+        for frame: CGRect,
+        in displays: [SessionDisplayGeometry]
+    ) -> SessionDisplayGeometry? {
+        let overlaps = displays.map { display -> (display: SessionDisplayGeometry, area: CGFloat) in
+            (display, intersectionArea(frame, display.visibleFrame))
+        }
+        guard let bestOverlap = overlaps.max(by: { $0.area < $1.area }),
+              bestOverlap.area > 0 else {
+            return nil
+        }
+        return bestOverlap.display
+    }
+
+    private nonisolated static func hasSufficientVisibleFrame(
+        _ frame: CGRect,
+        in displays: [SessionDisplayGeometry],
+        minWidth: CGFloat,
+        minHeight: CGFloat,
+        minimumVisibleWidth: CGFloat,
+        minimumVisibleHeight: CGFloat
+    ) -> Bool {
+        guard let visibleBounds = visibleIntersectionBounds(for: frame, in: displays) else {
+            return false
+        }
+        let requiredWidth = min(minimumVisibleWidth, max(frame.width, minWidth))
+        let requiredHeight = min(minimumVisibleHeight, max(frame.height, minHeight))
+        return visibleBounds.width >= requiredWidth && visibleBounds.height >= requiredHeight
+    }
+
+    private nonisolated static func visibleIntersectionBounds(
+        for frame: CGRect,
+        in displays: [SessionDisplayGeometry]
+    ) -> CGRect? {
+        displays.reduce(nil) { partialResult, display in
+            let intersection = frame.intersection(display.visibleFrame)
+            guard !intersection.isNull else { return partialResult }
+            return partialResult?.union(intersection) ?? intersection
+        }
+    }
+
+    private nonisolated static func fallbackFrameForInvalidRestore(
+        _ frame: CGRect,
+        in visibleFrame: CGRect,
+        minWidth: CGFloat,
+        minHeight: CGFloat
+    ) -> CGRect {
+        let preferredWidth = max(frame.width, max(Self.defaultRestoredWindowSize.width, minWidth))
+        let preferredHeight = max(frame.height, max(Self.defaultRestoredWindowSize.height, minHeight))
+        let maxWidth = max(visibleFrame.width - Self.defaultRestoredWindowMargin, minWidth)
+        let maxHeight = max(visibleFrame.height - Self.defaultRestoredWindowMargin, minHeight)
+        let defaultFrame = CGRect(
+            x: visibleFrame.midX - (min(preferredWidth, maxWidth) / 2),
+            y: visibleFrame.midY - (min(preferredHeight, maxHeight) / 2),
+            width: min(preferredWidth, maxWidth),
+            height: min(preferredHeight, maxHeight)
+        )
+        return clampFrame(defaultFrame, within: visibleFrame, minWidth: minWidth, minHeight: minHeight)
     }
 
     private nonisolated static func shouldPreserveAccessibleFrame(
@@ -4432,10 +4809,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return false
         }
 
+        let persistedDisplayConfigurations = persistedWindowGeometry()?.displayConfigurations
+        let persistedGeometryFingerprint = Self.displayConfigurationFingerprint(
+            for: currentDisplayGeometries().available
+        )
         let persistedGeometryData = snapshot.windows.first.flatMap { primaryWindow in
             Self.encodedPersistedWindowGeometryData(
                 frame: primaryWindow.frame,
-                display: primaryWindow.display
+                display: primaryWindow.display,
+                displayConfigurationFingerprint: persistedGeometryFingerprint,
+                existingDisplayConfigurations: persistedDisplayConfigurations
             )
         }
 
@@ -7088,9 +7471,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = false
         window.isMovable = false
+        enforceMainWindowMinimumSize(on: window)
         let restoredFrame = resolvedWindowFrame(from: sessionWindowSnapshot)
         if let restoredFrame {
-            window.setFrame(restoredFrame, display: false)
+            applyValidatedMainWindowFrame(restoredFrame, to: window, display: false)
         } else {
             window.center()
             // Cascade using the same algorithm as upstream Ghostty: seed from
@@ -7141,7 +7525,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         }
         if let restoredFrame {
-            window.setFrame(restoredFrame, display: true)
+            applyValidatedMainWindowFrame(restoredFrame, to: window, display: true)
 #if DEBUG
             dlog(
                 "session.restore.frameApplied window=\(windowId.uuidString.prefix(8)) " +
