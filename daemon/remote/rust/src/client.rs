@@ -2,7 +2,7 @@ use std::env;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -371,11 +371,13 @@ fn session_attach(socket_path: &str, session_id: &str) -> Result<i32, String> {
     )?;
 
     let stop = Arc::new(AtomicBool::new(false));
+    let reported_size = Arc::new(AtomicU32::new(pack_size(cols, rows)));
     let result = (|| -> Result<i32, String> {
         let raw_mode = RawModeGuard::new()?;
 
         {
             let stop = Arc::clone(&stop);
+            let reported_size = Arc::clone(&reported_size);
             let socket_path = socket_path.to_string();
             let session_id = session_id.to_string();
             let attachment_id = attachment_id.clone();
@@ -390,14 +392,13 @@ fn session_attach(socket_path: &str, session_id: &str) -> Result<i32, String> {
                     }
                     let (cols, rows) = current_size();
                     if let Ok(mut client) = UnixRpcClient::connect(&socket_path) {
-                        let _ = client.call_value(
-                            "session.resize".to_string(),
-                            json!({
-                                "session_id": session_id,
-                                "attachment_id": attachment_id,
-                                "cols": cols,
-                                "rows": rows,
-                            }),
+                        let _ = sync_attachment_size_if_needed(
+                            &mut client,
+                            &reported_size,
+                            &session_id,
+                            &attachment_id,
+                            cols,
+                            rows,
                         );
                     }
                 }
@@ -463,6 +464,15 @@ fn session_attach(socket_path: &str, session_id: &str) -> Result<i32, String> {
             if stop.load(Ordering::Relaxed) {
                 break;
             }
+            let (cols, rows) = current_size();
+            let _ = sync_attachment_size_if_needed(
+                &mut control,
+                &reported_size,
+                session_id,
+                &attachment_id,
+                cols,
+                rows,
+            );
             if !poll_stdin(200)? {
                 continue;
             }
@@ -553,6 +563,35 @@ fn current_size() -> (u16, u16) {
         }
     }
     (80, 24)
+}
+
+fn pack_size(cols: u16, rows: u16) -> u32 {
+    (u32::from(cols) << 16) | u32::from(rows)
+}
+
+fn sync_attachment_size_if_needed(
+    client: &mut UnixRpcClient,
+    reported_size: &AtomicU32,
+    session_id: &str,
+    attachment_id: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let packed = pack_size(cols, rows);
+    if reported_size.load(Ordering::Relaxed) == packed {
+        return Ok(());
+    }
+    let _ = client.call_value(
+        "session.resize".to_string(),
+        json!({
+            "session_id": session_id,
+            "attachment_id": attachment_id,
+            "cols": cols,
+            "rows": rows,
+        }),
+    )?;
+    reported_size.store(packed, Ordering::Relaxed);
+    Ok(())
 }
 
 struct RawModeGuard {
