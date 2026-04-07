@@ -18,6 +18,7 @@ enum KeyboardShortcutSettings {
         // App / window
         case openSettings
         case reloadConfiguration
+        case showHideAllWindows
         case newWindow
         case closeWindow
         case toggleFullScreen
@@ -86,6 +87,7 @@ enum KeyboardShortcutSettings {
             switch self {
             case .openSettings: return String(localized: "menu.app.settings", defaultValue: "Settings…")
             case .reloadConfiguration: return String(localized: "menu.app.reloadConfiguration", defaultValue: "Reload Configuration")
+            case .showHideAllWindows: return String(localized: "settings.globalHotkey.shortcut", defaultValue: "Show/Hide All Windows")
             case .newWindow: return String(localized: "shortcut.newWindow.label", defaultValue: "New Window")
             case .closeWindow: return String(localized: "shortcut.closeWindow.label", defaultValue: "Close Window")
             case .toggleFullScreen: return String(localized: "command.toggleFullScreen.title", defaultValue: "Toggle Full Screen")
@@ -150,6 +152,8 @@ enum KeyboardShortcutSettings {
                 return StoredShortcut(key: ",", command: true, shift: false, option: false, control: false)
             case .reloadConfiguration:
                 return StoredShortcut(key: ",", command: true, shift: true, option: false, control: false)
+            case .showHideAllWindows:
+                return StoredShortcut(key: ".", command: true, shift: false, option: false, control: false)
             case .newWindow:
                 return StoredShortcut(key: "n", command: true, shift: true, option: false, control: false)
             case .closeWindow:
@@ -282,18 +286,33 @@ enum KeyboardShortcutSettings {
         }
 
         func normalizedRecordedShortcut(_ shortcut: StoredShortcut) -> StoredShortcut? {
-            guard usesNumberedDigitMatching else { return shortcut }
-            let digitSource = shortcut.secondStroke ?? shortcut.firstStroke
-            guard let digit = Int(digitSource.key), (1...9).contains(digit) else {
+            switch self {
+            case .showHideAllWindows:
+                return Self.normalizedSystemWideHotkeyShortcut(shortcut)
+            case .selectSurfaceByNumber, .selectWorkspaceByNumber:
+                let digitSource = shortcut.secondStroke ?? shortcut.firstStroke
+                guard let digit = Int(digitSource.key), (1...9).contains(digit) else {
+                    return nil
+                }
+                var normalized = shortcut
+                if shortcut.hasChord {
+                    normalized.chordKey = "1"
+                } else {
+                    normalized.key = "1"
+                }
+                return normalized
+            default:
+                return shortcut
+            }
+        }
+
+        private static func normalizedSystemWideHotkeyShortcut(_ shortcut: StoredShortcut) -> StoredShortcut? {
+            guard !shortcut.hasChord,
+                  shortcut.hasPrimaryModifier,
+                  shortcut.carbonHotKeyRegistration != nil else {
                 return nil
             }
-            var normalized = shortcut
-            if shortcut.hasChord {
-                normalized.chordKey = "1"
-            } else {
-                normalized.key = "1"
-            }
-            return normalized
+            return shortcut
         }
     }
 
@@ -413,9 +432,11 @@ enum KeyboardShortcutSettings {
 
 enum SystemWideHotkeySettings {
     static let enabledKey = "systemWideHotkey.enabled"
-    static let shortcutKey = "systemWideHotkey.shortcut"
+    static let legacyShortcutKey = "systemWideHotkey.shortcut"
     static let defaultEnabled = false
-    static let defaultShortcut = StoredShortcut(key: ".", command: true, shift: false, option: false, control: false)
+    static let action: KeyboardShortcutSettings.Action = .showHideAllWindows
+
+    static var defaultShortcut: StoredShortcut { action.defaultShortcut }
 
     static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
         defaults.object(forKey: enabledKey) as? Bool ?? defaultEnabled
@@ -425,34 +446,58 @@ enum SystemWideHotkeySettings {
         defaults.set(enabled, forKey: enabledKey)
     }
 
-    static func shortcut(defaults: UserDefaults = .standard) -> StoredShortcut {
-        guard let data = defaults.data(forKey: shortcutKey),
-              let shortcut = try? JSONDecoder().decode(StoredShortcut.self, from: data),
-              isValid(shortcut) else {
-            return defaultShortcut
-        }
-        return shortcut
+    static func shortcut() -> StoredShortcut {
+        migrateLegacyShortcutIfNeeded()
+        return storedShortcut() ?? defaultShortcut
     }
 
-    static func setShortcut(_ shortcut: StoredShortcut, defaults: UserDefaults = .standard) {
-        guard let normalizedShortcut = normalizedRecordedShortcut(shortcut),
-              let data = try? JSONEncoder().encode(normalizedShortcut) else {
-            return
-        }
-        defaults.set(data, forKey: shortcutKey)
+    static func setShortcut(_ shortcut: StoredShortcut) {
+        migrateLegacyShortcutIfNeeded()
+        KeyboardShortcutSettings.setShortcut(shortcut, for: action)
     }
 
     static func normalizedRecordedShortcut(_ shortcut: StoredShortcut) -> StoredShortcut? {
-        isValid(shortcut) ? shortcut : nil
+        action.normalizedRecordedShortcut(shortcut)
     }
 
-    static func isValid(_ shortcut: StoredShortcut) -> Bool {
-        !shortcut.hasChord && shortcut.hasPrimaryModifier
+    static func isManagedBySettingsFile() -> Bool {
+        KeyboardShortcutSettings.isManagedBySettingsFile(action)
+    }
+
+    static func settingsFileManagedSubtitle() -> String? {
+        KeyboardShortcutSettings.settingsFileManagedSubtitle(for: action)
     }
 
     static func reset(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: enabledKey)
-        defaults.removeObject(forKey: shortcutKey)
+        defaults.removeObject(forKey: legacyShortcutKey)
+        defaults.removeObject(forKey: action.defaultsKey)
+    }
+
+    private static func migrateLegacyShortcutIfNeeded(defaults: UserDefaults = .standard) {
+        guard defaults.object(forKey: legacyShortcutKey) != nil else { return }
+        defer { defaults.removeObject(forKey: legacyShortcutKey) }
+
+        guard defaults.object(forKey: action.defaultsKey) == nil,
+              let data = defaults.data(forKey: legacyShortcutKey),
+              let shortcut = try? JSONDecoder().decode(StoredShortcut.self, from: data) else {
+            return
+        }
+
+        let migratedShortcut = normalizedRecordedShortcut(shortcut) ?? shortcut
+        guard let migratedData = try? JSONEncoder().encode(migratedShortcut) else { return }
+        defaults.set(migratedData, forKey: action.defaultsKey)
+    }
+
+    private static func storedShortcut(defaults: UserDefaults = .standard) -> StoredShortcut? {
+        if let managedShortcut = KeyboardShortcutSettings.settingsFileStore.override(for: action) {
+            return managedShortcut
+        }
+        guard let data = defaults.data(forKey: action.defaultsKey),
+              let shortcut = try? JSONDecoder().decode(StoredShortcut.self, from: data) else {
+            return nil
+        }
+        return shortcut
     }
 }
 
@@ -464,6 +509,7 @@ final class SystemWideHotkeyController {
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandler: EventHandlerRef?
     private var defaultsObserver: NSObjectProtocol?
+    private var shortcutObserver: NSObjectProtocol?
     private var isShortcutRecordingActive = false
     private var isEnabled = SystemWideHotkeySettings.defaultEnabled
     private var shortcut = SystemWideHotkeySettings.defaultShortcut
@@ -478,6 +524,13 @@ final class SystemWideHotkeyController {
 
         defaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshRegistration()
+        }
+        shortcutObserver = NotificationCenter.default.addObserver(
+            forName: KeyboardShortcutSettings.didChangeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -630,6 +683,8 @@ final class SystemWideHotkeyController {
         NSApp.unhide(nil)
 
         let windowsToReveal = NSApp.windows.filter { $0.isVisible || $0.isMiniaturized }
+        guard !windowsToReveal.isEmpty else { return }
+
         for window in windowsToReveal where window.isMiniaturized {
             window.deminiaturize(nil)
         }
@@ -668,6 +723,23 @@ struct ShortcutStroke: Equatable {
     var shift: Bool
     var option: Bool
     var control: Bool
+    var keyCode: UInt16?
+
+    init(
+        key: String,
+        command: Bool,
+        shift: Bool,
+        option: Bool,
+        control: Bool,
+        keyCode: UInt16? = nil
+    ) {
+        self.key = key
+        self.command = command
+        self.shift = shift
+        self.option = option
+        self.control = control
+        self.keyCode = keyCode
+    }
 
     var displayString: String {
         modifierDisplayString + keyDisplayString
@@ -801,7 +873,8 @@ struct ShortcutStroke: Equatable {
             command: flags.contains(.command),
             shift: flags.contains(.shift),
             option: flags.contains(.option),
-            control: flags.contains(.control)
+            control: flags.contains(.control),
+            keyCode: event.keyCode
         )
 
         if requireModifier,
@@ -1078,10 +1151,43 @@ struct ShortcutStroke: Equatable {
         return modifiers
     }
 
+    func resolvedKeyCode(
+        layoutCharacterProvider: (UInt16, NSEvent.ModifierFlags) -> String? = KeyboardLayout.character(forKeyCode:modifierFlags:)
+    ) -> UInt16? {
+        if let keyCode {
+            return keyCode
+        }
+
+        let shortcutKey = key.lowercased()
+        let flags = modifierFlags
+        let applyShiftNormalization = flags.contains(.shift)
+
+        for candidateKeyCode in Self.supportedShortcutKeyCodes {
+            let candidateCharacter = layoutCharacterProvider(candidateKeyCode, flags)
+            if Self.shortcutCharacterMatches(
+                eventCharacter: candidateCharacter,
+                shortcutKey: shortcutKey,
+                applyShiftSymbolNormalization: applyShiftNormalization,
+                eventKeyCode: candidateKeyCode
+            ) {
+                return candidateKeyCode
+            }
+        }
+
+        return Self.keyCodeForShortcutKey(shortcutKey)
+    }
+
     var carbonHotKeyRegistration: (keyCode: UInt32, modifiers: UInt32)? {
-        guard let keyCode = Self.keyCodeForShortcutKey(key.lowercased()) else { return nil }
+        guard let keyCode = resolvedKeyCode() else { return nil }
         return (UInt32(keyCode), carbonModifiers)
     }
+
+    private static let supportedShortcutKeyCodes: [UInt16] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17,
+        18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+        50, 123, 124, 125, 126,
+    ]
 }
 
 /// A keyboard shortcut that can be stored in UserDefaults
@@ -1091,11 +1197,13 @@ struct StoredShortcut: Codable, Equatable {
     var shift: Bool
     var option: Bool
     var control: Bool
+    var keyCode: UInt16?
     var chordKey: String?
     var chordCommand: Bool
     var chordShift: Bool
     var chordOption: Bool
     var chordControl: Bool
+    var chordKeyCode: UInt16?
 
     init(
         key: String,
@@ -1103,22 +1211,26 @@ struct StoredShortcut: Codable, Equatable {
         shift: Bool,
         option: Bool,
         control: Bool,
+        keyCode: UInt16? = nil,
         chordKey: String? = nil,
         chordCommand: Bool = false,
         chordShift: Bool = false,
         chordOption: Bool = false,
-        chordControl: Bool = false
+        chordControl: Bool = false,
+        chordKeyCode: UInt16? = nil
     ) {
         self.key = key
         self.command = command
         self.shift = shift
         self.option = option
         self.control = control
+        self.keyCode = keyCode
         self.chordKey = chordKey?.isEmpty == true ? nil : chordKey
         self.chordCommand = chordCommand
         self.chordShift = chordShift
         self.chordOption = chordOption
         self.chordControl = chordControl
+        self.chordKeyCode = chordKeyCode
     }
 
     init(first: ShortcutStroke, second: ShortcutStroke? = nil) {
@@ -1128,11 +1240,13 @@ struct StoredShortcut: Codable, Equatable {
             shift: first.shift,
             option: first.option,
             control: first.control,
+            keyCode: first.keyCode,
             chordKey: second?.key,
             chordCommand: second?.command ?? false,
             chordShift: second?.shift ?? false,
             chordOption: second?.option ?? false,
-            chordControl: second?.control ?? false
+            chordControl: second?.control ?? false,
+            chordKeyCode: second?.keyCode
         )
     }
 
@@ -1142,11 +1256,13 @@ struct StoredShortcut: Codable, Equatable {
         case shift
         case option
         case control
+        case keyCode
         case chordKey
         case chordCommand
         case chordShift
         case chordOption
         case chordControl
+        case chordKeyCode
     }
 
     init(from decoder: Decoder) throws {
@@ -1157,11 +1273,13 @@ struct StoredShortcut: Codable, Equatable {
             shift: try container.decode(Bool.self, forKey: .shift),
             option: try container.decode(Bool.self, forKey: .option),
             control: try container.decode(Bool.self, forKey: .control),
+            keyCode: try container.decodeIfPresent(UInt16.self, forKey: .keyCode),
             chordKey: try container.decodeIfPresent(String.self, forKey: .chordKey),
             chordCommand: try container.decodeIfPresent(Bool.self, forKey: .chordCommand) ?? false,
             chordShift: try container.decodeIfPresent(Bool.self, forKey: .chordShift) ?? false,
             chordOption: try container.decodeIfPresent(Bool.self, forKey: .chordOption) ?? false,
-            chordControl: try container.decodeIfPresent(Bool.self, forKey: .chordControl) ?? false
+            chordControl: try container.decodeIfPresent(Bool.self, forKey: .chordControl) ?? false,
+            chordKeyCode: try container.decodeIfPresent(UInt16.self, forKey: .chordKeyCode)
         )
     }
 
@@ -1171,7 +1289,8 @@ struct StoredShortcut: Codable, Equatable {
             command: command,
             shift: shift,
             option: option,
-            control: control
+            control: control,
+            keyCode: keyCode
         )
     }
 
@@ -1182,7 +1301,8 @@ struct StoredShortcut: Codable, Equatable {
             command: chordCommand,
             shift: chordShift,
             option: chordOption,
-            control: chordControl
+            control: chordControl,
+            keyCode: chordKeyCode
         )
     }
 

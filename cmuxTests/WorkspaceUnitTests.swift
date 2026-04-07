@@ -576,6 +576,73 @@ final class KeyboardShortcutSettingsFileStoreTests: XCTestCase {
         XCTAssertEqual(KeyboardShortcutSettings.shortcut(for: .newTab), persistedShortcut)
     }
 
+    func testSystemWideHotkeySettingsPreserveInvalidManagedShortcutWithoutFallingBackToDefault() throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let settingsFileURL = directoryURL.appendingPathComponent("settings.json", isDirectory: false)
+        try writeSettingsFile(
+            """
+            {
+              "shortcuts": {
+                "showHideAllWindows": ["ctrl+b", "c"]
+              }
+            }
+            """,
+            to: settingsFileURL
+        )
+
+        KeyboardShortcutSettings.settingsFileStore = KeyboardShortcutSettingsFileStore(
+            primaryPath: settingsFileURL.path,
+            fallbackPath: nil,
+            startWatching: false
+        )
+
+        let invalidShortcut = StoredShortcut(
+            key: "b",
+            command: false,
+            shift: false,
+            option: false,
+            control: true,
+            chordKey: "c"
+        )
+
+        XCTAssertEqual(
+            KeyboardShortcutSettings.settingsFileStore.override(for: .showHideAllWindows),
+            invalidShortcut
+        )
+        XCTAssertTrue(SystemWideHotkeySettings.isManagedBySettingsFile())
+        XCTAssertEqual(SystemWideHotkeySettings.shortcut(), invalidShortcut)
+        XCTAssertNotEqual(SystemWideHotkeySettings.shortcut(), SystemWideHotkeySettings.defaultShortcut)
+        XCTAssertNil(SystemWideHotkeySettings.shortcut().carbonHotKeyRegistration)
+    }
+
+    func testSystemWideHotkeyLegacyMigrationPreservesInvalidShortcut() throws {
+        let invalidShortcut = StoredShortcut(
+            key: "b",
+            command: false,
+            shift: false,
+            option: false,
+            control: true,
+            chordKey: "c"
+        )
+        let encodedShortcut = try XCTUnwrap(try? JSONEncoder().encode(invalidShortcut))
+        let defaults = UserDefaults.standard
+        defaults.set(encodedShortcut, forKey: SystemWideHotkeySettings.legacyShortcutKey)
+
+        let migratedShortcut = SystemWideHotkeySettings.shortcut()
+
+        XCTAssertEqual(migratedShortcut, invalidShortcut)
+        XCTAssertNil(defaults.object(forKey: SystemWideHotkeySettings.legacyShortcutKey))
+
+        let migratedData = try XCTUnwrap(
+            defaults.data(forKey: KeyboardShortcutSettings.Action.showHideAllWindows.defaultsKey)
+        )
+        let storedShortcut = try XCTUnwrap(try? JSONDecoder().decode(StoredShortcut.self, from: migratedData))
+        XCTAssertEqual(storedShortcut, invalidShortcut)
+        XCTAssertNil(storedShortcut.carbonHotKeyRegistration)
+    }
+
     func testBootstrapCreatesCommentedTemplateWhenPrimaryAndFallbackAreMissing() throws {
         let directoryURL = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
@@ -1140,6 +1207,41 @@ final class StoredShortcutMatchingTests: XCTestCase {
                 }
             )
         )
+    }
+
+    func testResolvedKeyCodeUsesCurrentLayoutWhenShortcutWasStoredByCharacter() {
+        let stroke = ShortcutStroke(key: "q", command: true, shift: false, option: false, control: false)
+
+        XCTAssertEqual(
+            stroke.resolvedKeyCode(
+                layoutCharacterProvider: { keyCode, flags in
+                    guard flags == [.command] else { return nil }
+                    switch keyCode {
+                    case 12:
+                        return "'"
+                    case 13:
+                        return "q"
+                    default:
+                        return nil
+                    }
+                }
+            ),
+            13
+        )
+    }
+
+    func testResolvedKeyCodePrefersRecordedPhysicalKeyOverLayoutLookup() {
+        let stroke = ShortcutStroke(key: "q", command: true, shift: false, option: false, control: false, keyCode: 13)
+
+        XCTAssertEqual(
+            stroke.resolvedKeyCode(
+                layoutCharacterProvider: { keyCode, _ in
+                    keyCode == 12 ? "q" : nil
+                }
+            ),
+            13
+        )
+        XCTAssertEqual(stroke.carbonHotKeyRegistration?.keyCode, 13)
     }
 }
 

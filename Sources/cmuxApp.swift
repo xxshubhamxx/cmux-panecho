@@ -5870,7 +5870,9 @@ struct SettingsView: View {
 
                         SettingsCardDivider()
 
-                        let actions = KeyboardShortcutSettings.Action.allCases
+                        let actions = KeyboardShortcutSettings.Action.allCases.filter {
+                            $0 != SystemWideHotkeySettings.action
+                        }
                         ForEach(Array(actions.enumerated()), id: \.element.id) { index, action in
                             ShortcutSettingRow(action: action)
                                 .padding(.horizontal, 14)
@@ -6861,8 +6863,10 @@ private struct GlobalHotkeySection: View {
 
             KeyboardShortcutRecorder(
                 label: String(localized: "settings.globalHotkey.shortcut", defaultValue: "Show/Hide All Windows"),
+                subtitle: SystemWideHotkeySettings.settingsFileManagedSubtitle(),
                 shortcut: $shortcut,
                 transformRecordedShortcut: { SystemWideHotkeySettings.normalizedRecordedShortcut($0) },
+                isDisabled: SystemWideHotkeySettings.isManagedBySettingsFile(),
                 onRecordingChanged: { SystemWideHotkeyController.shared.setShortcutRecordingActive($0) }
             )
                 .padding(.horizontal, 14)
@@ -6872,7 +6876,7 @@ private struct GlobalHotkeySection: View {
         .onChange(of: shortcut) { newValue in
             SystemWideHotkeySettings.setShortcut(newValue)
         }
-        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: KeyboardShortcutSettings.didChangeNotification)) { _ in
             syncFromDefaults()
         }
 
