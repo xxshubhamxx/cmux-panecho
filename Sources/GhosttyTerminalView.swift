@@ -2722,6 +2722,8 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private let configTemplate: ghostty_surface_config_s?
     private let workingDirectory: String?
     private var initialCommand: String?
+    private var localDaemonBootstrap: LocalTerminalDaemonSurfaceBootstrap?
+    private var localDaemonSessionController: LocalTerminalDaemonSessionController?
     private let initialEnvironmentOverrides: [String: String]
     var requestedWorkingDirectory: String? { workingDirectory }
     private var additionalEnvironment: [String: String]
@@ -2830,6 +2832,15 @@ final class TerminalSurface: Identifiable, ObservableObject {
         // Surface is created when attached to a view
         hostedView.attachSurface(self)
         TerminalSurfaceRegistry.shared.register(self)
+    }
+
+    func configureLocalDaemonBootstrap(_ bootstrap: LocalTerminalDaemonSurfaceBootstrap) {
+        localDaemonBootstrap = bootstrap
+        localDaemonSessionController = LocalTerminalDaemonSessionController(bootstrap: bootstrap) { [weak self] event in
+            DispatchQueue.main.async {
+                self?.handleLocalDaemonEvent(event)
+            }
+        }
     }
 
 
@@ -3065,6 +3076,79 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
         dlog("surface.initialCommand.set surface=\(id.uuidString.prefix(8)) command=\(summary)")
 #endif
+    }
+
+    func localDaemonInfoPayload() -> [String: Any]? {
+        guard let localDaemonBootstrap else { return nil }
+        return [
+            "backend": "rust_local_daemon",
+            "socket_path": localDaemonBootstrap.configuration.socketPath,
+            "daemon_binary_path": localDaemonBootstrap.configuration.daemonBinaryPath,
+            "session_id": localDaemonBootstrap.sessionID,
+        ]
+    }
+
+    func processOutput(_ data: Data) {
+        guard let surface = surface, !data.isEmpty else { return }
+        data.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            let pointer = baseAddress.assumingMemoryBound(to: CChar.self)
+            ghostty_surface_process_output(surface, pointer, UInt(buffer.count))
+        }
+    }
+
+    private func currentGridSize() -> LocalTerminalDaemonGridSize? {
+        guard let surface = surface else { return nil }
+        let size = ghostty_surface_size(surface)
+        let columns = max(Int(size.columns), 1)
+        let rows = max(Int(size.rows), 1)
+        guard columns > 0, rows > 0 else { return nil }
+        return LocalTerminalDaemonGridSize(columns: columns, rows: rows)
+    }
+
+    private func startLocalDaemonSessionIfNeeded() {
+        guard let localDaemonSessionController,
+              let gridSize = currentGridSize() else {
+            return
+        }
+        localDaemonSessionController.start(initialSize: gridSize)
+    }
+
+    private func resizeLocalDaemonSessionIfNeeded() {
+        guard let localDaemonSessionController,
+              let gridSize = currentGridSize() else {
+            return
+        }
+        localDaemonSessionController.resize(gridSize)
+    }
+
+    private func stopLocalDaemonSession(closeSession: Bool) {
+        localDaemonSessionController?.stop(closeSession: closeSession)
+    }
+
+    private func handleLocalDaemonInput(_ data: Data) {
+        localDaemonSessionController?.send(data)
+    }
+
+    private func handleLocalDaemonEvent(_ event: LocalTerminalDaemonControllerEvent) {
+        switch event {
+        case .output(let data):
+            processOutput(data)
+        case .failed(let message):
+            NSLog("local daemon session failed for surface %@: %@", id.uuidString, message)
+        case .exited:
+            let workspaceID = tabId
+            let surfaceID = id
+            Task { @MainActor in
+                guard let app = AppDelegate.shared,
+                      let manager = app.tabManagerFor(tabId: workspaceID) ?? app.tabManager,
+                      let workspace = manager.tabs.first(where: { $0.id == workspaceID }),
+                      workspace.panels[surfaceID] != nil else {
+                    return
+                }
+                manager.closePanelAfterChildExited(tabId: workspaceID, surfaceId: surfaceID)
+            }
+        }
     }
 
     func isAttached(to view: GhosttyNSView) -> Bool {
@@ -3310,6 +3394,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
     /// before deinit; deinit will skip the free if already torn down.
     @MainActor
     func teardownSurface() {
+        stopLocalDaemonSession(closeSession: true)
         recordTeardownRequest(reason: "surface.teardown")
         markPortalLifecycleClosed(reason: "teardown")
 
@@ -3503,6 +3588,24 @@ final class TerminalSurface: Identifiable, ObservableObject {
         surfaceCallbackContext = callbackContext
         surfaceConfig.scale_factor = scaleFactors.layer
         surfaceConfig.context = surfaceContext
+        if localDaemonSessionController != nil {
+            surfaceConfig.io_mode = GHOSTTY_SURFACE_IO_MANUAL
+            surfaceConfig.io_write_cb = { userdata, data, len in
+                guard let userdata, let data, len > 0 else { return }
+                let callbackContext = Unmanaged<GhosttySurfaceCallbackContext>
+                    .fromOpaque(userdata)
+                    .takeUnretainedValue()
+                let outboundBytes = Data(bytes: data, count: Int(len))
+                if Thread.isMainThread {
+                    callbackContext.terminalSurface?.handleLocalDaemonInput(outboundBytes)
+                } else {
+                    DispatchQueue.main.async {
+                        callbackContext.terminalSurface?.handleLocalDaemonInput(outboundBytes)
+                    }
+                }
+            }
+            surfaceConfig.io_write_userdata = callbackContext.toOpaque()
+        }
 #if DEBUG
         let templateFontText = String(format: "%.2f", surfaceConfig.font_size)
         dlog(
@@ -3566,6 +3669,10 @@ final class TerminalSurface: Identifiable, ObservableObject {
         }
 
         let createWithCommandAndWorkingDirectory = { [self] in
+            if localDaemonSessionController != nil {
+                createSurface()
+                return
+            }
             if let initialCommand, !initialCommand.isEmpty {
                 initialCommand.withCString { cCommand in
                     surfaceConfig.command = cCommand
@@ -3641,6 +3748,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             lastXScale = scaleFactors.x
             lastYScale = scaleFactors.y
         }
+        startLocalDaemonSessionIfNeeded()
 
         // Some GhosttyKit builds can drop inherited font_size during post-create
         // config/scale reconciliation. If runtime points don't match the inherited
@@ -3738,6 +3846,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
             ghostty_surface_set_size(surface, wpx, hpx)
             lastPixelWidth = wpx
             lastPixelHeight = hpx
+            resizeLocalDaemonSessionIfNeeded()
         }
 
         // Let Ghostty continue rendering on its own wakeups for steady-state frames.
@@ -3972,6 +4081,7 @@ final class TerminalSurface: Identifiable, ObservableObject {
 #endif
 
     deinit {
+        stopLocalDaemonSession(closeSession: true)
         markPortalLifecycleClosed(reason: "deinit")
 
         let callbackContext = surfaceCallbackContext
