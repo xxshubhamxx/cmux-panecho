@@ -410,6 +410,7 @@ class TerminalController {
             || current.url != url
             || current.status != status
             || current.branch != effectiveBranch
+            || current.isStale
     }
 
     nonisolated static func shouldReplacePorts(current: [Int]?, next: [Int]) -> Bool {

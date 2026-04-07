@@ -921,6 +921,29 @@ final class TerminalControllerSidebarDedupeTests: XCTestCase {
         )
     }
 
+    func testShouldReplacePullRequestReturnsTrueWhenCurrentStateIsStale() throws {
+        let url = try XCTUnwrap(URL(string: "https://github.com/manaflow-ai/cmux/pull/42"))
+        let current = SidebarPullRequestState(
+            number: 42,
+            label: "PR",
+            url: url,
+            status: .open,
+            branch: "feature/work",
+            isStale: true
+        )
+
+        XCTAssertTrue(
+            TerminalController.shouldReplacePullRequest(
+                current: current,
+                number: 42,
+                label: "PR",
+                url: url,
+                status: .open,
+                branch: "feature/work"
+            )
+        )
+    }
+
     func testExplicitSocketScopeParsesValidUUIDTabAndPanel() {
         let workspaceId = UUID()
         let panelId = UUID()
