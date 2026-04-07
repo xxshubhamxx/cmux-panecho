@@ -572,6 +572,16 @@ if [[ -x "${CLI_PATH:-}" ]]; then
   echo "If your shell still resolves the old cmux, run: rehash"
 fi
 
+# Write tag + app path for Claude Code statusline
+if [[ -n "$TAG" ]]; then
+  echo "$TAG" > /tmp/cmux-last-tag
+  echo "$APP_PATH" > /tmp/cmux-last-app-path
+  if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
+    echo "$TAG" > "/tmp/cmux-last-tag-${CLAUDE_SESSION_ID}"
+    echo "$APP_PATH" > "/tmp/cmux-last-app-path-${CLAUDE_SESSION_ID}"
+  fi
+fi
+
 if [[ "$LAUNCH" -eq 0 ]]; then
   echo
   echo "Build complete. Pass --launch to open the app, or cmd-click the path above."
