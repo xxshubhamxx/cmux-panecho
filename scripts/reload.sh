@@ -36,10 +36,18 @@ should_skip_ghostty_cli_helper_zig_build() {
   return 1
 }
 
-find_apple_development_identity() {
+find_codesigning_identity_sha() {
+  local label_prefix="$1"
   security find-identity -v -p codesigning 2>/dev/null \
-    | sed -n 's/.*"\(Apple Development: .*\)"/\1/p' \
-    | head -n 1
+    | awk -v prefix="$label_prefix" 'index($0, "\"" prefix) { print $2; exit }'
+}
+
+find_apple_development_identity_sha() {
+  find_codesigning_identity_sha "Apple Development:"
+}
+
+find_developer_id_application_identity_sha() {
+  find_codesigning_identity_sha "Developer ID Application:"
 }
 
 write_dev_cli_shim() {
@@ -436,13 +444,8 @@ if [[ -n "$TAG" && "$APP_NAME" != "$SEARCH_APP_NAME" ]]; then
         rm -f "$CMUX_SOCKET"
       fi
     fi
-    APPLE_DEVELOPMENT_IDENTITY="$(find_apple_development_identity || true)"
-    if [[ -n "${APPLE_DEVELOPMENT_IDENTITY:-}" ]]; then
-      /usr/bin/codesign --force --sign "$APPLE_DEVELOPMENT_IDENTITY" --timestamp=none --generate-entitlement-der --entitlements "$PWD/cmux.entitlements" "$TAG_APP_PATH" >/dev/null 2>&1 || true
-    else
-      echo "No Apple Development signing identity found; local tagged app will launch without passkey entitlements."
-      /usr/bin/codesign --force --sign - --timestamp=none --generate-entitlement-der "$TAG_APP_PATH" >/dev/null 2>&1 || true
-    fi
+    APPLE_DEVELOPMENT_IDENTITY_SHA="$(find_apple_development_identity_sha || true)"
+    DEVELOPER_ID_IDENTITY_SHA="$(find_developer_id_application_identity_sha || true)"
   fi
   APP_PATH="$TAG_APP_PATH"
 fi
@@ -486,6 +489,17 @@ if [[ -x "$GHOSTTY_HELPER_SRC" ]]; then
   mkdir -p "$BIN_DIR"
   cp "$GHOSTTY_HELPER_SRC" "$BIN_DIR/ghostty"
   chmod +x "$BIN_DIR/ghostty"
+fi
+if [[ -n "$TAG" && -d "$APP_PATH" ]]; then
+  if [[ -n "${APPLE_DEVELOPMENT_IDENTITY_SHA:-}" ]]; then
+    /usr/bin/codesign --force --sign "$APPLE_DEVELOPMENT_IDENTITY_SHA" --timestamp=none --generate-entitlement-der --entitlements "$PWD/cmux.entitlements" "$APP_PATH"
+  elif [[ -n "${DEVELOPER_ID_IDENTITY_SHA:-}" ]]; then
+    echo "Only Developer ID signing identities were found. Unnotarized Developer ID-tagged builds fail local launch assessment, so this build stays ad-hoc and will not have passkey entitlements. Install an Apple Development identity to test passkeys locally."
+    /usr/bin/codesign --force --sign - --timestamp=none --generate-entitlement-der "$APP_PATH"
+  else
+    echo "No Apple Development or Developer ID signing identity found; local tagged app will launch without passkey entitlements."
+    /usr/bin/codesign --force --sign - --timestamp=none --generate-entitlement-der "$APP_PATH"
+  fi
 fi
 CLI_PATH="$APP_PATH/Contents/Resources/bin/cmux"
 if [[ -x "$CLI_PATH" ]]; then
