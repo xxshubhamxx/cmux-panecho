@@ -12,10 +12,13 @@ _cmux_patch_ghostty_ssh() {
     emulate -L zsh
     setopt local_options no_glob_subst
 
-    local current_term ssh_term ssh_opts
+    local current_term ssh_term ssh_opts ssh_cpath_dir ssh_cpath ssh_rc
     current_term="${TERM:-xterm-256color}"
     ssh_term="xterm-256color"
     ssh_opts=()
+    ssh_cpath_dir=""
+    ssh_cpath=""
+    ssh_rc=0
 
     # Configure environment variables for remote session.
     if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-env* ]]; then
@@ -28,60 +31,87 @@ _cmux_patch_ghostty_ssh() {
     # documented SSH fallback behavior and normalize the remote side to
     # xterm-256color.
     if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-terminfo* && "$current_term" == "xterm-ghostty" ]]; then
-      local ssh_user ssh_hostname
+      local ssh_user ssh_hostname ssh_target ssh_config_output ssh_config_status
+      ssh_user=""
+      ssh_hostname=""
+      ssh_target=""
+      ssh_config_output=$(command ssh -G "$@" 2>&1)
+      ssh_config_status=$?
 
-      while IFS=' ' read -r ssh_key ssh_value; do
-        case "$ssh_key" in
-          user) ssh_user="$ssh_value" ;;
-          hostname) ssh_hostname="$ssh_value" ;;
-        esac
-        [[ -n "$ssh_user" && -n "$ssh_hostname" ]] && break
-      done < <(command ssh -G "$@" 2>/dev/null)
+      if (( ssh_config_status == 0 )); then
+        while IFS=' ' read -r ssh_key ssh_value; do
+          case "$ssh_key" in
+            user) ssh_user="$ssh_value" ;;
+            hostname) ssh_hostname="$ssh_value" ;;
+          esac
+        done <<< "$ssh_config_output"
+      fi
 
       if [[ -n "$ssh_hostname" ]]; then
-        local ssh_target="${ssh_user}@${ssh_hostname}"
+        ssh_target="$ssh_hostname"
+        [[ -n "$ssh_user" ]] && ssh_target="${ssh_user}@${ssh_hostname}"
 
         # Check if terminfo is already cached.
         if [[ -n "${GHOSTTY_BIN_DIR:-}" && -x "$GHOSTTY_BIN_DIR/ghostty" ]] &&
            "$GHOSTTY_BIN_DIR/ghostty" +ssh-cache --host="$ssh_target" >/dev/null 2>&1; then
           ssh_term="xterm-ghostty"
         elif (( $+commands[infocmp] )); then
-          local ssh_terminfo ssh_cpath_dir ssh_cpath
+          local ssh_terminfo
 
           ssh_terminfo=$(infocmp -0 -x xterm-ghostty 2>/dev/null)
 
           if [[ -n "$ssh_terminfo" ]]; then
             print "Setting up xterm-ghostty terminfo on $ssh_hostname..." >&2
 
-            ssh_cpath_dir=$(mktemp -d "/tmp/ghostty-ssh-$ssh_user.XXXXXX" 2>/dev/null) || ssh_cpath_dir="/tmp/ghostty-ssh-$ssh_user.$$"
-            ssh_cpath="$ssh_cpath_dir/socket"
+            ssh_cpath_dir=$(mktemp -d "/tmp/ghostty-ssh-${ssh_user:-$USER}.XXXXXX" 2>/dev/null)
+            if [[ -z "$ssh_cpath_dir" ]]; then
+              ssh_cpath_dir="/tmp/ghostty-ssh-${ssh_user:-$USER}.$$-${EPOCHSECONDS}-${RANDOM}"
+              command mkdir -p -- "$ssh_cpath_dir" >/dev/null 2>&1 || ssh_cpath_dir=""
+            fi
 
-            if builtin print -r "$ssh_terminfo" | command ssh "${ssh_opts[@]}" -o ControlMaster=yes -o ControlPath="$ssh_cpath" -o ControlPersist=60s "$@" '
-              infocmp xterm-ghostty >/dev/null 2>&1 && exit 0
-              command -v tic >/dev/null 2>&1 || exit 1
-              mkdir -p ~/.terminfo 2>/dev/null && tic -x - 2>/dev/null && exit 0
-              exit 1
-            ' 2>/dev/null; then
-              ssh_term="xterm-ghostty"
-              ssh_opts+=(-o "ControlPath=$ssh_cpath")
+            if [[ -n "$ssh_cpath_dir" ]]; then
+              ssh_cpath="$ssh_cpath_dir/socket"
 
-              # Cache successful installation when the helper is available.
-              if [[ -n "${GHOSTTY_BIN_DIR:-}" && -x "$GHOSTTY_BIN_DIR/ghostty" ]]; then
-                "$GHOSTTY_BIN_DIR/ghostty" +ssh-cache --add="$ssh_target" >/dev/null 2>&1 || true
+              if builtin print -r "$ssh_terminfo" | command ssh "${ssh_opts[@]}" -o ControlMaster=yes -o ControlPath="$ssh_cpath" -o ControlPersist=60s "$ssh_target" '
+                infocmp xterm-ghostty >/dev/null 2>&1 && exit 0
+                command -v tic >/dev/null 2>&1 || exit 1
+                mkdir -p ~/.terminfo 2>/dev/null && tic -x - 2>/dev/null && exit 0
+                exit 1
+              ' 2>/dev/null; then
+                ssh_term="xterm-ghostty"
+                ssh_opts+=(-o "ControlPath=$ssh_cpath")
+
+                # Cache successful installation when the helper is available.
+                if [[ -n "${GHOSTTY_BIN_DIR:-}" && -x "$GHOSTTY_BIN_DIR/ghostty" ]]; then
+                  "$GHOSTTY_BIN_DIR/ghostty" +ssh-cache --add="$ssh_target" >/dev/null 2>&1 || true
+                fi
+              else
+                print "Warning: Failed to install terminfo." >&2
               fi
             else
-              print "Warning: Failed to install terminfo." >&2
+              print "Warning: Failed to create temporary ssh control directory." >&2
             fi
           else
             print "Warning: Could not generate terminfo data." >&2
           fi
         else
-          print "Warning: ghostty command not available for cache management." >&2
+          print "Warning: infocmp not available; cannot install xterm-ghostty terminfo." >&2
         fi
+      elif (( ssh_config_status != 0 )) && [[ -n "$ssh_config_output" ]]; then
+        print "Warning: ssh -G failed; skipping xterm-ghostty terminfo bootstrap: ${ssh_config_output%%$'\n'*}" >&2
       fi
     fi
 
-    TERM="$ssh_term" command ssh "${ssh_opts[@]}" "$@"
+    {
+      TERM="$ssh_term" command ssh "${ssh_opts[@]}" "$@"
+      ssh_rc=$?
+    } always {
+      if [[ -n "$ssh_cpath_dir" && "$ssh_cpath_dir" == /tmp/ghostty-ssh-* ]]; then
+        command rm -rf -- "$ssh_cpath_dir" >/dev/null 2>&1 || true
+      fi
+    }
+
+    return $ssh_rc
   }
 }
 
@@ -95,37 +125,7 @@ _cmux_patch_ghostty_ssh_deferred_init() {
   _cmux_patch_ghostty_ssh'
 }
 
-_cmux_patch_ghostty_ssh_exec_string_init() {
-  [[ -n "${ZSH_EXECUTION_STRING:-}" ]] || return 0
-
-  # zsh -i -c runs user startup files but never draws a prompt, so Ghostty's
-  # deferred init does not fire. Install the wrapper from a one-shot DEBUG trap
-  # right before the command string executes, after .zprofile/.zshrc had a
-  # chance to reconfigure GHOSTTY_SHELL_FEATURES.
-  if (( $+functions[TRAPDEBUG] )) &&
-     [[ "${functions[TRAPDEBUG]}" != *"_cmux_patch_ghostty_ssh_debug_trap"* ]]; then
-    functions[_cmux_patch_ghostty_ssh_original_trapdebug]="${functions[TRAPDEBUG]}"
-  fi
-
-  _cmux_patch_ghostty_ssh_debug_trap() {
-    emulate -L zsh
-    [[ ":${ZSH_EVAL_CONTEXT:-}:" == *":cmdarg:"* ]] || return 0
-
-    builtin unfunction TRAPDEBUG 2>/dev/null || true
-    _cmux_patch_ghostty_ssh
-
-    if (( $+functions[_cmux_patch_ghostty_ssh_original_trapdebug] )); then
-      functions[TRAPDEBUG]="${functions[_cmux_patch_ghostty_ssh_original_trapdebug]}"
-      _cmux_patch_ghostty_ssh_original_trapdebug "$@"
-      builtin unfunction _cmux_patch_ghostty_ssh_original_trapdebug 2>/dev/null || true
-    fi
-  }
-
-  functions[TRAPDEBUG]="${functions[_cmux_patch_ghostty_ssh_debug_trap]}"
-}
-
-# Patch both init paths:
-# - one-shot DEBUG trap for zsh -i -c flows that never draw a prompt
-# - Ghostty deferred init for normal prompted interactive shells
+# Prompted interactive shells get the wrapper during Ghostty's deferred init.
+# zsh -i -c shells install the same wrapper from the cmux wrapper .zshrc after
+# the user's startup files have completed.
 _cmux_patch_ghostty_ssh_deferred_init
-_cmux_patch_ghostty_ssh_exec_string_init

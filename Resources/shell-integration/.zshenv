@@ -12,22 +12,68 @@
 # - GHOSTTY_ZSH_ZDOTDIR (set by GhosttyKit when it overwrote ZDOTDIR)
 # - CMUX_ZSH_ZDOTDIR (set by cmux when it overwrote a user-provided ZDOTDIR)
 # - unset (zsh treats unset ZDOTDIR as $HOME)
+#
+# Exec-string shells are a special case: zsh -i -c never draws a prompt, so we
+# need one wrapper .zshrc pass after the user's startup files to apply Ghostty's
+# deferred ssh() patch. For that case only, keep ZDOTDIR pointed at the cmux
+# wrapper dir until our wrapper .zshrc runs, while sourcing the user's real rc
+# files manually with the real ZDOTDIR in scope.
+
+builtin typeset -g _cmux_real_zdotdir=""
+builtin typeset -g _cmux_real_zdotdir_mode="unset"
+builtin typeset -g _cmux_wrapper_zdotdir="${ZDOTDIR-}"
+builtin typeset -gi _cmux_use_exec_string_wrapper=0
 
 if [[ -n "${GHOSTTY_ZSH_ZDOTDIR+X}" ]]; then
-    builtin export ZDOTDIR="$GHOSTTY_ZSH_ZDOTDIR"
+    _cmux_real_zdotdir="$GHOSTTY_ZSH_ZDOTDIR"
+    _cmux_real_zdotdir_mode="set"
     builtin unset GHOSTTY_ZSH_ZDOTDIR
 elif [[ -n "${CMUX_ZSH_ZDOTDIR+X}" ]]; then
-    builtin export ZDOTDIR="$CMUX_ZSH_ZDOTDIR"
+    _cmux_real_zdotdir="$CMUX_ZSH_ZDOTDIR"
+    _cmux_real_zdotdir_mode="set"
     builtin unset CMUX_ZSH_ZDOTDIR
+fi
+
+_cmux_use_real_zdotdir() {
+    if [[ "$_cmux_real_zdotdir_mode" == "set" ]]; then
+        builtin export ZDOTDIR="$_cmux_real_zdotdir"
+    else
+        builtin unset ZDOTDIR
+    fi
+}
+
+_cmux_restore_wrapper_zdotdir() {
+    if [[ -n "$_cmux_wrapper_zdotdir" ]]; then
+        builtin export ZDOTDIR="$_cmux_wrapper_zdotdir"
+    else
+        builtin unset ZDOTDIR
+    fi
+}
+
+_cmux_source_real_zdotfile() {
+    builtin emulate -L zsh -o no_aliases
+    builtin setopt local_options no_sh_word_split
+
+    builtin local file_name="$1"
+    builtin local path
+
+    _cmux_use_real_zdotdir
+    path="${ZDOTDIR-$HOME}/$file_name"
+    [[ ! -r "$path" ]] || builtin source -- "$path"
+}
+
+if [[ -o interactive && -n "${ZSH_EXECUTION_STRING:-}" ]]; then
+    _cmux_use_exec_string_wrapper=1
+    _cmux_restore_wrapper_zdotdir
 else
-    builtin unset ZDOTDIR
+    _cmux_use_real_zdotdir
 fi
 
 {
-    # zsh treats unset ZDOTDIR as if it were HOME. We do the same.
-    builtin typeset _cmux_file="${ZDOTDIR-$HOME}/.zshenv"
-    [[ ! -r "$_cmux_file" ]] || builtin source -- "$_cmux_file"
+    _cmux_source_real_zdotfile ".zshenv"
 } always {
+    (( _cmux_use_exec_string_wrapper )) && _cmux_restore_wrapper_zdotdir
+
     if [[ -o interactive ]]; then
         # We overwrote GhosttyKit's injected ZDOTDIR, so manually load Ghostty's
         # zsh integration if available.
@@ -57,5 +103,10 @@ fi
         fi
     fi
 
-    builtin unset _cmux_file _cmux_ghostty _cmux_ghostty_patch _cmux_integ
+    if (( ! _cmux_use_exec_string_wrapper )); then
+        builtin unfunction _cmux_use_real_zdotdir _cmux_restore_wrapper_zdotdir _cmux_source_real_zdotfile 2>/dev/null
+        builtin unset _cmux_real_zdotdir _cmux_real_zdotdir_mode _cmux_wrapper_zdotdir _cmux_use_exec_string_wrapper
+    fi
+
+    builtin unset _cmux_ghostty _cmux_ghostty_patch _cmux_integ
 }

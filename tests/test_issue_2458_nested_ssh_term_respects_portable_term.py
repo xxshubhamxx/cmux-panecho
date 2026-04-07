@@ -21,6 +21,10 @@ import time
 from pathlib import Path
 
 PROMPT_MARKER = b"cmux-ready> "
+WRAPPED_SSH_ARG_FRAGMENTS = (
+    "-o SetEnv COLORTERM=truecolor",
+    "-o SendEnv TERM_PROGRAM TERM_PROGRAM_VERSION",
+)
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -42,6 +46,116 @@ RPROMPT=''
     )
 
 
+def _recorded_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return [line for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _run_prompted_shell(*, root: Path, zsh_path: str, env: dict[str, str]) -> tuple[bool, str]:
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(
+        [zsh_path, "-d", "-i"],
+        cwd=str(root),
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        env=env,
+        close_fds=True,
+    )
+    os.close(slave)
+
+    output = bytearray()
+    saw_prompt = False
+    ssh_sent = False
+    exit_sent = False
+    timed_out = False
+    try:
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                break
+
+            readable, _, _ = select.select([master], [], [], 0.2)
+            if master in readable:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output.extend(chunk)
+
+            prompt_count = output.count(PROMPT_MARKER)
+            if prompt_count >= 1:
+                saw_prompt = True
+
+            if saw_prompt and not ssh_sent:
+                os.write(master, b"ssh nested.example\n")
+                ssh_sent = True
+                continue
+
+            if ssh_sent and not exit_sent and Path(env["CMUX_TEST_TERM_OUT"]).exists() and prompt_count >= 2:
+                os.write(master, b"exit\n")
+                exit_sent = True
+                continue
+        else:
+            timed_out = True
+    finally:
+        try:
+            if proc.poll() is None:
+                if not exit_sent:
+                    try:
+                        os.write(master, b"exit\n")
+                    except OSError:
+                        pass
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+        finally:
+            os.close(master)
+
+    combined = output.decode("utf-8", errors="replace").strip()
+    if timed_out:
+        return False, f"interactive zsh session timed out: {combined}"
+    if proc.returncode != 0:
+        return False, f"interactive zsh exited non-zero rc={proc.returncode}: {combined}"
+    if not saw_prompt:
+        return False, f"did not observe first interactive prompt: {combined}"
+    if not ssh_sent:
+        return False, f"did not invoke ssh after first interactive prompt: {combined}"
+
+    return True, combined
+
+
+def _run_exec_string_shell(
+    *,
+    root: Path,
+    zsh_path: str,
+    env: dict[str, str],
+    command_string: str,
+    login_shell: bool,
+) -> tuple[bool, str]:
+    argv = [zsh_path, "-d"]
+    if login_shell:
+        argv.append("-l")
+    argv.extend(["-i", "-c", command_string])
+
+    result = subprocess.run(
+        argv,
+        cwd=str(root),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    combined = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        return False, f"zsh exited non-zero rc={result.returncode}: {combined}"
+    return True, combined
+
+
 def _run_case(
     *,
     root: Path,
@@ -51,6 +165,12 @@ def _run_case(
     term: str,
     expect_term: str,
     expect_infocmp: bool,
+    expect_wrapper: bool,
+    expected_target: str,
+    mode: str = "prompted",
+    command_string: str = "ssh nested.example",
+    login_shell: bool = False,
+    zprofile_extra_content: str = "",
     zshrc_extra_content: str = "",
 ) -> tuple[bool, str]:
     base = Path(tempfile.mkdtemp(prefix="cmux_issue_2458_"))
@@ -59,14 +179,18 @@ def _run_case(
         orig = base / "orig-zdotdir"
         fakebin = base / "fakebin"
         term_out = base / "term.txt"
+        args_out = base / "ssh-args.txt"
         infocmp_out = base / "infocmp.txt"
 
         home.mkdir(parents=True, exist_ok=True)
         orig.mkdir(parents=True, exist_ok=True)
         fakebin.mkdir(parents=True, exist_ok=True)
 
-        for filename in (".zshenv", ".zprofile"):
-            (orig / filename).write_text("", encoding="utf-8")
+        (orig / ".zshenv").write_text("", encoding="utf-8")
+        (orig / ".zprofile").write_text(
+            f'export PATH="$CMUX_TEST_FAKEBIN:$PATH"\n{zprofile_extra_content}',
+            encoding="utf-8",
+        )
         _write_prompting_zshrc(orig / ".zshrc", extra_content=zshrc_extra_content)
 
         _write_executable(
@@ -77,8 +201,8 @@ if [ "$1" = "-G" ]; then
   printf 'hostname nested.example\\n'
   exit 0
 fi
-printf '%s\\n' "${TERM:-}" > "$CMUX_TEST_TERM_OUT"
-printf '%s\\n' "$*" > "$CMUX_TEST_SSH_ARGS_OUT"
+printf '%s\\n' "${TERM:-}" >> "$CMUX_TEST_TERM_OUT"
+printf '%s\\n' "$*" >> "$CMUX_TEST_SSH_ARGS_OUT"
 exit 0
 """,
         )
@@ -94,6 +218,8 @@ exit "${CMUX_TEST_INFOCMP_STATUS:-1}"
         env["HOME"] = str(home)
         env["TERM"] = term
         env["PATH"] = f"{fakebin}:{env.get('PATH', '')}"
+        env["TERM_PROGRAM"] = "Ghostty"
+        env["TERM_PROGRAM_VERSION"] = "1.0"
         env["ZDOTDIR"] = str(wrapper_dir)
         env["GHOSTTY_ZSH_ZDOTDIR"] = str(orig)
         env["GHOSTTY_RESOURCES_DIR"] = str(root / "ghostty" / "src")
@@ -102,94 +228,50 @@ exit "${CMUX_TEST_INFOCMP_STATUS:-1}"
         env["CMUX_SHELL_INTEGRATION"] = "0"
         env["GHOSTTY_SHELL_FEATURES"] = features
         env["CMUX_TEST_TERM_OUT"] = str(term_out)
-        env["CMUX_TEST_SSH_ARGS_OUT"] = str(base / "ssh-args.txt")
+        env["CMUX_TEST_SSH_ARGS_OUT"] = str(args_out)
         env["CMUX_TEST_INFOCMP_OUT"] = str(infocmp_out)
         env["CMUX_TEST_INFOCMP_STATUS"] = "1"
+        env["CMUX_TEST_FAKEBIN"] = str(fakebin)
         env.pop("GHOSTTY_BIN_DIR", None)
         env.pop("TERMINFO", None)
 
-        # Ghostty installs the live ssh() wrapper during deferred init on the
-        # first prompt, so this regression test must drive a prompted PTY shell.
-        master, slave = pty.openpty()
-        proc = subprocess.Popen(
-            [zsh_path, "-d", "-i"],
-            cwd=str(root),
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            env=env,
-            close_fds=True,
-        )
-        os.close(slave)
+        if mode == "prompted":
+            ok, detail = _run_prompted_shell(root=root, zsh_path=zsh_path, env=env)
+        elif mode == "exec_string":
+            ok, detail = _run_exec_string_shell(
+                root=root,
+                zsh_path=zsh_path,
+                env=env,
+                command_string=command_string,
+                login_shell=login_shell,
+            )
+        else:
+            return False, f"unsupported test mode: {mode}"
 
-        output = bytearray()
-        saw_prompt = False
-        ssh_sent = False
-        exit_sent = False
-        timed_out = False
-        try:
-            deadline = time.time() + 8
-            while time.time() < deadline:
-                if proc.poll() is not None:
-                    break
+        if not ok:
+            return False, detail
 
-                readable, _, _ = select.select([master], [], [], 0.2)
-                if master in readable:
-                    try:
-                        chunk = os.read(master, 4096)
-                    except OSError:
-                        break
-                    if not chunk:
-                        break
-                    output.extend(chunk)
+        recorded_terms = _recorded_lines(term_out)
+        recorded_args = _recorded_lines(args_out)
+        if not recorded_terms:
+            return False, f"fake ssh did not record TERM: {detail}"
+        if not recorded_args:
+            return False, f"fake ssh did not record argv: {detail}"
 
-                prompt_count = output.count(PROMPT_MARKER)
-                if prompt_count >= 1:
-                    saw_prompt = True
-
-                if saw_prompt and not ssh_sent:
-                    os.write(master, b"ssh nested.example\n")
-                    ssh_sent = True
-                    continue
-
-                if ssh_sent and not exit_sent and term_out.exists() and prompt_count >= 2:
-                    os.write(master, b"exit\n")
-                    exit_sent = True
-                    continue
-            else:
-                timed_out = True
-        finally:
-            try:
-                if proc.poll() is None:
-                    if not exit_sent:
-                        try:
-                            os.write(master, b"exit\n")
-                        except OSError:
-                            pass
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait(timeout=5)
-            finally:
-                os.close(master)
-
-        combined = output.decode("utf-8", errors="replace").strip()
-        if timed_out:
-            return False, f"interactive zsh session timed out: {combined}"
-        if proc.returncode != 0:
-            return False, f"interactive zsh exited non-zero rc={proc.returncode}: {combined}"
-        if not saw_prompt:
-            return False, f"did not observe first interactive prompt: {combined}"
-        if not ssh_sent:
-            return False, f"did not invoke ssh after first interactive prompt: {combined}"
-
-        if not term_out.exists():
-            return False, f"fake ssh did not record TERM: {combined}"
-
-        recorded_term = term_out.read_text(encoding="utf-8").strip()
+        recorded_term = recorded_terms[-1]
         if recorded_term != expect_term:
             return False, f"expected remote TERM={expect_term!r}, got {recorded_term!r}"
+
+        recorded_args_line = recorded_args[-1]
+        if expected_target not in recorded_args_line:
+            return False, f"expected ssh target {expected_target!r} in {recorded_args_line!r}"
+
+        for fragment in WRAPPED_SSH_ARG_FRAGMENTS:
+            fragment_present = fragment in recorded_args_line
+            if expect_wrapper and not fragment_present:
+                return False, f"missing expected wrapped ssh args fragment {fragment!r} in {recorded_args_line!r}"
+            if not expect_wrapper and fragment_present:
+                return False, f"unexpected wrapped ssh args fragment {fragment!r} in {recorded_args_line!r}"
 
         infocmp_called = infocmp_out.exists()
         if infocmp_called != expect_infocmp:
@@ -220,6 +302,8 @@ def main() -> int:
         term="xterm-256color",
         expect_term="xterm-256color",
         expect_infocmp=False,
+        expect_wrapper=True,
+        expected_target="nested.example",
     )
     if not ok:
         print(f"FAIL: portable TERM case failed: {detail}")
@@ -233,6 +317,8 @@ def main() -> int:
         term="xterm-ghostty",
         expect_term="xterm-256color",
         expect_infocmp=False,
+        expect_wrapper=True,
+        expected_target="nested.example",
     )
     if not ok:
         print(f"FAIL: ssh-env-only fallback case failed: {detail}")
@@ -246,6 +332,8 @@ def main() -> int:
         term="tmux-256color",
         expect_term="xterm-256color",
         expect_infocmp=False,
+        expect_wrapper=True,
+        expected_target="nested.example",
     )
     if not ok:
         print(f"FAIL: tmux/custom TERM normalization case failed: {detail}")
@@ -259,6 +347,8 @@ def main() -> int:
         term="xterm-ghostty",
         expect_term="xterm-256color",
         expect_infocmp=True,
+        expect_wrapper=True,
+        expected_target="nested.example",
     )
     if not ok:
         print(f"FAIL: xterm-ghostty fallback case failed: {detail}")
@@ -272,6 +362,8 @@ def main() -> int:
         term="xterm-ghostty",
         expect_term="xterm-ghostty",
         expect_infocmp=False,
+        expect_wrapper=False,
+        expected_target="nested.example",
         zshrc_extra_content="""
 export GHOSTTY_SHELL_FEATURES='title,cursor'
 """,
@@ -280,9 +372,54 @@ export GHOSTTY_SHELL_FEATURES='title,cursor'
         print(f"FAIL: user opt-out case failed: {detail}")
         return 1
 
+    ok, detail = _run_case(
+        root=root,
+        wrapper_dir=wrapper_dir,
+        zsh_path=zsh_path,
+        features="ssh-env",
+        term="xterm-ghostty",
+        expect_term="xterm-256color",
+        expect_infocmp=False,
+        expect_wrapper=True,
+        expected_target="nested.example",
+        mode="exec_string",
+        zshrc_extra_content="""
+TRAPDEBUG() { :; }
+setopt no_debug_before_cmd
+ssh() { command ssh "$@"; }
+""",
+    )
+    if not ok:
+        print(f"FAIL: exec-string wrapper case failed: {detail}")
+        return 1
+
+    ok, detail = _run_case(
+        root=root,
+        wrapper_dir=wrapper_dir,
+        zsh_path=zsh_path,
+        features="ssh-env,ssh-terminfo",
+        term="xterm-ghostty",
+        expect_term="xterm-ghostty",
+        expect_infocmp=False,
+        expect_wrapper=False,
+        expected_target="bootstrap-host",
+        mode="exec_string",
+        command_string="true",
+        login_shell=True,
+        zprofile_extra_content="""
+ssh bootstrap-host
+""",
+        zshrc_extra_content="""
+export GHOSTTY_SHELL_FEATURES='title,cursor'
+""",
+    )
+    if not ok:
+        print(f"FAIL: login-shell startup opt-out case failed: {detail}")
+        return 1
+
     print(
         "PASS: Ghostty zsh SSH wrapper preserves portable TERM, falls back from xterm-ghostty, "
-        "and respects interactive-shell opt-outs"
+        "and respects prompted, exec-string, and login-shell opt-out startup flows"
     )
     return 0
 
