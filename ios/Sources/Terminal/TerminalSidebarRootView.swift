@@ -9,6 +9,8 @@ struct TerminalSidebarRootView: View {
     @State private var pendingStartHostID: TerminalHost.ID?
     @State private var renamingHost: TerminalHost?
     @State private var renameText = ""
+    @State private var renamingWorkspaceID: TerminalWorkspace.ID?
+    @State private var workspaceRenameText = ""
     private let inboxCacheRepository: InboxCacheRepository?
 
     init(
@@ -93,6 +95,9 @@ struct TerminalSidebarRootView: View {
             uniquingKeysWith: { first, _ in first }
         )
         return visible.sorted { lhs, rhs in
+            if lhs.pinned != rhs.pinned {
+                return lhs.pinned
+            }
             let lhsOrder = sortKeys[lhs.id] ?? 1
             let rhsOrder = sortKeys[rhs.id] ?? 1
             if lhsOrder != rhsOrder {
@@ -216,7 +221,7 @@ struct TerminalSidebarRootView: View {
                                         store.toggleUnread(for: workspace.id)
                                     } label: {
                                         Label(
-                                            workspace.unread ? TerminalHomeStrings.markReadAction : TerminalHomeStrings.markUnreadAction,
+                                            workspace.unread ? String(localized: "terminal.home.mark_read", defaultValue: "Read") : String(localized: "terminal.home.mark_unread", defaultValue: "Unread"),
                                             systemImage: workspace.unread ? "message" : "message.badge"
                                         )
                                     }
@@ -230,6 +235,27 @@ struct TerminalSidebarRootView: View {
                                         Label(TerminalHomeStrings.deleteAction, systemImage: "trash")
                                     }
                                     .accessibilityIdentifier("terminal.workspace.action.delete.\(workspace.id.uuidString)")
+                                }
+                                .contextMenu {
+                                    Button {
+                                        store.togglePinned(for: workspace.id)
+                                    } label: {
+                                        Label(
+                                            workspace.pinned ? TerminalHomeStrings.unpinAction : TerminalHomeStrings.pinAction,
+                                            systemImage: workspace.pinned ? "pin.slash" : "pin"
+                                        )
+                                    }
+                                    Button {
+                                        workspaceRenameText = workspace.title
+                                        renamingWorkspaceID = workspace.id
+                                    } label: {
+                                        Label(TerminalHomeStrings.renameWorkspaceAction, systemImage: "pencil")
+                                    }
+                                    Button(role: .destructive) {
+                                        store.closeWorkspace(workspace)
+                                    } label: {
+                                        Label(TerminalHomeStrings.deleteAction, systemImage: "trash")
+                                    }
                                 }
                             }
                         }
@@ -309,6 +335,24 @@ struct TerminalSidebarRootView: View {
                 renamingHost = nil
             }
         }
+        .alert(
+            TerminalHomeStrings.renameWorkspaceAction,
+            isPresented: Binding(
+                get: { renamingWorkspaceID != nil },
+                set: { if !$0 { renamingWorkspaceID = nil } }
+            )
+        ) {
+            TextField(TerminalHomeStrings.renameWorkspacePlaceholder, text: $workspaceRenameText)
+            Button(TerminalHomeStrings.editorSave) {
+                if let id = renamingWorkspaceID {
+                    store.renameWorkspace(id, to: workspaceRenameText)
+                }
+                renamingWorkspaceID = nil
+            }
+            Button(TerminalHomeStrings.editorCancel, role: .cancel) {
+                renamingWorkspaceID = nil
+            }
+        }
         .onAppear {
             handlePendingRouteIfPossible()
         }
@@ -383,6 +427,10 @@ private enum TerminalHomeStrings {
     static let markReadAction = String(localized: "terminal.home.action.mark_read", defaultValue: "Read")
     static let markUnreadAction = String(localized: "terminal.home.action.mark_unread", defaultValue: "Unread")
     static let deleteAction = String(localized: "terminal.home.action.delete", defaultValue: "Delete")
+    static let pinAction = String(localized: "terminal.home.action.pin", defaultValue: "Pin")
+    static let unpinAction = String(localized: "terminal.home.action.unpin", defaultValue: "Unpin")
+    static let renameWorkspaceAction = String(localized: "terminal.home.action.rename_workspace", defaultValue: "Rename")
+    static let renameWorkspacePlaceholder = String(localized: "terminal.home.rename_workspace.placeholder", defaultValue: "Workspace name")
     static let settingsLabel = String(localized: "terminal.home.settings_label", defaultValue: "Settings")
     static let moreLabel = String(localized: "terminal.home.more_label", defaultValue: "More")
     static let missingTitle = String(localized: "terminal.home.missing_title", defaultValue: "Workspace Missing")

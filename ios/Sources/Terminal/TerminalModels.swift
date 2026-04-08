@@ -288,6 +288,7 @@ struct TerminalWorkspace: Identifiable, Codable, Equatable, Sendable {
     var preview: String
     var lastActivity: Date
     var unread: Bool
+    var pinned: Bool
     var phase: TerminalConnectionPhase
     var lastError: String?
     var remoteWorkspaceID: String?
@@ -303,6 +304,7 @@ struct TerminalWorkspace: Identifiable, Codable, Equatable, Sendable {
         preview: String = "",
         lastActivity: Date = .now,
         unread: Bool = false,
+        pinned: Bool = false,
         phase: TerminalConnectionPhase = .idle,
         lastError: String? = nil,
         remoteWorkspaceID: String? = nil,
@@ -317,6 +319,7 @@ struct TerminalWorkspace: Identifiable, Codable, Equatable, Sendable {
         self.preview = preview
         self.lastActivity = lastActivity
         self.unread = unread
+        self.pinned = pinned
         self.phase = phase
         self.lastError = lastError
         self.remoteWorkspaceID = remoteWorkspaceID
@@ -327,6 +330,24 @@ struct TerminalWorkspace: Identifiable, Codable, Equatable, Sendable {
 
     var isRemoteWorkspace: Bool {
         !(remoteWorkspaceID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ID.self, forKey: .id)
+        hostID = try container.decode(TerminalHost.ID.self, forKey: .hostID)
+        title = try container.decode(String.self, forKey: .title)
+        tmuxSessionName = try container.decode(String.self, forKey: .tmuxSessionName)
+        preview = try container.decode(String.self, forKey: .preview)
+        lastActivity = try container.decode(Date.self, forKey: .lastActivity)
+        unread = try container.decode(Bool.self, forKey: .unread)
+        pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
+        phase = try container.decode(TerminalConnectionPhase.self, forKey: .phase)
+        lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+        remoteWorkspaceID = try container.decodeIfPresent(String.self, forKey: .remoteWorkspaceID)
+        backendIdentity = try container.decodeIfPresent(TerminalWorkspaceBackendIdentity.self, forKey: .backendIdentity)
+        backendMetadata = try container.decodeIfPresent(TerminalWorkspaceBackendMetadata.self, forKey: .backendMetadata)
+        remoteDaemonResumeState = try container.decodeIfPresent(TerminalRemoteDaemonResumeState.self, forKey: .remoteDaemonResumeState)
     }
 }
 

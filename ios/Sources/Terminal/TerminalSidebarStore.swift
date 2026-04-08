@@ -364,6 +364,18 @@ final class TerminalSidebarStore: ObservableObject {
         persist()
     }
 
+    func renameWorkspace(_ workspaceID: TerminalWorkspace.ID, to name: String) {
+        guard let index = workspaces.firstIndex(where: { $0.id == workspaceID }) else { return }
+        workspaces[index].title = name
+        persist()
+    }
+
+    func togglePinned(for workspaceID: TerminalWorkspace.ID) {
+        guard let index = workspaces.firstIndex(where: { $0.id == workspaceID }) else { return }
+        workspaces[index].pinned.toggle()
+        persist()
+    }
+
     func controller(for workspace: TerminalWorkspace) -> TerminalSessionController {
         if let existing = controllers[workspace.id] {
             return existing
