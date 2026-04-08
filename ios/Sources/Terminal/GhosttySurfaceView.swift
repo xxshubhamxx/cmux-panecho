@@ -532,7 +532,7 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
     override func layoutSubviews() {
         super.layoutSubviews()
         snapshotFallbackView.frame = bounds
-        inputProxy.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        inputProxy.frame = CGRect(x: 0, y: 0, width: bounds.width, height: 1)
         liveAnchormuxLog("surface.layout bounds=\(Int(bounds.width))x\(Int(bounds.height)) window=\(window != nil)")
         syncSurfaceGeometry()
         syncSurfaceVisibility()
