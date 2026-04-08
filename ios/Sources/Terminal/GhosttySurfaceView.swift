@@ -361,6 +361,7 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
     private var cursorBlinkVisible: Bool = true
     private var lastBlinkToggle: CFTimeInterval = 0
     private var needsDraw: Bool = false
+    private var surfaceHasReceivedOutput: Bool = false
     #if DEBUG
     private var lastInputTimestamp: CFTimeInterval = 0
     private var latencySamples: [Double] = []
@@ -600,12 +601,18 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         }
         needsDraw = true
 
+        // Once the surface has received output, hide the snapshot fallback so the
+        // Metal IOSurfaceLayer (which renders colored text) is visible.
+        if !surfaceHasReceivedOutput {
+            surfaceHasReceivedOutput = true
+            snapshotFallbackView.isHidden = true
+        }
+
         // Throttle expensive diagnostics to at most once per second to avoid
         // freezing when TUIs (codex, vim, htop) flood rapid output.
         let now = CACurrentMediaTime()
         if now - lastProcessOutputLogTime > 1.0 {
             lastProcessOutputLogTime = now
-            syncSnapshotFallback()
             if window != nil {
                 logLayerTree(reason: "processOutput")
             }
@@ -790,7 +797,7 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
         }
         if needsDraw || blinkChanged {
             needsDraw = false
-            ghostty_surface_draw_now(surface)
+            ghostty_surface_render_now(surface)
         }
     }
 
@@ -940,6 +947,13 @@ final class GhosttySurfaceView: UIView, TerminalSurfaceHosting {
     }
 
     private func syncSnapshotFallback() {
+        // Once the Metal renderer is active (surface has received output),
+        // keep the fallback hidden so the IOSurfaceLayer is visible.
+        if surfaceHasReceivedOutput {
+            snapshotFallbackView.isHidden = true
+            return
+        }
+
         let rendererHasContents = !prefersSnapshotFallbackRendering &&
             (layer.sublayers ?? []).contains(where: isGhosttyRendererLayerVisible)
         if rendererHasContents {
