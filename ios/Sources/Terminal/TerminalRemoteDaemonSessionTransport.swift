@@ -86,6 +86,19 @@ final class TerminalRemoteDaemonSessionTransport: @unchecked Sendable, TerminalT
         try await openOrAttachTerminal(initialSize: initialSize)
         NSLog("📱 SessionTransport: terminal opened, sessionID=%@", lockedSessionID() ?? "nil")
 
+        // Fetch scrollback so the terminal starts with existing content.
+        if let sessionID = lockedSessionID() {
+            do {
+                let historyResult = try await client.sessionHistory(sessionID: sessionID, format: "plain")
+                if !historyResult.history.isEmpty, let data = historyResult.history.data(using: .utf8) {
+                    NSLog("📱 SessionTransport: sending %d bytes of scrollback", data.count)
+                    eventHandler?(.output(data))
+                }
+            } catch {
+                NSLog("📱 SessionTransport: scrollback fetch failed: %@", error.localizedDescription)
+            }
+        }
+
         eventHandler?(.connected)
         startReadLoop()
         NSLog("📱 SessionTransport: read loop started")
