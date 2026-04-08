@@ -23,6 +23,7 @@ permissions:
 
 env:
   CREATE_DMG_VERSION: 8.0.0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   decide:
@@ -185,6 +186,7 @@ jobs:
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: daemon/remote/go.mod
+          cache-dependency-path: daemon/remote/go.sum
 
       - name: Derive Sparkle public key from private key
         if: needs.decide.outputs.should_publish != 'true' || steps.current_head_prebuild.outputs.still_current == 'true'
