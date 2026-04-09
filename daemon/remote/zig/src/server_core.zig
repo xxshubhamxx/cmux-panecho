@@ -4,6 +4,7 @@ const json_rpc = @import("json_rpc.zig");
 const session_registry = @import("session_registry.zig");
 const session_service = @import("session_service.zig");
 const workspace_registry = @import("workspace_registry.zig");
+const serialize = @import("serialize.zig");
 
 const AttachmentResult = struct {
     attachment_id: []const u8,
@@ -51,6 +52,7 @@ fn dispatchInner(service: *session_service.Service, req: *const json_rpc.Request
             .result = .{
                 .name = "cmuxd-remote",
                 .version = build_options.version,
+                .workspace_count = service.workspace_reg.order.items.len,
                 .capabilities = .{
                     "session.basic",
                     "session.resize.min",
@@ -528,6 +530,10 @@ fn handleWorkspaceList(service: *session_service.Service, req: *const json_rpc.R
         id: []const u8,
         title: []const u8,
         directory: []const u8,
+        preview: []const u8,
+        phase: []const u8,
+        color: ?[]const u8,
+        unread_count: u32,
         focused_pane_id: ?[]const u8,
         pane_count: usize,
         created_at: i64,
@@ -545,6 +551,10 @@ fn handleWorkspaceList(service: *session_service.Service, req: *const json_rpc.R
             .id = ws.id,
             .title = ws.title,
             .directory = ws.directory,
+            .preview = ws.preview,
+            .phase = ws.phase,
+            .color = ws.color,
+            .unread_count = ws.unread_count,
             .focused_pane_id = ws.focused_pane_id,
             .pane_count = leaves.len,
             .created_at = ws.created_at,
@@ -731,6 +741,11 @@ fn handleWorkspaceSync(service: *session_service.Service, req: *const json_rpc.R
         const title = if (obj.get("title")) |v| (if (v == .string) v.string else null) else null;
         if (id == null or title == null) continue;
 
+        const unread_count: u32 = if (obj.get("unread_count")) |v| switch (v) {
+            .integer => |i| if (i >= 0) @intCast(i) else 0,
+            else => 0,
+        } else 0;
+
         try sync_workspaces.append(alloc, .{
             .id = id.?,
             .title = title.?,
@@ -738,6 +753,7 @@ fn handleWorkspaceSync(service: *session_service.Service, req: *const json_rpc.R
             .preview = if (obj.get("preview")) |v| (if (v == .string) v.string else "") else "",
             .phase = if (obj.get("phase")) |v| (if (v == .string) v.string else "idle") else "idle",
             .color = if (obj.get("color")) |v| (if (v == .string) v.string else "") else "",
+            .unread_count = unread_count,
         });
     }
 
@@ -760,11 +776,54 @@ fn handleWorkspaceSubscribe(service: *session_service.Service, req: *const json_
 
 /// Notify all workspace subscribers that state has changed.
 /// Called after any workspace/pane mutation.
+/// Includes the full workspace list so clients don't need a round-trip re-fetch.
 fn notifyWorkspaceSubscribers(service: *session_service.Service) void {
     const alloc = service.alloc;
+    const reg = &service.workspace_reg;
+
+    const WorkspaceEntry = struct {
+        id: []const u8,
+        title: []const u8,
+        directory: []const u8,
+        preview: []const u8,
+        phase: []const u8,
+        color: ?[]const u8,
+        unread_count: u32,
+        focused_pane_id: ?[]const u8,
+        pane_count: usize,
+        created_at: i64,
+        last_activity_at: i64,
+    };
+
+    var entries: std.ArrayList(WorkspaceEntry) = .empty;
+    defer entries.deinit(alloc);
+
+    for (reg.order.items) |ws_id| {
+        const ws = reg.workspaces.get(ws_id) orelse continue;
+        const leaves = ws.root_pane.collectLeaves(alloc) catch continue;
+        defer alloc.free(leaves);
+        entries.append(alloc, .{
+            .id = ws.id,
+            .title = ws.title,
+            .directory = ws.directory,
+            .preview = ws.preview,
+            .phase = ws.phase,
+            .color = ws.color,
+            .unread_count = ws.unread_count,
+            .focused_pane_id = ws.focused_pane_id,
+            .pane_count = leaves.len,
+            .created_at = ws.created_at,
+            .last_activity_at = ws.last_activity_at,
+        }) catch continue;
+    }
+
     const event = json_rpc.encodeResponse(alloc, .{
         .event = "workspace.changed",
-        .change_seq = service.workspace_reg.change_seq,
+        .change_seq = reg.change_seq,
+        .result = .{
+            .workspaces = entries.items,
+            .selected_workspace_id = reg.selected_id,
+        },
     }) catch return;
     defer alloc.free(event);
     service.subscriptions.notifyAll(event);

@@ -120,6 +120,7 @@ echo "🖥️  Building for simulator..."
 EXTRA_SETTINGS=()
 if [ "$BUNDLE_ID" != "dev.cmux.app.dev" ]; then
     EXTRA_SETTINGS+=("PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID")
+    EXTRA_SETTINGS+=("INFOPLIST_KEY_CFBundleDisplayName=$APP_NAME")
 fi
 xcodebuild -scheme cmux -sdk iphonesimulator -configuration Debug \
     -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \

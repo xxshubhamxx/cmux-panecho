@@ -493,6 +493,14 @@ if [[ "$LAUNCH" -eq 1 ]]; then
   fi
   sleep 0.3
 
+  # Kill the tagged daemon so the new build starts a fresh one
+  if [[ -n "$TAG" ]]; then
+    pkill -f "cmuxd-remote.*--socket.*cmuxd-dev-${TAG}" || true
+    rm -f "$HOME/Library/Application Support/cmux/cmuxd-dev-${TAG}.sock"
+  else
+    pkill -f "cmuxd-remote.*--socket.*cmuxd\.sock" || true
+  fi
+
   # Avoid inheriting cmux/ghostty environment variables from the terminal that
   # runs this script (often inside another cmux instance), which can cause
   # socket and resource-path conflicts.

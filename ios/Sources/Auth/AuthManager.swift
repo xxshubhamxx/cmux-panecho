@@ -165,7 +165,6 @@ class AuthManager: ObservableObject {
         #endif
 
         clearAuthState()
-        await ConvexClientManager.shared.clearAuth()
     }
 
     private func performAutoLogin(_ credentials: AuthAutoLoginCredentials) async {
@@ -194,7 +193,6 @@ class AuthManager: ObservableObject {
         }
 
         clearAuthState()
-        await ConvexClientManager.shared.clearAuth()
     }
 
     private func applySignedInUser(_ user: CurrentUser) async {
@@ -203,7 +201,6 @@ class AuthManager: ObservableObject {
         isAuthenticated = true
         authUserCache.save(mappedUser)
         authSessionCache.setHasTokens(true)
-        await ConvexClientManager.shared.syncAuth()
         await NotificationManager.shared.syncTokenIfPossible()
     }
 
@@ -215,9 +212,6 @@ class AuthManager: ObservableObject {
 
     private func clearPersistedAuthForUITest() async {
         // UI tests only need deterministic local signed-out state at launch.
-        // Clear persisted auth through the shared Convex logout path once,
-        // instead of racing duplicate Stack Auth sign-out calls during init.
-        await ConvexClientManager.shared.clearAuth()
     }
 
     // MARK: - Sign In Flow
@@ -339,7 +333,6 @@ class AuthManager: ObservableObject {
 
         clearAuthState()
         await NotificationManager.shared.unregisterFromServer()
-        await ConvexClientManager.shared.clearAuth()
     }
 
     // MARK: - Access Token

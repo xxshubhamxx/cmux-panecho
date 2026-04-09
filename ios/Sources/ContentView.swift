@@ -5,18 +5,6 @@ struct ContentView: View {
     @StateObject private var authManager = AuthManager.shared
     @StateObject private var terminalStore = TerminalSidebarRootView.makeLiveStore()
     @StateObject private var notificationRouteStore = NotificationRouteStore.shared
-    private let uiTestDirectChat: Bool = {
-        ProcessInfo.processInfo.environment["CMUX_UITEST_DIRECT_CHAT"] == "1"
-    }()
-    private let uiTestChatView: Bool = {
-        ProcessInfo.processInfo.environment["CMUX_UITEST_CHAT_VIEW"] == "1"
-    }()
-    private let uiTestConversationId: String = {
-        ProcessInfo.processInfo.environment["CMUX_UITEST_CONVERSATION_ID"] ?? "uitest_conversation_claude"
-    }()
-    private let uiTestProviderId: String = {
-        ProcessInfo.processInfo.environment["CMUX_UITEST_PROVIDER_ID"] ?? "claude"
-    }()
     private let uiTestTerminalSetupFixture = UITestConfig.terminalSetupFixtureEnabled
     private let uiTestTerminalInputFixture = UITestConfig.terminalInputFixtureEnabled
     private let uiTestTerminalInboxFixture = UITestConfig.terminalInboxFixtureEnabled
@@ -37,16 +25,7 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if uiTestChatView {
-                ChatFix1MainView(conversationId: uiTestConversationId, providerId: uiTestProviderId)
-                    .ignoresSafeArea()
-            } else if uiTestDirectChat {
-                #if DEBUG
-                InputBarUITestHarnessView()
-                #else
-                SignInView()
-                #endif
-            } else if uiTestTerminalSetupFixture {
+            if uiTestTerminalSetupFixture {
                 #if DEBUG
                 TerminalSidebarRootView(store: .uiTestSetupFixture())
                 #else
@@ -84,17 +63,10 @@ struct ContentView: View {
             } else if authManager.isRestoringSession {
                 SessionRestoreView()
             } else if authManager.isAuthenticated {
-                if UITestConfig.mockDataEnabled {
-                    ConversationListView(
-                        terminalStore: terminalStore,
-                        routeStore: notificationRouteStore
-                    )
-                } else {
-                    TerminalSidebarRootView(
-                        store: terminalStore,
-                        routeStore: notificationRouteStore
-                    )
-                }
+                TerminalSidebarRootView(
+                    store: terminalStore,
+                    routeStore: notificationRouteStore
+                )
             } else {
                 SignInView()
             }
@@ -114,53 +86,10 @@ struct SessionRestoreView: View {
     }
 }
 
-#if DEBUG
-struct InputBarUITestHarnessView: View {
-    var body: some View {
-        InputBarUITestHarnessWrapper()
-            .ignoresSafeArea()
-    }
-}
-
-private struct InputBarUITestHarnessWrapper: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> InputBarUITestHarnessViewController {
-        InputBarUITestHarnessViewController()
-    }
-
-    func updateUIViewController(_ uiViewController: InputBarUITestHarnessViewController, context: Context) {}
-}
-
-private final class InputBarUITestHarnessViewController: UIViewController {
-    private var inputBarVC: DebugInputBarViewController!
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.backgroundColor = .systemBackground
-
-        inputBarVC = DebugInputBarViewController()
-        inputBarVC.view.translatesAutoresizingMaskIntoConstraints = false
-
-        addChild(inputBarVC)
-        view.addSubview(inputBarVC.view)
-        inputBarVC.didMove(toParent: self)
-
-        NSLayoutConstraint.activate([
-            inputBarVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            inputBarVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            inputBarVC.view.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
-        ])
-    }
-}
-#endif
-
 struct SettingsView: View {
     @StateObject private var authManager = AuthManager.shared
     @StateObject private var notifications = NotificationManager.shared
     @State private var testNotificationAlert: TestNotificationAlert?
-    #if DEBUG
-    @AppStorage(DebugSettingsKeys.showChatOverlays) private var showChatOverlays = false
-    @AppStorage(DebugSettingsKeys.showChatInputTuning) private var showChatInputTuning = false
-    #endif
 
     var body: some View {
         NavigationStack {
@@ -230,23 +159,9 @@ struct SettingsView: View {
                 }
 
                 #if DEBUG
-                Section("External Accounts") {
-                    NavigationLink("OpenAI Codex") {
-                        CodexOAuthView()
-                    }
-                }
-
                 Section("Debug") {
-                    Toggle("Show chat debug overlays", isOn: $showChatOverlays)
-                    Toggle("Show input tuning panel", isOn: $showChatInputTuning)
-                    NavigationLink("Chat Keyboard Approaches") {
-                        ChatDebugMenu()
-                    }
                     NavigationLink("Debug Logs") {
                         DebugLogsView()
-                    }
-                    NavigationLink("Convex Test") {
-                        ConvexTestView()
                     }
                     Button("Test Sentry Error") {
                         SentrySDK.capture(error: NSError(domain: "dev.cmux.test", code: 1, userInfo: [

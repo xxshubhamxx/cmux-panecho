@@ -17,7 +17,6 @@ struct CMuxApp: App {
             if !allowAnimations {
                 UIView.setAnimationsEnabled(false)
             }
-            resetDebugInputDefaults()
         }
         CrashReporter.install()
         DebugLog.add("App init. uiTest=\(UITestConfig.mockDataEnabled)")
@@ -44,22 +43,6 @@ struct CMuxApp: App {
         }
     }
 
-    #if DEBUG
-    private func resetDebugInputDefaults() {
-        let defaults = UserDefaults.standard
-        defaults.set(false, forKey: DebugSettingsKeys.showChatOverlays)
-        defaults.set(false, forKey: DebugSettingsKeys.showChatInputTuning)
-        defaults.set(0.0, forKey: "debug.input.bottomInsetSingleExtra")
-        defaults.set(4.0, forKey: "debug.input.bottomInsetMultiExtra")
-        defaults.set(4.0, forKey: "debug.input.topInsetMultiExtra")
-        defaults.set(-12.0, forKey: "debug.input.micOffset")
-        defaults.set(-4.0, forKey: "debug.input.sendOffset")
-        defaults.set(1.0, forKey: "debug.input.sendXOffset")
-        defaults.set(34.0, forKey: "debug.input.barYOffset")
-        defaults.set(10.0, forKey: "debug.input.bottomMessageGap")
-        defaults.set(false, forKey: "debug.input.isMultiline")
-    }
-    #endif
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate {

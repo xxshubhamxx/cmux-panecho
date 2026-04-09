@@ -2048,6 +2048,10 @@ class TerminalController {
 
         case "system.identify":
             return v2Ok(id: id, result: v2Identify(params: params))
+        case "daemon.status":
+            return v2Result(id: id, self.v2DaemonStatus(params: params))
+        case "daemon.stop":
+            return v2Result(id: id, self.v2DaemonStop(params: params))
         case "system.tree":
             return v2Result(id: id, self.v2SystemTree(params: params))
         case "auth.login":
@@ -2747,6 +2751,44 @@ class TerminalController {
             "focused": focused.isEmpty ? NSNull() : focused,
             "caller": v2OrNull(resolvedCaller)
         ]
+    }
+
+    private func v2DaemonStatus(params: [String: Any]) -> V2CallResult {
+        var result: [String: Any] = [:]
+        v2MainSync {
+            guard let appDelegate = AppDelegate.shared else { return }
+
+            // WorkspaceDaemonBridge status
+            let bridge = appDelegate.workspaceDaemonBridgeForStatus
+            result["bridge"] = [
+                "status": bridge.statusDescription,
+                "socket_path": bridge.socketPath,
+                "sync_count": bridge.syncCount,
+                "last_sync": bridge.lastSyncTime.map {
+                    ISO8601DateFormatter().string(from: $0)
+                } as Any? ?? NSNull(),
+            ] as [String: Any]
+
+#if DEBUG
+            // MobileDaemonBridgeInline status
+            let daemon = MobileDaemonBridgeInline.shared
+            result["daemon"] = [
+                "running": daemon.isRunning,
+                "ws_port": daemon.wsPort as Any? ?? NSNull(),
+                "socket_path": daemon.daemonSocketPath as Any? ?? NSNull(),
+            ] as [String: Any]
+#endif
+        }
+        return .ok(result)
+    }
+
+    private func v2DaemonStop(params: [String: Any]) -> V2CallResult {
+        v2MainSync {
+#if DEBUG
+            MobileDaemonBridgeInline.shared.killDaemon()
+#endif
+        }
+        return .ok(["stopped": true])
     }
 
     private func v2SystemTree(params: [String: Any]) -> V2CallResult {

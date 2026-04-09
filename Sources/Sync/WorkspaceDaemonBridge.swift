@@ -13,6 +13,12 @@ final class WorkspaceDaemonBridge {
 
     private var socketFD: Int32 = -1
     private var syncScheduled = false
+    private(set) var lastSyncTime: Date?
+    private(set) var syncCount: Int = 0
+
+    var isConnected: Bool { socketFD >= 0 }
+    var statusDescription: String { isConnected ? "connected" : "disconnected" }
+    var socketPath: String { daemonSocketPath }
 
     private var daemonSocketPath: String {
         let env = ProcessInfo.processInfo.environment
@@ -116,6 +122,8 @@ final class WorkspaceDaemonBridge {
         ]
 
         sendRPC(method: "workspace.sync", params: params)
+        lastSyncTime = Date()
+        syncCount += 1
     }
 
     private func workspacePreview(for workspace: Workspace) -> String? {
@@ -185,7 +193,7 @@ final class WorkspaceDaemonBridge {
             return
         }
 
-        var payload: [String: Any] = ["id": 1, "method": method, "params": params]
+        let payload: [String: Any] = ["id": 1, "method": method, "params": params]
         guard var data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         data.append(0x0A) // newline delimiter
 

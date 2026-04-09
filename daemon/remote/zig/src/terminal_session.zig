@@ -25,7 +25,7 @@ pub const OffsetWindow = struct {
 pub const TerminalSession = struct {
     alloc: std.mem.Allocator,
     terminal: *ghostty_vt.Terminal,
-    stream: ghostty_vt.TerminalStream,
+    stream: ghostty_vt.ReadonlyStream,
     raw_buffer: std.ArrayList(u8),
     base_offset: u64 = 0,
     next_offset: u64 = 0,
@@ -64,7 +64,7 @@ pub const TerminalSession = struct {
     pub fn feed(self: *TerminalSession, data: []const u8) !void {
         if (data.len == 0) return;
 
-        self.stream.nextSlice(data);
+        try self.stream.nextSlice(data);
         try self.raw_buffer.appendSlice(self.alloc, data);
         self.next_offset += data.len;
 

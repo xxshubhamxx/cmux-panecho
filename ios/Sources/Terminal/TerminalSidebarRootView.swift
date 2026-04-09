@@ -6,6 +6,7 @@ struct TerminalSidebarRootView: View {
     @State private var navigationPath = NavigationPath()
     @State private var searchText = ""
     @State private var editorDraft: TerminalHostEditorDraft?
+    @State private var showScanner = false
     @State private var pendingStartHostID: TerminalHost.ID?
     @State private var renamingHost: TerminalHost?
     @State private var renameText = ""
@@ -179,13 +180,13 @@ struct TerminalSidebarRootView: View {
                         Button {
                             presentNewServerEditor()
                         } label: {
-                            Label(TerminalHomeStrings.addServerLabel, systemImage: "plus")
+                            Label(TerminalHomeStrings.findServersLabel, systemImage: "magnifyingglass")
                                 .labelStyle(.titleAndIcon)
                         }
                         .buttonStyle(.plain)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.tint)
-                        .accessibilityIdentifier("terminal.server.add")
+                        .accessibilityIdentifier("terminal.server.find")
                     }
                     .textCase(nil)
                 }
@@ -271,8 +272,10 @@ struct TerminalSidebarRootView: View {
             .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button(TerminalHomeStrings.addServerLabel) {
+                        Button {
                             presentNewServerEditor()
+                        } label: {
+                            Label(TerminalHomeStrings.findServersLabel, systemImage: "magnifyingglass")
                         }
                         NavigationLink(destination: SettingsView()) {
                             Label(TerminalHomeStrings.settingsLabel, systemImage: "gear")
@@ -299,22 +302,35 @@ struct TerminalSidebarRootView: View {
                     )
                 }
             }
-        }
-        .sheet(item: $editorDraft) { draft in
-            TerminalHostEditorView(
-                draft: draft
-            ) { host, credentials in
-                store.saveHost(host, credentials: credentials)
-                editorDraft = nil
-                if pendingStartHostID == host.id, store.isConfigured(host) {
+            .sheet(item: $editorDraft) { draft in
+                TerminalHostEditorView(
+                    draft: draft
+                ) { host, credentials in
+                    store.saveHost(host, credentials: credentials)
+                    editorDraft = nil
+                    if pendingStartHostID == host.id, store.isConfigured(host) {
+                        pendingStartHostID = nil
+                        let workspaceID = store.startWorkspace(on: host)
+                        navigationPath.append(workspaceID)
+                    }
+                } onCancel: {
                     pendingStartHostID = nil
-                    let workspaceID = store.startWorkspace(on: host)
-                    navigationPath.append(workspaceID)
+                    editorDraft = nil
                 }
-            } onCancel: {
-                pendingStartHostID = nil
-                editorDraft = nil
             }
+        }
+        .sheet(isPresented: $showScanner) {
+            ServerScannerView(
+                connectedPorts: Set(store.hosts.compactMap(\.wsPort))
+            ) { server in
+                addServerFromScan(server)
+            } onRemove: { server in
+                removeServerFromScan(server)
+            } onDismiss: {
+                showScanner = false
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .alert(
             TerminalHomeStrings.renameServerLabel,
@@ -401,10 +417,39 @@ struct TerminalSidebarRootView: View {
     }
 
     private func presentNewServerEditor() {
+        showScanner = true
+    }
+
+    private func presentManualServerEditor() {
         editorDraft = TerminalHostEditorDraft(
             host: store.newHostDraft(),
             credentials: TerminalSSHCredentials(password: "", privateKey: "")
         )
+    }
+
+    private func addServerFromScan(_ server: DiscoveredServer) {
+        let host = TerminalHost(
+            stableID: "\(server.hostname)-\(server.port)",
+            name: server.hostname == "127.0.0.1"
+                ? "Local Dev (:\(server.port))"
+                : "\(server.hostname) (:\(server.port))",
+            hostname: server.hostname,
+            port: 22,
+            username: "cmux",
+            symbolName: "desktopcomputer",
+            palette: .sky,
+            source: .discovered,
+            transportPreference: .remoteDaemon,
+            wsPort: server.port,
+            wsSecret: server.wsSecret
+        )
+        store.saveHost(host, credentials: TerminalSSHCredentials(password: "", privateKey: ""))
+    }
+
+    private func removeServerFromScan(_ server: DiscoveredServer) {
+        if let host = store.hosts.first(where: { $0.wsPort == server.port && $0.hostname == server.hostname }) {
+            store.deleteHost(host)
+        }
     }
 }
 
@@ -437,6 +482,7 @@ private enum TerminalHomeStrings {
     static let missingTitle = String(localized: "terminal.home.missing_title", defaultValue: "Workspace Missing")
     static let missingDescription = String(localized: "terminal.home.missing_description", defaultValue: "This workspace is no longer available.")
     static let addServerLabel = String(localized: "terminal.home.add_server", defaultValue: "Add Server")
+    static let findServersLabel = String(localized: "terminal.home.find_servers", defaultValue: "Find Servers")
     static let editServerLabel = String(localized: "terminal.home.edit_server", defaultValue: "Edit Server")
     static let deleteServerLabel = String(localized: "terminal.home.delete_server", defaultValue: "Delete Server")
     static let renameServerLabel = String(localized: "terminal.home.rename_server", defaultValue: "Rename")

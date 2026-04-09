@@ -619,10 +619,14 @@ final class TerminalSidebarStore: ObservableObject {
                         Self.debugLog("subscription: connection lost, reconnecting")
                         break
                     }
-                    // On any workspace.changed event, re-fetch the full list
-                    if event.contains("workspace.changed") {
-                        Self.debugLog("subscription: workspace.changed event received")
-                        // Re-fetch via the same connection or a new one
+                    guard event.contains("workspace.changed") else { continue }
+                    Self.debugLog("subscription: workspace.changed event received")
+
+                    // Try inline workspace data first (no round-trip needed)
+                    if event.contains("\"workspaces\"") {
+                        self?.handleWorkspaceResponse(event, hostname: hostname, port: wsPort, secret: secret)
+                    } else {
+                        // Fallback: re-fetch for older daemons without inline data
                         Self.wsSend(fd: fd, data: "{\"id\":2,\"method\":\"workspace.list\"}")
                         if let listResp = Self.wsRecv(fd: fd) {
                             self?.handleWorkspaceResponse(listResp, hostname: hostname, port: wsPort, secret: secret)
@@ -735,9 +739,11 @@ final class TerminalSidebarStore: ObservableObject {
 
         // Upsert workspaces preserving server order
         var updatedWorkspaces: [TerminalWorkspace] = []
-        for (index, wsData) in data.enumerated() {
+        for wsData in data {
             guard let remoteId = wsData["id"] as? String else { continue }
             let title = wsData["title"] as? String ?? "Untitled"
+            let preview = wsData["preview"] as? String ?? ""
+            let unreadCount = wsData["unread_count"] as? Int ?? 0
             let lastActivityMs = wsData["last_activity_at"] as? Int64 ?? Int64(Date().timeIntervalSince1970 * 1000)
             let lastActivity = Date(timeIntervalSince1970: Double(lastActivityMs) / 1000)
 
@@ -746,6 +752,8 @@ final class TerminalSidebarStore: ObservableObject {
                 updated.title = title
                 updated.lastActivity = lastActivity
                 updated.phase = .connected
+                if !preview.isEmpty { updated.preview = preview }
+                updated.unread = unreadCount > 0
                 updatedWorkspaces.append(updated)
             } else {
                 var workspace = TerminalWorkspace(
@@ -756,6 +764,8 @@ final class TerminalSidebarStore: ObservableObject {
                 )
                 workspace.lastActivity = lastActivity
                 workspace.phase = .connected
+                if !preview.isEmpty { workspace.preview = preview }
+                workspace.unread = unreadCount > 0
                 updatedWorkspaces.append(workspace)
             }
         }

@@ -102,12 +102,34 @@ final class MobileDaemonBridge {
         if let portStr = env["CMUX_MOBILE_WS_PORT"], let port = Int(portStr) {
             return port
         }
-        // Derive from tag: default 9444, tagged builds offset by hash
-        if let tag = env["CMUX_TAG"] ?? env["CMUX_LAUNCH_TAG"], !tag.isEmpty {
-            let hash = abs(tag.hashValue)
-            return 9444 + (hash % 100)
+        // Derive a stable port from tag or bundle ID to avoid collisions
+        // between multiple tagged macOS builds. Uses FNV-1a (not hashValue,
+        // which is randomized per process in Swift).
+        let tag = env["CMUX_TAG"] ?? env["CMUX_LAUNCH_TAG"] ?? ""
+        if !tag.isEmpty {
+            return 9444 + 1 + (Self.stableHash(tag) % 99)
+        }
+        let bundleId = Bundle.main.bundleIdentifier ?? ""
+        let basePrefixes = ["com.cmuxterm.app.debug", "dev.cmux.app.dev"]
+        for prefix in basePrefixes {
+            if bundleId.count > prefix.count, bundleId.hasPrefix(prefix) {
+                let suffix = String(bundleId.dropFirst(prefix.count + 1))
+                if !suffix.isEmpty {
+                    return 9444 + 1 + (Self.stableHash(suffix) % 99)
+                }
+            }
         }
         return 9444
+    }
+
+    private static func stableHash(_ string: String) -> Int {
+        // FNV-1a 32-bit
+        var hash: UInt32 = 2_166_136_261
+        for byte in string.utf8 {
+            hash ^= UInt32(byte)
+            hash &*= 16_777_619
+        }
+        return Int(hash)
     }
 
     private func generateOrLoadSecret() -> String {
@@ -135,6 +157,8 @@ final class MobileDaemonBridge {
 
         // Check common dev paths
         let candidates = [
+            // Zig daemon (from this worktree)
+            env["HOME"].map { "\($0)/fun/cmuxterm-hq/worktrees/task-move-ios-app-into-cmux-repo/daemon/remote/zig/zig-out/bin/cmuxd-remote" },
             // Rust daemon (from feat-amux-rust-backend worktree)
             env["HOME"].map { "\($0)/fun/cmuxterm-hq/worktrees/feat-amux-rust-backend/daemon/remote/rust/target/debug/cmuxd-remote" },
             env["HOME"].map { "\($0)/fun/cmuxterm-hq/worktrees/feat-amux-rust-backend/daemon/remote/rust/target/release/cmuxd-remote" },

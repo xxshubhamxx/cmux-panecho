@@ -94,6 +94,9 @@ pub const Workspace = struct {
     custom_title: ?[]const u8 = null,
     color: ?[]const u8 = null,
     directory: []const u8 = "",
+    preview: []const u8 = "",
+    phase: []const u8 = "idle",
+    unread_count: u32 = 0,
     root_pane: *PaneNode,
     focused_pane_id: ?[]const u8 = null,
     created_at: i64,
@@ -166,6 +169,8 @@ pub const Registry = struct {
             .id = id,
             .title = resolved_title,
             .directory = dir,
+            .preview = try self.alloc.dupe(u8, ""),
+            .phase = try self.alloc.dupe(u8, "idle"),
             .root_pane = root,
             .focused_pane_id = try self.alloc.dupe(u8, pane_id),
             .created_at = now,
@@ -393,6 +398,8 @@ pub const Registry = struct {
         if (ws.custom_title) |t| alloc.free(t);
         if (ws.color) |c| alloc.free(c);
         if (ws.directory.len > 0) alloc.free(ws.directory);
+        alloc.free(ws.preview);
+        alloc.free(ws.phase);
         if (ws.focused_pane_id) |f| alloc.free(f);
         ws.root_pane.deinit(alloc);
         alloc.destroy(ws.root_pane);
@@ -440,6 +447,10 @@ pub const Registry = struct {
                 .id = id,
                 .title = try self.alloc.dupe(u8, ws_data.title),
                 .directory = try self.alloc.dupe(u8, ws_data.directory),
+                .preview = try self.alloc.dupe(u8, ws_data.preview),
+                .phase = try self.alloc.dupe(u8, ws_data.phase),
+                .color = if (ws_data.color.len > 0) try self.alloc.dupe(u8, ws_data.color) else null,
+                .unread_count = ws_data.unread_count,
                 .root_pane = root,
                 .created_at = std.time.milliTimestamp(),
                 .last_activity_at = std.time.milliTimestamp(),

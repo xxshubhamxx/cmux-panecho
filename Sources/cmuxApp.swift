@@ -4787,10 +4787,11 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     SettingsSectionHeader(title: String(localized: "settings.section.account", defaultValue: "Account"))
                     SettingsCard {
+                        let authWidth: CGFloat? = authManager.isAuthenticated ? nil : pickerColumnWidth
                         SettingsCardRow(
                             String(localized: "settings.account.title", defaultValue: "cmux Account"),
                             subtitle: accountStatusSubtitle,
-                            controlWidth: authManager.isAuthenticated ? nil : pickerColumnWidth
+                            controlWidth: authWidth
                         ) {
                             if authManager.isLoading || authManager.isRestoringSession {
                                 ProgressView()
@@ -6611,6 +6612,19 @@ private struct SettingsCardRow<Trailing: View>: View {
         self.trailing = trailing()
     }
 
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        controlWidth: CGFloat? = nil,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.configurationReview = .action
+        self.title = title
+        self.subtitle = subtitle
+        self.controlWidth = controlWidth
+        self.trailing = trailing()
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: subtitle == nil ? 0 : 3) {
@@ -6698,6 +6712,19 @@ extension SettingsPickerRow where ExtraTrailing == EmptyView {
         @ViewBuilder content: () -> PickerContent
     ) {
         self.init(configurationReview: configurationReview, title, subtitle: subtitle, controlWidth: controlWidth, selection: selection, accessibilityId: accessibilityId, content: content) {
+            EmptyView()
+        }
+    }
+
+    init(
+        _ title: String,
+        subtitle: String? = nil,
+        controlWidth: CGFloat,
+        selection: Binding<SelectionValue>,
+        accessibilityId: String? = nil,
+        @ViewBuilder content: () -> PickerContent
+    ) {
+        self.init(configurationReview: .action, title, subtitle: subtitle, controlWidth: controlWidth, selection: selection, accessibilityId: accessibilityId, content: content) {
             EmptyView()
         }
     }

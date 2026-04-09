@@ -1,55 +1,6 @@
 import Foundation
 @testable import cmux_DEV
 
-extension ConvexConversation {
-    static func fixture(
-        id: String,
-        title: String,
-        preview: String,
-        unread: Bool,
-        updatedAt: Double
-    ) -> Self {
-        ConversationsListPagedWithLatestReturnPageItem(
-            conversation: ConversationsListPagedWithLatestReturnPageItemConversation(
-                _id: ConvexId(rawValue: id),
-                _creationTime: updatedAt,
-                userId: "user_123",
-                isArchived: false,
-                pinned: false,
-                sandboxInstanceId: nil,
-                title: title,
-                clientConversationId: nil,
-                modelId: nil,
-                permissionMode: nil,
-                stopReason: nil,
-                namespaceId: nil,
-                isolationMode: nil,
-                modes: nil,
-                agentInfo: nil,
-                acpSandboxId: nil,
-                initializedOnSandbox: true,
-                lastMessageAt: updatedAt,
-                lastAssistantVisibleAt: updatedAt,
-                teamId: "team_123",
-                createdAt: updatedAt,
-                updatedAt: updatedAt,
-                status: .active,
-                sessionId: "session_123",
-                providerId: "claude",
-                cwd: "/workspace"
-            ),
-            preview: ConversationsListPagedWithLatestReturnPageItemPreview(
-                text: preview,
-                kind: .text
-            ),
-            unread: unread,
-            lastReadAt: unread ? nil : updatedAt,
-            latestMessageAt: updatedAt,
-            title: title
-        )
-    }
-}
-
 extension AppDatabase.WorkspaceInboxRow {
     static func fixture(
         workspaceID: String,

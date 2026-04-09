@@ -4,47 +4,9 @@ import XCTest
 
 @MainActor
 final class UnifiedInboxSyncServiceTests: XCTestCase {
-    func testMergesConversationAndWorkspaceRows() throws {
-        let items = UnifiedInboxSyncService.merge(
-            conversations: [
-                .fixture(
-                    id: "conversation_123",
-                    title: "Fix Tailscale attach",
-                    preview: "agent replied",
-                    unread: false,
-                    updatedAt: 10_000
-                )
-            ],
-            workspaces: [
-                .fixture(
-                    workspaceID: "workspace_123",
-                    title: "orb / cmux",
-                    preview: "feature/dogfood-inbox",
-                    latestEventSeq: 4,
-                    lastReadEventSeq: 2,
-                    lastActivityAt: Date(timeIntervalSince1970: 20)
-                )
-            ]
-        )
-
-        XCTAssertEqual(items.map(\.kind), [.workspace, .conversation])
-        XCTAssertEqual(items.first?.title, "orb / cmux")
-        XCTAssertEqual(items.first?.unreadCount, 2)
-    }
-
     func testWorkspaceUpdateRewritesCachedRow() async throws {
         let database = try AppDatabase.inMemory()
         let inboxCache = InboxCacheRepository(database: database)
-        try inboxCache.save([
-            UnifiedInboxItem(
-                kind: .conversation,
-                conversationID: "conversation_123",
-                title: "Fix Tailscale attach",
-                preview: "agent replied",
-                unreadCount: 0,
-                sortDate: Date(timeIntervalSince1970: 10)
-            )
-        ])
 
         let subject = PassthroughSubject<[MobileInboxWorkspaceRow], Never>()
         let service = UnifiedInboxSyncService(
@@ -88,12 +50,8 @@ final class UnifiedInboxSyncServiceTests: XCTestCase {
         cancellable?.cancel()
 
         let cachedItems = try inboxCache.load()
-        XCTAssertEqual(cachedItems.count, 2)
-        XCTAssertEqual(cachedItems.first(where: { $0.kind == .workspace })?.preview, "preview 2")
-        XCTAssertEqual(
-            cachedItems.first(where: { $0.kind == .conversation })?.conversationID,
-            "conversation_123"
-        )
+        XCTAssertEqual(cachedItems.count, 1)
+        XCTAssertEqual(cachedItems.first?.preview, "preview 2")
     }
 
     func testConnectDoesNotDropCachedWorkspaceRowsBeforeFirstLiveSnapshot() throws {

@@ -84,20 +84,6 @@ struct UnifiedInboxItem: Identifiable, Equatable, Codable, Sendable {
 }
 
 extension UnifiedInboxItem {
-    init(conversation: ConvexConversation) {
-        let sortMilliseconds = max(conversation.latestMessageAt, conversation.updatedAt)
-        self.init(
-            kind: .conversation,
-            conversationID: conversation._id.rawValue,
-            title: conversation.displayName,
-            preview: conversation.previewSubtitle,
-            unreadCount: conversation.unread ? 1 : 0,
-            sortDate: Date(timeIntervalSince1970: sortMilliseconds / 1000),
-            accessoryLabel: conversation.providerDisplayName,
-            symbolName: conversation.providerIcon
-        )
-    }
-
     init(workspaceRow: AppDatabase.WorkspaceInboxRow) {
         self.init(
             kind: .workspace,

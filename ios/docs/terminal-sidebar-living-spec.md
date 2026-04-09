@@ -9,11 +9,8 @@ Build a stack-auth-gated iOS main screen that mirrors the cmux desktop sidebar m
 - right/detail pane showing the terminal for the selected session,
 - terminals powered by libghostty.
 
-Convex conversation/task flows stay in repo as legacy code paths and can be reactivated later.
-
 ## Non-Goals (current phase)
 - Full parity with desktop tab/workspace protocol behavior.
-- Replacing all legacy Convex view models.
 - Advanced terminal actions (split tree management, command palette, etc.).
 
 ## Architecture (current)
@@ -69,7 +66,7 @@ Convex conversation/task flows stay in repo as legacy code paths and can be reac
 
 ### M4: Desktop model convergence (future)
 - [x] Map sidebar sessions to real backend workspace/session identities.
-- [x] Reintroduce Convex-backed session metadata as opt-in non-legacy path.
+- [x] Workspace metadata via daemon sync.
 - [x] Share model contracts with desktop.
 
 ## Risks / Open Questions

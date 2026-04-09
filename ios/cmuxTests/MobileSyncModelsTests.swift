@@ -1,7 +1,7 @@
 import XCTest
 @testable import cmux_DEV
 
-final class ConvexMobileDogfoodModelsTests: XCTestCase {
+final class MobileSyncModelsTests: XCTestCase {
     func testMobileMachineRowsEnableSSHFallback() {
         let row = MobileMachineRow(
             teamId: "team-1",

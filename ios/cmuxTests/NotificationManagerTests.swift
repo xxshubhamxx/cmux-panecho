@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class NotificationManagerTests: XCTestCase {
-    func testSyncsDeviceTokenToConvex() async throws {
+    func testSyncsDeviceTokenToServer() async throws {
         let pushSyncer = StubNotificationPushSyncer()
         pushSyncer.isAuthenticated = true
         let tokenStore = InMemoryNotificationTokenStore()

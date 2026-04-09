@@ -1927,6 +1927,41 @@ struct CMUXCLI {
             let response = try client.sendV2(method: "system.identify", params: params)
             print(jsonString(formatIDs(response, mode: idFormat)))
 
+        case "daemon-status", "daemon":
+            let subcommand = commandArgs.first?.lowercased() ?? "status"
+            if subcommand == "stop" {
+                let response = try client.sendV2(method: "daemon.stop")
+                if jsonOutput {
+                    print(jsonString(response))
+                } else {
+                    print("Daemon stopped.")
+                }
+            } else {
+                let response = try client.sendV2(method: "daemon.status")
+                if jsonOutput {
+                    print(jsonString(response))
+                } else {
+                    if let bridge = response["bridge"] as? [String: Any] {
+                        let status = bridge["status"] as? String ?? "unknown"
+                        let socketPath = bridge["socket_path"] as? String ?? "unknown"
+                        let syncCount = bridge["sync_count"] as? Int ?? 0
+                        let lastSync = bridge["last_sync"] as? String ?? "never"
+                        print("Bridge: \(status)")
+                        print("  Socket: \(socketPath)")
+                        print("  Syncs: \(syncCount)")
+                        print("  Last sync: \(lastSync)")
+                    }
+                    if let daemon = response["daemon"] as? [String: Any] {
+                        let running = daemon["running"] as? Bool ?? false
+                        let wsPort = daemon["ws_port"] as? Int
+                        let daemonSocket = daemon["socket_path"] as? String
+                        print("Daemon: \(running ? "running" : "stopped")")
+                        if let wsPort { print("  WebSocket port: \(wsPort)") }
+                        if let daemonSocket { print("  Socket: \(daemonSocket)") }
+                    }
+                }
+            }
+
         case "list-windows":
             let response = try sendV1Command("list_windows", client: client)
             if jsonOutput {
@@ -6884,6 +6919,20 @@ struct CMUXCLI {
     /// Return the help/usage text for a subcommand, or nil if the command is unknown.
     private func subcommandUsage(_ command: String) -> String? {
         switch command {
+        case "daemon", "daemon-status":
+            return """
+            Usage: cmux daemon [status|stop] [--json]
+
+            Show the sync daemon status (bridge connection, WebSocket port, sync count).
+
+            Subcommands:
+              status   Show daemon status (default)
+              stop     Stop the daemon process
+
+            The daemon syncs workspace state to iOS via WebSocket. It persists
+            across app restarts so terminal sessions survive upgrades. Use
+            'cmux daemon stop' to kill it explicitly.
+            """
         case "ping":
             return """
             Usage: cmux ping
@@ -14533,6 +14582,7 @@ struct CMUXCLI {
           capabilities
           rpc <method> [json-params]
           identify [--workspace <id|ref|index>] [--surface <id|ref|index>] [--no-caller]
+          daemon [status|stop]
           list-windows
           current-window
           new-window

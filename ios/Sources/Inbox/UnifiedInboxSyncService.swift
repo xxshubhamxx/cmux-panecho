@@ -21,7 +21,7 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
         workspaceLiveSync: WorkspaceLiveSyncing? = nil
     ) {
         self.inboxCacheRepository = inboxCacheRepository
-        self.workspaceLiveSync = workspaceLiveSync ?? ConvexWorkspaceLiveSync()
+        self.workspaceLiveSync = workspaceLiveSync ?? NoOpWorkspaceLiveSync()
         let cachedWorkspaceItems = (try? inboxCacheRepository?.load().filter { $0.kind == .workspace }) ?? []
         self.subject = CurrentValueSubject(cachedWorkspaceItems)
     }
@@ -74,13 +74,7 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
         guard let inboxCacheRepository else { return }
 
         do {
-            let cachedConversationItems = try inboxCacheRepository
-                .load()
-                .filter { $0.kind == .conversation }
-            try inboxCacheRepository.save(Self.mergeItems(
-                conversationItems: cachedConversationItems,
-                workspaceItems: items
-            ))
+            try inboxCacheRepository.save(items)
         } catch {
             #if DEBUG
             print("Failed to persist live workspace inbox items: \(error)")
@@ -90,27 +84,6 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
 
     private func shouldIgnoreInitialEmptySnapshot(_ items: [UnifiedInboxItem]) -> Bool {
         !hasAcceptedLiveSnapshot && items.isEmpty && !subject.value.isEmpty
-    }
-
-    nonisolated static func merge(
-        conversations: [ConvexConversation],
-        workspaces: [AppDatabase.WorkspaceInboxRow]
-    ) -> [UnifiedInboxItem] {
-        let workspaceItems = workspaces.map(UnifiedInboxItem.init(workspaceRow:))
-        return merge(
-            conversations: conversations,
-            workspaceItems: workspaceItems
-        )
-    }
-
-    nonisolated static func merge(
-        conversations: [ConvexConversation],
-        workspaceItems: [UnifiedInboxItem]
-    ) -> [UnifiedInboxItem] {
-        mergeItems(
-            conversationItems: conversations.map(UnifiedInboxItem.init(conversation:)),
-            workspaceItems: workspaceItems
-        )
     }
 
     nonisolated static func mergeItems(

@@ -2255,6 +2255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var browserAddressBarBlurObserver: NSObjectProtocol?
     private let updateController = UpdateController()
     private lazy var mobilePresenceCoordinator = WorkspaceDaemonBridge()
+    var workspaceDaemonBridgeForStatus: WorkspaceDaemonBridge { mobilePresenceCoordinator }
     private lazy var titlebarAccessoryController = UpdateTitlebarAccessoryController(viewModel: updateViewModel)
     private let windowDecorationsController = WindowDecorationsController()
     private var menuBarExtraController: MenuBarExtraController?
@@ -2399,6 +2400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // Set to true when the user has already confirmed quit via the warning dialog,
     // so applicationShouldTerminate does not show a second alert.
     private var isQuitWarningConfirmed = false
+    private var shouldKillDaemonOnQuit = false
     private var didInstallLifecycleSnapshotObservers = false
     private var didDisableSuddenTermination = false
     private var commandPaletteVisibilityByWindowId: [UUID: Bool] = [:]
@@ -2513,7 +2515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
 
 #if DEBUG
-        MobileDaemonBridge.shared.startIfNeeded()
+        MobileDaemonBridgeInline.shared.startIfNeeded()
 #endif
 
 #if DEBUG
@@ -2913,7 +2915,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         isTerminatingApp = true
         _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
 
-        // Tagged DEV builds are ephemeral, skip quit confirmation entirely.
+        // Tagged DEV builds are ephemeral, but ask about the daemon if one is running.
+        #if DEBUG
+        if SocketControlSettings.isTaggedDevBuild() && MobileDaemonBridgeInline.shared.isRunning {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.alertStyle = .informational
+                alert.messageText = String(
+                    localized: "dialog.quitDev.title",
+                    defaultValue: "Quit cmux DEV?"
+                )
+                alert.informativeText = String(
+                    localized: "dialog.quitDev.daemonMessage",
+                    defaultValue: "A sync daemon is running for iOS. You can keep it running so your terminal sessions persist, or stop it now."
+                )
+                alert.addButton(withTitle: String(
+                    localized: "dialog.quitDev.quitKeepDaemon",
+                    defaultValue: "Quit (Keep Daemon)"
+                ))
+                alert.addButton(withTitle: String(
+                    localized: "dialog.quitDev.quitStopDaemon",
+                    defaultValue: "Quit & Stop Daemon"
+                ))
+                alert.addButton(withTitle: String(
+                    localized: "common.cancel",
+                    defaultValue: "Cancel"
+                ))
+
+                let response = alert.runModal()
+                switch response {
+                case .alertFirstButtonReturn:
+                    // Quit, keep daemon running
+                    self.isQuitWarningConfirmed = true
+                    NSApp.reply(toApplicationShouldTerminate: true)
+                case .alertSecondButtonReturn:
+                    // Quit and stop daemon
+                    self.shouldKillDaemonOnQuit = true
+                    self.isQuitWarningConfirmed = true
+                    NSApp.reply(toApplicationShouldTerminate: true)
+                default:
+                    self.isTerminatingApp = false
+                    NSApp.reply(toApplicationShouldTerminate: false)
+                }
+            }
+            return .terminateLater
+        }
+        #endif
+
         if SocketControlSettings.isTaggedDevBuild() {
             return .terminateNow
         }
@@ -2962,7 +3010,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillTerminate(_ notification: Notification) {
         isTerminatingApp = true
         #if DEBUG
-        MobileDaemonBridge.shared.stop()
+        MobileDaemonBridgeInline.shared.stop(killDaemon: shouldKillDaemonOnQuit)
         #endif
         _ = saveSessionSnapshot(includeScrollback: true, removeWhenEmpty: false)
         stopSessionAutosaveTimer()
@@ -14595,3 +14643,213 @@ private extension NSWindow {
     }
 
 }
+
+// MARK: - AuthManager stub (full implementation in Sources/Auth/ requires StackAuth, iOS-only)
+
+#if !canImport(StackAuth)
+@MainActor
+final class AuthManager: ObservableObject {
+    static let shared = AuthManager()
+    @Published private(set) var isAuthenticated = false
+    @Published private(set) var currentUser: CMUXAuthUser?
+    @Published private(set) var availableTeams: [AuthTeamSummary] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var isRestoringSession = false
+    @Published private(set) var didCompleteBrowserSignIn = false
+    @Published var selectedTeamID: String?
+    var resolvedTeamID: String? { nil }
+    let requiresAuthenticationGate = false
+    func beginSignIn() {}
+    func signOut() async {}
+    func handleCallbackURL(_ url: URL) async throws {}
+    func applySignInResult(_ result: Any) {}
+    struct SignInResult { let email: String? }
+    static func signInWithCredentialDirectly(email: String, password: String) async throws -> SignInResult {
+        throw NSError(domain: "AuthManager", code: 0, userInfo: [NSLocalizedDescriptionKey: "Auth not available on macOS"])
+    }
+    func seedTokensFromCLI(refreshToken: String, accessToken: String?) async {}
+}
+#endif
+
+// MARK: - Mobile Daemon Bridge (inline to avoid xcodeproj file additions)
+
+#if DEBUG
+final class MobileDaemonBridgeInline {
+    static let shared = MobileDaemonBridgeInline()
+    private var process: Process?
+    private var wsPortFilePath: String?
+
+    private(set) var wsPort: Int?
+    private(set) var daemonSocketPath: String?
+    private(set) var wsSecret: String?
+
+    var isRunning: Bool { process?.isRunning == true }
+
+    private init() {}
+
+    func startIfNeeded() {
+        guard process == nil else { return }
+        let env = ProcessInfo.processInfo.environment
+        guard let binaryPath = resolveBinary(env) else {
+            NSLog("📱 MobileBridge: cmuxd-remote not found, skipping")
+            return
+        }
+
+        // Use the same socket path that WorkspaceDaemonBridge connects to
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first?.appendingPathComponent("cmux").path ?? "/tmp"
+        let tag = (env["CMUX_TAG"] ?? env["CMUX_LAUNCH_TAG"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let daemonSocket = tag.isEmpty ? "\(appSupport)/cmuxd.sock" : "\(appSupport)/cmuxd-dev-\(tag).sock"
+
+        // Kill any existing daemon on this socket so we get exactly one per DEV instance
+        killDaemonOnSocket(socketPath: daemonSocket)
+
+        let port = resolvePort(env)
+        let secret = loadOrGenerateSecret()
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: binaryPath)
+        proc.arguments = ["serve", "--unix", "--socket", daemonSocket, "--ws-port", String(port), "--ws-secret", secret]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { [weak self] _ in self?.cleanup() }
+
+        do {
+            try proc.run()
+            process = proc
+            self.wsPort = port
+            self.daemonSocketPath = daemonSocket
+            self.wsSecret = secret
+            // Write wsport to /tmp/cmux-debug-<tag>.wsport where the iOS reload script looks
+            let debugSocketPath = SocketControlSettings.socketPath()
+            let wsportPath = debugSocketPath.replacingOccurrences(of: ".sock", with: ".wsport")
+            try? String(port).write(toFile: wsportPath, atomically: true, encoding: .utf8)
+            wsPortFilePath = wsportPath
+            NSLog("📱 MobileBridge: started ws://127.0.0.1:%d socket=%@ wsport=%@", port, daemonSocket, wsportPath)
+        } catch {
+            NSLog("📱 MobileBridge: failed: %@", error.localizedDescription)
+        }
+    }
+
+    func stop(killDaemon shouldKill: Bool = false) {
+        if shouldKill, let p = process, p.isRunning {
+            p.terminate()
+            NSLog("📱 MobileBridge: terminated daemon pid=%d on quit", p.processIdentifier)
+        }
+        process = nil
+        wsPort = nil
+        daemonSocketPath = nil
+        wsSecret = nil
+        cleanup()
+    }
+
+    private func cleanup() {
+        if let p = wsPortFilePath { try? FileManager.default.removeItem(atPath: p); wsPortFilePath = nil }
+    }
+
+    /// Kill any cmuxd-remote process listening on the given socket path.
+    private func killDaemonOnSocket(socketPath: String) {
+        // Use pgrep to find processes with this socket path in their args
+        let pipe = Pipe()
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        proc.arguments = ["-f", "cmuxd-remote.*--socket.*\(socketPath)"]
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        try? proc.run()
+        proc.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        if let output = String(data: data, encoding: .utf8) {
+            for line in output.split(separator: "\n") {
+                if let pid = Int32(line.trimmingCharacters(in: .whitespaces)),
+                   pid != ProcessInfo.processInfo.processIdentifier {
+                    kill(pid, SIGTERM)
+                    NSLog("📱 MobileBridge: killed existing daemon pid=%d on %@", pid, socketPath)
+                }
+            }
+        }
+        // Remove stale socket file
+        try? FileManager.default.removeItem(atPath: socketPath)
+    }
+
+    /// Kill the daemon process explicitly (for cmux daemon stop).
+    func killDaemon() {
+        if let p = process, p.isRunning {
+            p.terminate()
+            NSLog("📱 MobileBridge: terminated daemon pid=%d", p.processIdentifier)
+        }
+        if let socketPath = daemonSocketPath {
+            try? FileManager.default.removeItem(atPath: socketPath)
+        }
+        process = nil
+        wsPort = nil
+        daemonSocketPath = nil
+        wsSecret = nil
+        cleanup()
+    }
+
+    private func resolvePort(_ env: [String: String]) -> Int {
+        if let s = env["CMUX_MOBILE_WS_PORT"], let p = Int(s) { return p }
+        // Derive a stable port from tag or bundle ID to avoid collisions.
+        // Uses FNV-1a (not hashValue, which is randomized per process).
+        if let tag = env["CMUX_TAG"] ?? env["CMUX_LAUNCH_TAG"], !tag.isEmpty {
+            return 9444 + 1 + (Self.stableHash(tag) % 99)
+        }
+        let bundleId = Bundle.main.bundleIdentifier ?? ""
+        let basePrefixes = ["com.cmuxterm.app.debug", "dev.cmux.app.dev"]
+        for prefix in basePrefixes {
+            if bundleId.count > prefix.count, bundleId.hasPrefix(prefix) {
+                let suffix = String(bundleId.dropFirst(prefix.count + 1))
+                if !suffix.isEmpty {
+                    return 9444 + 1 + (Self.stableHash(suffix) % 99)
+                }
+            }
+        }
+        return 9444
+    }
+
+    private static func stableHash(_ string: String) -> Int {
+        var hash: UInt32 = 2_166_136_261
+        for byte in string.utf8 {
+            hash ^= UInt32(byte)
+            hash &*= 16_777_619
+        }
+        return Int(hash)
+    }
+
+    private func loadOrGenerateSecret() -> String {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let path = dir.appendingPathComponent("cmux/mobile-ws-secret").path
+        if let s = try? String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { return s }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let secret = bytes.map { String(format: "%02x", $0) }.joined()
+        try? FileManager.default.createDirectory(atPath: dir.appendingPathComponent("cmux").path, withIntermediateDirectories: true)
+        try? secret.write(toFile: path, atomically: true, encoding: .utf8)
+        return secret
+    }
+
+    private func resolveBinary(_ env: [String: String]) -> String? {
+        if let p = env["CMUX_REMOTE_DAEMON_BINARY"], FileManager.default.isExecutableFile(atPath: p) { return p }
+        // Use compile-time source path to find repo root, same as Workspace.findRepoRoot()
+        let compileTimeRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // Sources
+            .deletingLastPathComponent() // repo root
+        let zigBin = compileTimeRoot.appendingPathComponent("daemon/remote/zig/zig-out/bin/cmuxd-remote").path
+        if FileManager.default.isExecutableFile(atPath: zigBin) { return zigBin }
+        let home = env["HOME"] ?? NSHomeDirectory()
+        for candidate in [
+            "\(home)/fun/cmuxterm-hq/worktrees/feat-amux-rust-backend/daemon/remote/rust/target/debug/cmuxd-remote",
+            "\(home)/fun/cmuxterm-hq/worktrees/feat-amux-rust-backend/daemon/remote/rust/target/release/cmuxd-remote",
+        ] {
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        if let p = Bundle.main.resourceURL?.appendingPathComponent("bin/cmuxd-remote").path,
+           FileManager.default.isExecutableFile(atPath: p) { return p }
+        return nil
+    }
+}
+#endif

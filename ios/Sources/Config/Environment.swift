@@ -59,25 +59,6 @@ enum Environment {
         stackAuthConfig.publishableClientKey
     }
 
-    // MARK: - Convex
-
-    var convexURL: String {
-        if let override = localOverride(
-            devKey: "CONVEX_URL_DEV",
-            prodKey: "CONVEX_URL_PROD",
-            legacyKey: "CONVEX_URL"
-        ) {
-            return override
-        }
-
-        switch self {
-        case .development:
-            return "https://polite-canary-804.convex.cloud"
-        case .production:
-            return "https://adorable-wombat-701.convex.cloud"
-        }
-    }
-
     // MARK: - API URLs
 
     var apiBaseURL: String {
