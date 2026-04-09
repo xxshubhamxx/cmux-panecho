@@ -367,7 +367,7 @@ extension BrowserPanel {
                     getContent: function(elements) {
                         return elements.map(function(el) {
                             return (el.innerText || el.textContent || '').trim();
-                        }).filter(function(t) { return t.length > 0; }).join('\n\n');
+                        }).filter(function(t) { return t.length > 0; }).join('\\n\\n');
                     }
                 });
                 api.registerPlugin({
