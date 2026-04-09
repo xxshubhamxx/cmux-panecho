@@ -2651,8 +2651,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @preconcurrency UNUser
                     self.openNewMainWindow(nil)
                 }
                 self.moveUITestWindowToTargetDisplayIfNeeded()
-                NSApp.activate()
-                // On headless CI runners, activate() silently fails (no GUI session).
+                NSApp.forceActivate()
+                // On headless CI runners, forceActivate() silently fails (no GUI session).
                 // Force windows visible so the terminal surface starts rendering.
                 for window in NSApp.windows {
                     window.orderFrontRegardless()
@@ -7352,7 +7352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @preconcurrency UNUser
             SettingsWindowController.shared.show(navigationTarget: target)
         },
         activateApplication: @MainActor () -> Void = {
-            NSApp.activate()
+            NSApp.forceActivate()
         }
     ) {
 #if DEBUG
@@ -12616,7 +12616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @preconcurrency UNUser
             if !app.isTerminated {
                 _ = app.forceTerminate()
             }
-            NSApp.activate()
+            NSApp.forceActivate()
         }
     }
 
@@ -13174,7 +13174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @preconcurrency UNUser
         }
         window.makeKeyAndOrderFront(nil)
         // Improve reliability across Spaces / when other helper panels are key.
-        NSApp.activate()
+        NSApp.forceActivate()
     }
 
     private func markReadIfFocused(
@@ -13912,6 +13912,17 @@ private final class CmuxFieldEditorOwningWebViewBox: NSObject {
 
     init(webView: CmuxWebView?) {
         self.webView = webView
+    }
+}
+
+extension NSApplication {
+    /// Force-activate the app, ignoring other apps. Use for explicit focus-intent
+    /// paths (socket commands, keyboard shortcuts, bringToFront). The cooperative
+    /// `activate()` requires the foreground app to yield and is unreliable for
+    /// these use cases.
+    @available(macOS, deprecated: 14.0, message: "Intentional: cooperative activate() is unreliable for focus-intent paths")
+    func forceActivate() {
+        activate(ignoringOtherApps: true)
     }
 }
 

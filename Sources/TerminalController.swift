@@ -6928,9 +6928,9 @@ class TerminalController {
             if shouldActivate {
                 if let targetWindow {
                     targetWindow.makeKeyAndOrderFront(nil)
-                    NSApp.activate()
+                    NSApp.forceActivate()
                 } else {
-                    NSApp.activate()
+                    NSApp.forceActivate()
                 }
             }
 
