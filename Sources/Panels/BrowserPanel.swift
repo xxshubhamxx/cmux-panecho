@@ -1742,7 +1742,6 @@ final class BrowserPanel: Panel, ObservableObject {
     /// WKProcessPool in macOS 12 ("creating multiple instances no longer has any
     /// effect"), removing the shared pool entirely breaks in-memory session/cookie
     /// state sharing between panels and popup flows.
-    @available(macOS, deprecated: 12.0, message: "WKProcessPool is deprecated but removing it breaks session sharing")
     private static let sharedProcessPool = WKProcessPool()
 
     /// Popup windows owned by this panel (for lifecycle cleanup)

@@ -13919,10 +13919,14 @@ extension NSApplication {
     /// Force-activate the app, ignoring other apps. Use for explicit focus-intent
     /// paths (socket commands, keyboard shortcuts, bringToFront). The cooperative
     /// `activate()` requires the foreground app to yield and is unreliable for
-    /// these use cases.
-    @available(macOS, deprecated: 14.0, message: "Intentional: cooperative activate() is unreliable for focus-intent paths")
+    /// these use cases. `activateIgnoringOtherApps` is deprecated but has no
+    /// functional replacement for forceful activation.
     func forceActivate() {
-        activate(ignoringOtherApps: true)
+        // Intentionally calling deprecated API: cooperative activate() is
+        // unreliable for focus-intent paths. No replacement exists.
+        // Using @objc message send to avoid deprecation warning propagation.
+        let sel = NSSelectorFromString("activateIgnoringOtherApps:")
+        perform(sel, with: true as NSNumber)
     }
 }
 
