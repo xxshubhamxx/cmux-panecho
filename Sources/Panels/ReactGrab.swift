@@ -130,15 +130,27 @@ enum ReactGrabScriptLoader {
                 }
             }
             guard let script = String(data: data, encoding: .utf8) else { return nil }
+            let patched = Self.applyPatches(script)
             await MainActor.run {
-                cachedScript = script
+                cachedScript = patched
                 cachedVersion = version
             }
-            return script
+            return patched
         } catch {
             NSLog("ReactGrab: fetch failed for v%@: %@", version, error.localizedDescription)
             return nil
         }
+    }
+
+    /// Post-integrity-check patches applied to the upstream script.
+    /// The truncation helper `Pa=(e,t)=>e.length>t?...` caps text to 100 chars
+    /// in element snippets. Replace with an identity function so the full
+    /// innerText is preserved.
+    private static func applyPatches(_ script: String) -> String {
+        script.replacingOccurrences(
+            of: "Pa=(e,t)=>e.length>t?`${e.slice(0,t)}...`:e",
+            with: "Pa=(e,t)=>e"
+        )
     }
 }
 
@@ -363,13 +375,6 @@ extension BrowserPanel {
                 }
                 refreshSessionToken();
                 var lastActive;
-                api.setOptions({
-                    getContent: function(elements) {
-                        return elements.map(function(el) {
-                            return (el.innerText || el.textContent || '').trim();
-                        }).filter(function(t) { return t.length > 0; }).join('\\n\\n');
-                    }
-                });
                 api.registerPlugin({
                     name: 'cmux-bridge',
                     hooks: {
