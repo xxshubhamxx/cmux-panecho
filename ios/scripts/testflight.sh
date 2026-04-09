@@ -43,18 +43,22 @@ cat <<'EOF' > "$EXPORT_PLIST"
 </plist>
 EOF
 
-archive_and_upload() {
+archive() {
   local config="$1"
-  local app_name="$2"
   local archive_path="build/cmux-${config}.xcarchive"
 
-  echo ""
-  echo "📦 Archiving $config ($app_name)..."
+  echo "📦 Archiving $config..."
   xcodebuild -scheme cmux -configuration "$config" \
     -archivePath "$archive_path" archive \
     -allowProvisioningUpdates \
     -allowProvisioningDeviceRegistration \
     -quiet
+  echo "✅ Archived $config"
+}
+
+upload() {
+  local config="$1"
+  local archive_path="build/cmux-${config}.xcarchive"
 
   echo "🚀 Uploading $config to TestFlight..."
   xcodebuild -exportArchive \
@@ -63,12 +67,27 @@ archive_and_upload() {
     -exportOptionsPlist "$EXPORT_PLIST" \
     -allowProvisioningUpdates \
     -allowProvisioningDeviceRegistration
-
-  echo "✅ $config ($app_name) build $NEW_BUILD uploaded!"
+  echo "✅ $config uploaded!"
 }
 
-archive_and_upload "Release" "cmux"
-archive_and_upload "Nightly" "cmux NIGHTLY"
+# Archives must be sequential (xcodebuild locks the project)
+archive "Release"
+archive "Nightly"
+
+# Uploads run in parallel
+upload "Release" &
+PID_RELEASE=$!
+upload "Nightly" &
+PID_NIGHTLY=$!
+
+FAILED=0
+wait $PID_RELEASE || FAILED=1
+wait $PID_NIGHTLY || FAILED=1
+
+if [ $FAILED -ne 0 ]; then
+  echo "❌ One or more uploads failed"
+  exit 1
+fi
 
 echo ""
 echo "✅ Build $NEW_BUILD uploaded to both TestFlight apps!"
