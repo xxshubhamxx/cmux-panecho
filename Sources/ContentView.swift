@@ -1812,6 +1812,8 @@ struct ContentView: View {
     @State private var observedWindow: NSWindow?
     @StateObject private var fullscreenControlsViewModel = TitlebarControlsViewModel()
     @StateObject private var fileExplorerStore = FileExplorerStore()
+    @State private var fileExplorerWidth: CGFloat = 220
+    @State private var fileExplorerDragStartWidth: CGFloat?
     @State private var previousSelectedWorkspaceId: UUID?
     @State private var retiringWorkspaceId: UUID?
     @State private var workspaceHandoffGeneration: UInt64 = 0
@@ -2300,6 +2302,50 @@ struct ContentView: View {
 
     private enum SidebarResizerHandle: Hashable {
         case divider
+        case explorerDivider
+    }
+
+    /// Returns the current drag width, start width capture, width update, and drag end cleanup for a resizer handle.
+    private func resizerConfig(for handle: SidebarResizerHandle, availableWidth: CGFloat) -> (
+        currentWidth: CGFloat,
+        captureStart: () -> Void,
+        updateWidth: (CGFloat) -> Void,
+        finishDrag: () -> Void
+    ) {
+        switch handle {
+        case .divider:
+            return (
+                currentWidth: sidebarWidth,
+                captureStart: { sidebarDragStartWidth = sidebarWidth },
+                updateWidth: { translation in
+                    let startWidth = sidebarDragStartWidth ?? sidebarWidth
+                    let nextWidth = Self.clampedSidebarWidth(
+                        startWidth + translation,
+                        maximumWidth: maxSidebarWidth(availableWidth: availableWidth)
+                    )
+                    withTransaction(Transaction(animation: nil)) {
+                        sidebarWidth = nextWidth
+                    }
+                },
+                finishDrag: { sidebarDragStartWidth = nil }
+            )
+        case .explorerDivider:
+            return (
+                currentWidth: fileExplorerWidth,
+                captureStart: { fileExplorerDragStartWidth = fileExplorerWidth },
+                updateWidth: { translation in
+                    let startWidth = fileExplorerDragStartWidth ?? fileExplorerWidth
+                    let nextWidth = min(500, max(150, startWidth - translation))
+                    withTransaction(Transaction(animation: nil)) {
+                        fileExplorerWidth = nextWidth
+                    }
+                },
+                finishDrag: {
+                    fileExplorerDragStartWidth = nil
+                    fileExplorerState.width = fileExplorerWidth
+                }
+            )
+        }
     }
 
     private var sidebarResizerSidebarHitWidth: CGFloat {
@@ -2531,27 +2577,21 @@ struct ContentView: View {
             .gesture(
                 DragGesture(minimumDistance: 0, coordinateSpace: .global)
                     .onChanged { value in
+                        let config = resizerConfig(for: handle, availableWidth: availableWidth)
                         if !isResizerDragging {
                             TerminalWindowPortalRegistry.beginInteractiveGeometryResize()
                             isResizerDragging = true
-                            sidebarDragStartWidth = sidebarWidth
+                            config.captureStart()
                         }
-
                         activateSidebarResizerCursor()
-                        let startWidth = sidebarDragStartWidth ?? sidebarWidth
-                        let nextWidth = Self.clampedSidebarWidth(
-                            startWidth + value.translation.width,
-                            maximumWidth: maxSidebarWidth(availableWidth: availableWidth)
-                        )
-                        withTransaction(Transaction(animation: nil)) {
-                            sidebarWidth = nextWidth
-                        }
+                        config.updateWidth(value.translation.width)
                     }
                     .onEnded { _ in
                         if isResizerDragging {
                             TerminalWindowPortalRegistry.endInteractiveGeometryResize()
                             isResizerDragging = false
-                            sidebarDragStartWidth = nil
+                            let config = resizerConfig(for: handle, availableWidth: availableWidth)
+                            config.finishDrag()
                         }
                         activateSidebarResizerCursor()
                         scheduleSidebarResizerCursorRelease()
@@ -2688,8 +2728,6 @@ struct ContentView: View {
         }
     }
 
-    @State private var fileExplorerDragStartWidth: CGFloat?
-
     private var terminalContentWithSidebarDropOverlay: some View {
         HStack(spacing: 0) {
             terminalContent
@@ -2698,41 +2736,32 @@ struct ContentView: View {
                 }
             if fileExplorerState.isVisible {
                 Divider()
-                FileExplorerView(store: fileExplorerStore, state: fileExplorerState)
-                    .frame(width: fileExplorerState.width)
+                FileExplorerPanelView(store: fileExplorerStore, state: fileExplorerState)
+                    .frame(width: fileExplorerWidth)
                     .overlay(alignment: .leading) {
-                        fileExplorerResizerOverlay
+                        fileExplorerResizerHandle
                     }
+            }
+        }
+        .animation(nil, value: fileExplorerState.isVisible)
+        .animation(nil, value: fileExplorerWidth)
+        .onAppear {
+            fileExplorerWidth = fileExplorerState.width
+        }
+        .onChange(of: fileExplorerState.width) { newValue in
+            // Sync persisted width -> local (e.g. from debug window)
+            if fileExplorerDragStartWidth == nil {
+                fileExplorerWidth = newValue
             }
         }
     }
 
-    private var fileExplorerResizerOverlay: some View {
-        Color.clear
-            .frame(width: 6)
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                if hovering {
-                    NSCursor.resizeLeftRight.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        if fileExplorerDragStartWidth == nil {
-                            fileExplorerDragStartWidth = fileExplorerState.width
-                        }
-                        guard let startWidth = fileExplorerDragStartWidth else { return }
-                        // Dragging left = wider, dragging right = narrower
-                        let newWidth = startWidth - value.translation.width
-                        fileExplorerState.width = min(500, max(150, newWidth))
-                    }
-                    .onEnded { _ in
-                        fileExplorerDragStartWidth = nil
-                    }
-            )
+    private var fileExplorerResizerHandle: some View {
+        sidebarResizerHandleOverlay(
+            .explorerDivider,
+            width: SidebarResizeInteraction.totalHitWidth,
+            availableWidth: observedWindow?.contentView?.bounds.width ?? 1920
+        )
     }
 
     @AppStorage("sidebarBlendMode") private var sidebarBlendMode = SidebarBlendModeOption.withinWindow.rawValue

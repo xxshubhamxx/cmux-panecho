@@ -3,188 +3,28 @@ import Bonsplit
 import Combine
 import SwiftUI
 
-// MARK: - Right Panel Container
+// MARK: - File Explorer Panel (single NSViewRepresentable)
 
-/// Right-side panel that wraps the file explorer with a vertical divider and resize handle.
-struct FileExplorerRightPanel: View {
+/// The entire file explorer panel as one AppKit view hierarchy.
+/// Contains the header bar (path + controls) and NSOutlineView, with no SwiftUI intermediaries.
+struct FileExplorerPanelView: NSViewRepresentable {
     @ObservedObject var store: FileExplorerStore
     @ObservedObject var state: FileExplorerState
-
-    @State private var isResizerHovered = false
-    @State private var isResizerDragging = false
-    @State private var dragStartWidth: CGFloat = 0
-
-    private let minWidth: CGFloat = 150
-    private let maxWidth: CGFloat = 500
-    private let resizerWidth: CGFloat = 6
-
-    var body: some View {
-        HStack(spacing: 0) {
-            // Vertical divider + resize handle
-            Rectangle()
-                .fill(isResizerDragging || isResizerHovered
-                    ? Color.accentColor.opacity(0.5)
-                    : Color(nsColor: .separatorColor))
-                .frame(width: isResizerDragging || isResizerHovered ? 2 : 1)
-                .padding(.horizontal, (resizerWidth - 1) / 2)
-                .contentShape(Rectangle())
-                .onHover { hovering in
-                    isResizerHovered = hovering
-                    if hovering {
-                        NSCursor.resizeLeftRight.push()
-                    } else if !isResizerDragging {
-                        NSCursor.pop()
-                    }
-                }
-                .gesture(
-                    DragGesture(minimumDistance: 1)
-                        .onChanged { value in
-                            if !isResizerDragging {
-                                dragStartWidth = state.width
-                                isResizerDragging = true
-                            }
-                            // Dragging left = wider panel, dragging right = narrower
-                            let newWidth = dragStartWidth - value.translation.width
-                            state.width = min(maxWidth, max(minWidth, newWidth))
-                        }
-                        .onEnded { _ in
-                            isResizerDragging = false
-                            if !isResizerHovered {
-                                NSCursor.pop()
-                            }
-                        }
-                )
-                .accessibilityIdentifier("FileExplorerResizer")
-
-            FileExplorerView(store: store, state: state)
-                .frame(width: state.width)
-        }
-    }
-}
-
-// MARK: - Container View
-
-struct FileExplorerView: View {
-    @ObservedObject var store: FileExplorerStore
-    @ObservedObject var state: FileExplorerState
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if store.rootPath.isEmpty {
-                emptyState
-            } else {
-                fileTree
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "folder")
-                .font(.system(size: 28))
-                .foregroundColor(.secondary)
-            Text(String(localized: "fileExplorer.empty", defaultValue: "No folder open"))
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var fileTree: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            rootPathHeader
-            if store.isRootLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                FileExplorerOutlineView(store: store)
-            }
-        }
-    }
-
-    private var rootPathHeader: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-            Text(store.displayRootPath)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-
-            Button {
-                state.showHiddenFiles.toggle()
-                store.showHiddenFiles = state.showHiddenFiles
-                store.reload()
-            } label: {
-                Image(systemName: state.showHiddenFiles ? "eye" : "eye.slash")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help(state.showHiddenFiles
-                ? String(localized: "fileExplorer.hiddenFiles.hide", defaultValue: "Hide Hidden Files")
-                : String(localized: "fileExplorer.hiddenFiles.show", defaultValue: "Show Hidden Files"))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-    }
-}
-
-// MARK: - NSOutlineView Wrapper
-
-struct FileExplorerOutlineView: NSViewRepresentable {
-    @ObservedObject var store: FileExplorerStore
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(store: store)
+        Coordinator(store: store, state: state)
     }
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.borderType = .noBorder
-        scrollView.drawsBackground = false
-
-        let outlineView = NSOutlineView()
-        outlineView.headerView = nil
-        outlineView.usesAlternatingRowBackgroundColors = false
-        outlineView.style = .plain
-        outlineView.selectionHighlightStyle = .regular
-        outlineView.rowSizeStyle = .default
-        outlineView.indentationPerLevel = 16
-        outlineView.autoresizesOutlineColumn = true
-        outlineView.floatsGroupRows = false
-        outlineView.backgroundColor = .clear
-
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
-        column.isEditable = false
-        column.resizingMask = .autoresizingMask
-        outlineView.addTableColumn(column)
-        outlineView.outlineTableColumn = column
-
-        outlineView.dataSource = context.coordinator
-        outlineView.delegate = context.coordinator
-
-        // Context menu
-        let menu = NSMenu()
-        menu.delegate = context.coordinator
-        outlineView.menu = menu
-
-        scrollView.documentView = outlineView
-        context.coordinator.outlineView = outlineView
-
-        return scrollView
+    func makeNSView(context: Context) -> FileExplorerContainerView {
+        let container = FileExplorerContainerView(coordinator: context.coordinator)
+        context.coordinator.containerView = container
+        return container
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+    func updateNSView(_ container: FileExplorerContainerView, context: Context) {
         context.coordinator.store = store
+        context.coordinator.state = state
+        container.updateHeader(store: store, state: state)
         context.coordinator.reloadIfNeeded()
     }
 
@@ -192,14 +32,34 @@ struct FileExplorerOutlineView: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
         var store: FileExplorerStore
+        var state: FileExplorerState
+        weak var containerView: FileExplorerContainerView?
         weak var outlineView: NSOutlineView?
         private var lastRootNodeCount: Int = -1
         private var observationCancellable: AnyCancellable?
+        private var styleObserver: Any?
 
-        init(store: FileExplorerStore) {
+        init(store: FileExplorerStore, state: FileExplorerState) {
             self.store = store
+            self.state = state
             super.init()
             observeStore()
+            styleObserver = NotificationCenter.default.addObserver(
+                forName: .fileExplorerStyleDidChange, object: nil, queue: .main
+            ) { [weak self] _ in
+                guard let self, let outlineView = self.outlineView else { return }
+                let style = FileExplorerStyle.current
+                outlineView.indentationPerLevel = style.indentation
+                outlineView.noteHeightOfRows(withIndexesChanged: IndexSet(0..<outlineView.numberOfRows))
+                outlineView.reloadData()
+                self.restoreExpansionState(self.store.expandedPaths, in: outlineView)
+            }
+        }
+
+        deinit {
+            if let observer = styleObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
 
         private func observeStore() {
@@ -212,6 +72,10 @@ struct FileExplorerOutlineView: NSViewRepresentable {
 
         func reloadIfNeeded() {
             guard let outlineView else { return }
+
+            // Update empty state vs tree visibility
+            containerView?.updateVisibility(hasContent: !store.rootPath.isEmpty, isLoading: store.isRootLoading)
+
             let newCount = store.rootNodes.count
             if newCount != lastRootNodeCount {
                 lastRootNodeCount = newCount
@@ -298,13 +162,9 @@ struct FileExplorerOutlineView: NSViewRepresentable {
             cellView.onHover = { [weak self] isHovering in
                 guard let self else { return }
                 if isHovering {
-                    Task { @MainActor in
-                        self.store.prefetchChildren(for: node)
-                    }
+                    self.store.prefetchChildren(for: node)
                 } else {
-                    Task { @MainActor in
-                        self.store.cancelPrefetch(for: node)
-                    }
+                    self.store.cancelPrefetch(for: node)
                 }
             }
 
@@ -313,35 +173,27 @@ struct FileExplorerOutlineView: NSViewRepresentable {
 
         func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
             guard let node = item as? FileExplorerNode, node.isDirectory else { return false }
-            Task { @MainActor in
-                store.expand(node: node)
-            }
+            store.expand(node: node)
             return node.children != nil
         }
 
         func outlineView(_ outlineView: NSOutlineView, shouldCollapseItem item: Any) -> Bool {
             guard let node = item as? FileExplorerNode else { return false }
-            Task { @MainActor in
-                store.collapse(node: node)
-            }
+            store.collapse(node: node)
             return true
         }
 
         func outlineViewItemDidExpand(_ notification: Notification) {
             guard let node = notification.userInfo?["NSObject"] as? FileExplorerNode else { return }
-            Task { @MainActor in
-                if !store.isExpanded(node) {
-                    store.expand(node: node)
-                }
+            if !store.isExpanded(node) {
+                store.expand(node: node)
             }
         }
 
         func outlineViewItemDidCollapse(_ notification: Notification) {
             guard let node = notification.userInfo?["NSObject"] as? FileExplorerNode else { return }
-            Task { @MainActor in
-                if store.isExpanded(node) {
-                    store.collapse(node: node)
-                }
+            if store.isExpanded(node) {
+                store.collapse(node: node)
             }
         }
 
@@ -350,14 +202,13 @@ struct FileExplorerOutlineView: NSViewRepresentable {
         }
 
         func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-            22
+            FileExplorerStyle.current.rowHeight
         }
 
         // MARK: - Drag-to-Terminal
 
         func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> (any NSPasteboardWriting)? {
             guard let node = item as? FileExplorerNode, !node.isDirectory else { return nil }
-            // Only allow drag for local files
             guard store.provider is LocalFileExplorerProvider else { return nil }
             return NSURL(fileURLWithPath: node.path)
         }
@@ -448,6 +299,204 @@ struct FileExplorerOutlineView: NSViewRepresentable {
     }
 }
 
+// MARK: - Container View (all-AppKit)
+
+/// Pure AppKit container holding the header bar and outline view.
+final class FileExplorerContainerView: NSView {
+    private let headerView: FileExplorerHeaderView
+    private let scrollView: NSScrollView
+    private let outlineView: FileExplorerNSOutlineView
+    private let emptyLabel: NSTextField
+    private let loadingIndicator: NSProgressIndicator
+
+    init(coordinator: FileExplorerPanelView.Coordinator) {
+        headerView = FileExplorerHeaderView()
+        scrollView = NSScrollView()
+        outlineView = FileExplorerNSOutlineView()
+        emptyLabel = NSTextField(labelWithString: String(localized: "fileExplorer.empty", defaultValue: "No folder open"))
+        loadingIndicator = NSProgressIndicator()
+
+        super.init(frame: .zero)
+
+        // Header
+        headerView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(headerView)
+
+        // Empty state label
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+        emptyLabel.font = .systemFont(ofSize: 13)
+        emptyLabel.textColor = .secondaryLabelColor
+        emptyLabel.alignment = .center
+        emptyLabel.isHidden = true
+        addSubview(emptyLabel)
+
+        // Loading indicator
+        loadingIndicator.translatesAutoresizingMaskIntoConstraints = false
+        loadingIndicator.style = .spinning
+        loadingIndicator.controlSize = .small
+        loadingIndicator.isHidden = true
+        addSubview(loadingIndicator)
+
+        // Outline view setup
+        outlineView.headerView = nil
+        outlineView.usesAlternatingRowBackgroundColors = false
+        outlineView.style = .plain
+        outlineView.selectionHighlightStyle = .regular
+        outlineView.rowSizeStyle = .default
+        outlineView.indentationPerLevel = FileExplorerStyle.current.indentation
+        outlineView.autoresizesOutlineColumn = true
+        outlineView.floatsGroupRows = false
+        outlineView.backgroundColor = .clear
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
+        column.isEditable = false
+        column.resizingMask = .autoresizingMask
+        outlineView.addTableColumn(column)
+        outlineView.outlineTableColumn = column
+
+        outlineView.dataSource = coordinator
+        outlineView.delegate = coordinator
+        coordinator.outlineView = outlineView
+
+        // Context menu
+        let menu = NSMenu()
+        menu.delegate = coordinator
+        outlineView.menu = menu
+
+        // Scroll view
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        scrollView.documentView = outlineView
+        addSubview(scrollView)
+
+        NSLayoutConstraint.activate([
+            headerView.topAnchor.constraint(equalTo: topAnchor),
+            headerView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            headerView.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            emptyLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            loadingIndicator.centerXAnchor.constraint(equalTo: centerXAnchor),
+            loadingIndicator.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func updateHeader(store: FileExplorerStore, state: FileExplorerState) {
+        headerView.update(displayPath: store.displayRootPath, showHidden: state.showHiddenFiles)
+        headerView.onToggleHidden = {
+            state.showHiddenFiles.toggle()
+            store.showHiddenFiles = state.showHiddenFiles
+            store.reload()
+        }
+    }
+
+    func updateVisibility(hasContent: Bool, isLoading: Bool) {
+        scrollView.isHidden = !hasContent || isLoading
+        headerView.isHidden = !hasContent
+        emptyLabel.isHidden = hasContent
+        loadingIndicator.isHidden = !isLoading
+        if isLoading {
+            loadingIndicator.startAnimation(nil)
+        } else {
+            loadingIndicator.stopAnimation(nil)
+        }
+    }
+}
+
+// MARK: - Header View (AppKit)
+
+/// Pure AppKit header bar with folder icon, path label, and hidden files toggle.
+final class FileExplorerHeaderView: NSView {
+    private let iconView = NSImageView()
+    private let pathLabel = NSTextField(labelWithString: "")
+    private let toggleButton = NSButton()
+    var onToggleHidden: (() -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setupViews()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupViews() {
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+        iconView.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        iconView.contentTintColor = .secondaryLabelColor
+
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        pathLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        pathLabel.textColor = .secondaryLabelColor
+        pathLabel.lineBreakMode = .byTruncatingMiddle
+        pathLabel.maximumNumberOfLines = 1
+        pathLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        toggleButton.translatesAutoresizingMaskIntoConstraints = false
+        toggleButton.bezelStyle = .inline
+        toggleButton.isBordered = false
+        toggleButton.image = NSImage(systemSymbolName: "eye.slash", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .regular))
+        toggleButton.contentTintColor = .secondaryLabelColor
+        toggleButton.target = self
+        toggleButton.action = #selector(toggleHiddenFiles)
+        toggleButton.toolTip = String(localized: "fileExplorer.hiddenFiles.show", defaultValue: "Show Hidden Files")
+
+        addSubview(iconView)
+        addSubview(pathLabel)
+        addSubview(toggleButton)
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 28),
+
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 14),
+            iconView.heightAnchor.constraint(equalToConstant: 14),
+
+            pathLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 4),
+            pathLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            pathLabel.trailingAnchor.constraint(lessThanOrEqualTo: toggleButton.leadingAnchor, constant: -4),
+
+            toggleButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            toggleButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            toggleButton.widthAnchor.constraint(equalToConstant: 20),
+            toggleButton.heightAnchor.constraint(equalToConstant: 20),
+        ])
+    }
+
+    func update(displayPath: String, showHidden: Bool) {
+        pathLabel.stringValue = displayPath
+        let symbolName = showHidden ? "eye" : "eye.slash"
+        toggleButton.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .regular))
+        toggleButton.toolTip = showHidden
+            ? String(localized: "fileExplorer.hiddenFiles.hide", defaultValue: "Hide Hidden Files")
+            : String(localized: "fileExplorer.hiddenFiles.show", defaultValue: "Show Hidden Files")
+    }
+
+    @objc private func toggleHiddenFiles() {
+        onToggleHidden?()
+    }
+}
+
 // MARK: - Cell View
 
 final class FileExplorerCellView: NSTableCellView {
@@ -467,12 +516,15 @@ final class FileExplorerCellView: NSTableCellView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private var iconWidthConstraint: NSLayoutConstraint!
+    private var iconHeightConstraint: NSLayoutConstraint!
+    private var iconToTextConstraint: NSLayoutConstraint!
+
     private func setupViews() {
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyDown
 
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.font = .systemFont(ofSize: 13, weight: .medium)
         nameLabel.textColor = .labelColor
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.maximumNumberOfLines = 1
@@ -486,13 +538,17 @@ final class FileExplorerCellView: NSTableCellView {
         addSubview(nameLabel)
         addSubview(loadingIndicator)
 
+        iconWidthConstraint = iconView.widthAnchor.constraint(equalToConstant: 16)
+        iconHeightConstraint = iconView.heightAnchor.constraint(equalToConstant: 16)
+        iconToTextConstraint = nameLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 4)
+
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 16),
-            iconView.heightAnchor.constraint(equalToConstant: 16),
+            iconWidthConstraint,
+            iconHeightConstraint,
 
-            nameLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 4),
+            iconToTextConstraint,
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: loadingIndicator.leadingAnchor, constant: -4),
 
@@ -504,18 +560,38 @@ final class FileExplorerCellView: NSTableCellView {
     }
 
     func configure(with node: FileExplorerNode, gitStatus: GitFileStatus? = nil) {
-        nameLabel.stringValue = node.name
+        let style = FileExplorerStyle.current
 
-        if node.isDirectory {
-            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-            iconView.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil)?
-                .withSymbolConfiguration(config)
-            iconView.contentTintColor = .systemBlue
+        nameLabel.stringValue = node.name
+        nameLabel.font = style.nameFont
+
+        iconWidthConstraint.constant = style.iconSize
+        iconHeightConstraint.constant = style.iconSize
+        iconToTextConstraint.constant = style.iconToTextSpacing
+
+        if style == .finder {
+            if node.isDirectory {
+                let folderIcon = NSWorkspace.shared.icon(for: .folder)
+                folderIcon.size = NSSize(width: style.iconSize, height: style.iconSize)
+                iconView.image = folderIcon
+                iconView.contentTintColor = nil
+            } else {
+                let fileIcon = NSWorkspace.shared.icon(forFileType: (node.name as NSString).pathExtension)
+                fileIcon.size = NSSize(width: style.iconSize, height: style.iconSize)
+                iconView.image = fileIcon
+                iconView.contentTintColor = nil
+            }
         } else {
-            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-            iconView.image = NSImage(systemSymbolName: "doc", accessibilityDescription: nil)?
-                .withSymbolConfiguration(config)
-            iconView.contentTintColor = .secondaryLabelColor
+            let symbolConfig = NSImage.SymbolConfiguration(pointSize: style.iconSize, weight: style.iconWeight)
+            if node.isDirectory {
+                iconView.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil)?
+                    .withSymbolConfiguration(symbolConfig)
+                iconView.contentTintColor = style.folderIconTint
+            } else {
+                iconView.image = NSImage(systemSymbolName: "doc", accessibilityDescription: nil)?
+                    .withSymbolConfiguration(symbolConfig)
+                iconView.contentTintColor = style.fileIconTint
+            }
         }
 
         if node.isLoading {
@@ -530,21 +606,11 @@ final class FileExplorerCellView: NSTableCellView {
             nameLabel.textColor = .systemRed
             nameLabel.toolTip = error
         } else if let gitStatus {
-            nameLabel.textColor = Self.colorForGitStatus(gitStatus)
+            nameLabel.textColor = style.gitColor(for: gitStatus)
             nameLabel.toolTip = node.path
         } else {
             nameLabel.textColor = .labelColor
             nameLabel.toolTip = node.path
-        }
-    }
-
-    private static func colorForGitStatus(_ status: GitFileStatus) -> NSColor {
-        switch status {
-        case .modified: return NSColor(red: 0.65, green: 0.45, blue: 0.0, alpha: 1.0)
-        case .added: return .systemGreen
-        case .deleted: return .systemRed
-        case .renamed: return .systemCyan
-        case .untracked: return NSColor(white: 0.5, alpha: 1.0)
         }
     }
 
@@ -572,15 +638,43 @@ final class FileExplorerCellView: NSTableCellView {
     }
 }
 
-// MARK: - Row View (Finder-like rounded inset)
+// MARK: - Non-Animating Outline View
+
+/// NSOutlineView subclass that disables expand/collapse animations.
+final class FileExplorerNSOutlineView: NSOutlineView {
+    override func expandItem(_ item: Any?, expandChildren: Bool) {
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        super.expandItem(item, expandChildren: expandChildren)
+        NSAnimationContext.endGrouping()
+    }
+
+    override func collapseItem(_ item: Any?, collapseChildren: Bool) {
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        super.collapseItem(item, collapseChildren: collapseChildren)
+        NSAnimationContext.endGrouping()
+    }
+}
+
+// MARK: - Row View
 
 final class FileExplorerRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
         guard isSelected else { return }
-        let insetRect = bounds.insetBy(dx: 4, dy: 1)
-        let path = NSBezierPath(roundedRect: insetRect, xRadius: 4, yRadius: 4)
-        NSColor.controlAccentColor.withAlphaComponent(0.2).setFill()
-        path.fill()
+        let style = FileExplorerStyle.current
+
+        if style.usesBorderSelection {
+            let borderRect = NSRect(x: 0, y: 1, width: 2, height: bounds.height - 2)
+            style.selectionColor.setFill()
+            borderRect.fill()
+        } else {
+            let inset = style.selectionInset
+            let insetRect = bounds.insetBy(dx: inset, dy: inset > 0 ? 1 : 0)
+            let path = NSBezierPath(roundedRect: insetRect, xRadius: style.selectionRadius, yRadius: style.selectionRadius)
+            style.selectionColor.setFill()
+            path.fill()
+        }
     }
 
     override var interiorBackgroundStyle: NSView.BackgroundStyle {
@@ -631,7 +725,6 @@ final class FileExplorerTitlebarAccessoryViewController: NSTitlebarAccessoryView
 
         super.init(nibName: nil, bundle: nil)
 
-        // Use fixed dimensions matching the button config to avoid layout feedback loops.
         let buttonSize = config.buttonSize
         let width = buttonSize + 12
         let height = buttonSize
@@ -654,58 +747,5 @@ final class FileExplorerTitlebarAccessoryViewController: NSTitlebarAccessoryView
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-}
-
-// MARK: - Sidebar Explorer Divider
-
-/// Draggable horizontal divider between the tab list and file explorer in the sidebar.
-struct SidebarExplorerDivider: View {
-    @Binding var position: CGFloat
-    let totalHeight: CGFloat
-    var minFraction: CGFloat = 0.1
-    var maxFraction: CGFloat = 0.8
-
-    @State private var isDragging = false
-    @State private var isHovered = false
-    @State private var dragStartPosition: CGFloat = 0
-
-    private let handleHeight: CGFloat = 6
-
-    var body: some View {
-        Rectangle()
-            .fill(isDragging || isHovered
-                ? Color.accentColor.opacity(0.5)
-                : Color(nsColor: .separatorColor))
-            .frame(height: isDragging || isHovered ? 2 : 1)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, (handleHeight - 1) / 2)
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                isHovered = hovering
-                if hovering {
-                    NSCursor.resizeUpDown.push()
-                } else if !isDragging {
-                    NSCursor.pop()
-                }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        if !isDragging {
-                            dragStartPosition = position
-                            isDragging = true
-                        }
-                        let newPosition = dragStartPosition + (value.translation.height / totalHeight)
-                        position = min(maxFraction, max(minFraction, newPosition))
-                    }
-                    .onEnded { _ in
-                        isDragging = false
-                        if !isHovered {
-                            NSCursor.pop()
-                        }
-                    }
-            )
-            .accessibilityIdentifier("SidebarExplorerDivider")
     }
 }
