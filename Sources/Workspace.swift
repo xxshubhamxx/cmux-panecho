@@ -567,9 +567,11 @@ extension Workspace {
             let daemonPath = MobileDaemonBridgeInline.shared.daemonSocketPath
             if let socket = daemonPath, daemonRunning {
                 dlog("preCreateDaemonSessions.ready workspace=\(workspaceID.uuidString.prefix(8)) attempts=\(attempts)")
-                let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-                let shellCommand = "TERM=xterm-256color COLORTERM=truecolor \(shell) -l"
                 for surfaceID in surfaceIDs {
+                    let shellCommand = buildPreCreateShellCommand(
+                        workspaceID: workspaceID,
+                        surfaceID: surfaceID
+                    )
                     DaemonTerminalBridge.preCreateSession(
                         socketPath: socket,
                         workspaceID: workspaceID,
@@ -585,6 +587,51 @@ extension Workspace {
                 dlog("preCreateDaemonSessions.giveup workspace=\(workspaceID.uuidString.prefix(8))")
             }
         }
+    }
+
+    /// Build the shell command for a pre-created daemon session with the same
+    /// per-surface env vars the regular createSurface path sets (ZDOTDIR for
+    /// shell integration, CMUX_*, TERM, etc.). Must stay in sync with the env
+    /// var injection in GhosttyTerminalView.createSurface().
+    private static func buildPreCreateShellCommand(workspaceID: UUID, surfaceID: UUID) -> String {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        var env: [String: String] = [
+            "TERM": "xterm-256color",
+            "COLORTERM": "truecolor",
+            "CMUX_SURFACE_ID": surfaceID.uuidString,
+            "CMUX_WORKSPACE_ID": workspaceID.uuidString,
+            "CMUX_PANEL_ID": surfaceID.uuidString,
+            "CMUX_TAB_ID": workspaceID.uuidString,
+            "CMUX_SOCKET_PATH": SocketControlSettings.socketPath(),
+            "CMUX_SOCKET": SocketControlSettings.socketPath(),
+            "CMUX_SHELL_INTEGRATION": "1",
+        ]
+        if let bundleId = Bundle.main.bundleIdentifier {
+            env["CMUX_BUNDLE_ID"] = bundleId
+        }
+        if let resourceURL = Bundle.main.resourceURL {
+            let shellIntegrationDir = resourceURL.appendingPathComponent("shell-integration").path
+            env["CMUX_SHELL_INTEGRATION_DIR"] = shellIntegrationDir
+            env["GHOSTTY_RESOURCES_DIR"] = resourceURL.appendingPathComponent("ghostty").path
+            env["TERMINFO"] = resourceURL.appendingPathComponent("terminfo").path
+            // For zsh, set ZDOTDIR so shell integration loads
+            let shellName = URL(fileURLWithPath: shell).lastPathComponent
+            if shellName == "zsh" {
+                env["ZDOTDIR"] = shellIntegrationDir
+                env["CMUX_LOAD_GHOSTTY_ZSH_INTEGRATION"] = "1"
+            }
+            let binDir = resourceURL.appendingPathComponent("bin").path
+            let currentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+            env["PATH"] = "\(binDir):\(currentPath)"
+        }
+
+        var envPairs: [String] = []
+        for (key, value) in env {
+            guard !value.isEmpty else { continue }
+            let escaped = value.replacingOccurrences(of: "'", with: "'\\''")
+            envPairs.append("\(key)='\(escaped)'")
+        }
+        return "env \(envPairs.joined(separator: " ")) \(shell) -l"
     }
     #endif
 
