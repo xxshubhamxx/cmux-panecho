@@ -1734,8 +1734,8 @@ class GhosttyApp {
 
     private func loadDefaultConfigFilesWithLegacyFallback(_ config: ghostty_config_t) {
         ghostty_config_load_default_files(config)
-        loadAdditionalAppSupportGhosttyConfigFilesIfNeeded(config)
         ghostty_config_load_recursive_files(config)
+        loadCmuxAppSupportGhosttyConfigIfNeeded(config)
         loadCJKFontFallbackIfNeeded(config)
         let useHostLayerBackground = !hasConfiguredBackgroundImage(config)
         usesHostLayerBackground = useHostLayerBackground
@@ -2260,42 +2260,14 @@ class GhosttyApp {
         return true
     }
 
-    /// Standalone Ghostty's macOS config should apply in cmux as the shared
-    /// baseline, with cmux-specific app-support config layered on top.
-    private static func supplementalAppSupportConfigURLsForRuntime(
-        currentBundleIdentifier: String?,
-        appSupportDirectory: URL,
-        fileManager: FileManager = .default
-    ) -> [URL] {
-        var urls = standaloneGhosttyAppSupportConfigURLs(
-            appSupportDirectory: appSupportDirectory,
-            fileManager: fileManager
-        )
-        guard let currentBundleIdentifier, !currentBundleIdentifier.isEmpty else { return urls }
-        guard currentBundleIdentifier != releaseBundleIdentifier else { return urls }
-
-        let currentURLs = appSupportConfigURLs(
-            bundleIdentifier: currentBundleIdentifier,
-            appSupportDirectory: appSupportDirectory,
-            fileManager: fileManager
-        )
-        if currentURLs.isEmpty && SocketControlSettings.isDebugLikeBundleIdentifier(currentBundleIdentifier) {
-            urls.append(contentsOf: appSupportConfigURLs(
-                bundleIdentifier: releaseBundleIdentifier,
-                appSupportDirectory: appSupportDirectory,
-                fileManager: fileManager
-            ))
-        }
-
-        return urls
-    }
-
-    private func loadAdditionalAppSupportGhosttyConfigFilesIfNeeded(_ config: ghostty_config_t) {
+    private func loadCmuxAppSupportGhosttyConfigIfNeeded(_ config: ghostty_config_t) {
         #if os(macOS)
         let fm = FileManager.default
         guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
-        let urls = Self.supplementalAppSupportConfigURLsForRuntime(
-            currentBundleIdentifier: Bundle.main.bundleIdentifier,
+        guard let currentBundleIdentifier = Bundle.main.bundleIdentifier,
+              !currentBundleIdentifier.isEmpty else { return }
+        let urls = Self.cmuxAppSupportConfigURLs(
+            currentBundleIdentifier: currentBundleIdentifier,
             appSupportDirectory: appSupport,
             fileManager: fm
         )
@@ -2309,7 +2281,7 @@ class GhosttyApp {
 
 #if DEBUG
         dlog(
-            "loaded supplemental ghostty app support config from: \(urls.map(\.path).joined(separator: ", "))"
+            "loaded cmux app support ghostty config from: \(urls.map(\.path).joined(separator: ", "))"
         )
 #endif
         #endif

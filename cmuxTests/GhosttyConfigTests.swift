@@ -331,6 +331,25 @@ final class GhosttyConfigTests: XCTestCase {
         }
     }
 
+    func testCmuxAppSupportConfigURLsUseReleaseConfigForReleaseBundle() throws {
+        try withTemporaryAppSupportDirectory { appSupportDirectory in
+            let releaseConfigURL = try writeAppSupportConfig(
+                appSupportDirectory: appSupportDirectory,
+                bundleIdentifier: "com.cmuxterm.app",
+                filename: "config.ghostty",
+                contents: "font-feature = calt\n"
+            )
+
+            XCTAssertEqual(
+                GhosttyApp.cmuxAppSupportConfigURLs(
+                    currentBundleIdentifier: "com.cmuxterm.app",
+                    appSupportDirectory: appSupportDirectory
+                ),
+                [releaseConfigURL]
+            )
+        }
+    }
+
     func testCmuxAppSupportConfigURLsPreferCurrentBundleConfigWhenPresent() throws {
         try withTemporaryAppSupportDirectory { appSupportDirectory in
             _ = try writeAppSupportConfig(
