@@ -2480,7 +2480,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    private static func sweepStaleRelayStateAtStartup() {
+    private nonisolated static func sweepStaleRelayStateAtStartup() {
         let relayRootURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cmux", isDirectory: true)
             .appendingPathComponent("relay", isDirectory: true)
@@ -2527,7 +2527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    private static func startupRelayArtifactPort(from filename: String) -> Int? {
+    private nonisolated static func startupRelayArtifactPort(from filename: String) -> Int? {
         let suffixes = [
             ".auth",
             ".daemon_path",
@@ -2544,7 +2544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return nil
     }
 
-    private static func isStartupLoopbackPortReachable(port: Int) -> Bool {
+    private nonisolated static func isStartupLoopbackPortReachable(port: Int) -> Bool {
         guard (1...65535).contains(port) else { return false }
 
         let socketFD = socket(AF_INET, SOCK_STREAM, 0)
@@ -2591,7 +2591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return optionResult == 0 && socketError == 0
     }
 
-    private static func tryLockRelaySession(at entryURL: URL) -> Int32? {
+    private nonisolated static func tryLockRelaySession(at entryURL: URL) -> Int32? {
         let lockPath = entryURL.appendingPathComponent(".lock", isDirectory: false).path
         let fd = open(lockPath, O_CREAT | O_RDWR, mode_t(S_IRUSR | S_IWUSR))
         guard fd >= 0 else { return nil }
@@ -2602,7 +2602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return fd
     }
 
-    private static func unlockRelaySession(_ fd: Int32) {
+    private nonisolated static func unlockRelaySession(_ fd: Int32) {
         _ = flock(fd, LOCK_UN)
         Darwin.close(fd)
     }

@@ -4057,13 +4057,20 @@ struct CMUXCLI {
         let relayRootURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".cmux", isDirectory: true)
             .appendingPathComponent("relay", isDirectory: true)
-
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: relayRootURL,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return RelayCleanupSummary(removedSessionDirs: 0, removedPortArtifacts: 0)
+        let entries: [URL]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(
+                at: relayRootURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            if isRelayCleanupFileNotFoundError(error) {
+                return RelayCleanupSummary(removedSessionDirs: 0, removedPortArtifacts: 0)
+            }
+            throw CLIError(
+                message: "Failed to read relay state at \(relayRootURL.path): \(error.localizedDescription)"
+            )
         }
 
         var removedSessionDirs = 0
@@ -4082,14 +4089,19 @@ struct CMUXCLI {
                    let pid = Int32(pidText),
                    pid > 0,
                    !isProcessAlive(pid: pid) {
-                    let lockFD = tryLockRelaySession(at: entryURL)
+                    let lockFD = try tryLockRelaySession(at: entryURL)
                     guard let lockFD else { continue }
                     defer { unlockRelaySession(lockFD) }
                     do {
                         try FileManager.default.removeItem(at: entryURL)
                         removedSessionDirs += 1
                     } catch {
-                        continue
+                        if isRelayCleanupFileNotFoundError(error) {
+                            continue
+                        }
+                        throw CLIError(
+                            message: "Failed to remove stale relay session at \(entryURL.path): \(error.localizedDescription)"
+                        )
                     }
                 }
                 continue
@@ -4100,13 +4112,19 @@ struct CMUXCLI {
             }
         }
 
-        for (port, artifactURLs) in portArtifacts where !isLoopbackPortReachable(port: port) {
+        for (port, artifactURLs) in portArtifacts
+        where !isRelayPortArtifactLive(port: port, relayRootURL: relayRootURL) {
             for artifactURL in artifactURLs {
                 do {
                     try FileManager.default.removeItem(at: artifactURL)
                     removedPortArtifacts += 1
                 } catch {
-                    continue
+                    if isRelayCleanupFileNotFoundError(error) {
+                        continue
+                    }
+                    throw CLIError(
+                        message: "Failed to remove stale relay metadata at \(artifactURL.path): \(error.localizedDescription)"
+                    )
                 }
             }
         }
@@ -4115,6 +4133,58 @@ struct CMUXCLI {
             removedSessionDirs: removedSessionDirs,
             removedPortArtifacts: removedPortArtifacts
         )
+    }
+
+    private func isRelayPortArtifactLive(port: Int, relayRootURL: URL) -> Bool {
+        if let relaySessionID = relaySessionIDForCleanup(port: port, relayRootURL: relayRootURL),
+           let relayPID = relaySessionPID(for: relaySessionID, relayRootURL: relayRootURL),
+           isProcessAlive(pid: relayPID) {
+            return true
+        }
+        return isLoopbackPortReachable(port: port)
+    }
+
+    private func relaySessionIDForCleanup(port: Int, relayRootURL: URL) -> String? {
+        let authURL = relayRootURL.appendingPathComponent("\(port).auth", isDirectory: false)
+        guard let authData = try? Data(contentsOf: authURL),
+              let authObject = try? JSONSerialization.jsonObject(with: authData) as? [String: Any],
+              let relaySessionID = Self.trimmedEnvValue(authObject["relay_id"] as? String),
+              isValidRelayCleanupSessionID(relaySessionID) else {
+            return nil
+        }
+        return relaySessionID
+    }
+
+    private func relaySessionPID(for relaySessionID: String, relayRootURL: URL) -> Int32? {
+        let pidURL = relayRootURL
+            .appendingPathComponent(relaySessionID, isDirectory: true)
+            .appendingPathComponent("pid", isDirectory: false)
+        guard let pidData = try? Data(contentsOf: pidURL),
+              let pidText = String(data: pidData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              let pid = Int32(pidText),
+              pid > 0 else {
+            return nil
+        }
+        return pid
+    }
+
+    private func isValidRelayCleanupSessionID(_ sessionID: String) -> Bool {
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        return sessionID != "."
+            && sessionID != ".."
+            && sessionID.unicodeScalars.allSatisfy { allowedCharacters.contains($0) }
+    }
+
+    private func isRelayCleanupFileNotFoundError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain {
+            return nsError.code == NSFileNoSuchFileError || nsError.code == NSFileReadNoSuchFileError
+        }
+        if nsError.domain == NSPOSIXErrorDomain {
+            return nsError.code == ENOENT
+        }
+        return false
     }
 
     private func isProcessAlive(pid: Int32) -> Bool {
@@ -4191,10 +4261,12 @@ struct CMUXCLI {
         return optionResult == 0 && socketError == 0
     }
 
-    private func tryLockRelaySession(at entryURL: URL) -> Int32? {
+    private func tryLockRelaySession(at entryURL: URL) throws -> Int32? {
         let lockPath = entryURL.appendingPathComponent(".lock", isDirectory: false).path
         let fd = open(lockPath, O_CREAT | O_RDWR, mode_t(S_IRUSR | S_IWUSR))
-        guard fd >= 0 else { return nil }
+        guard fd >= 0 else {
+            throw CLIError(message: "Failed to open relay lock at \(lockPath)")
+        }
         if flock(fd, LOCK_EX | LOCK_NB) != 0 {
             Darwin.close(fd)
             return nil

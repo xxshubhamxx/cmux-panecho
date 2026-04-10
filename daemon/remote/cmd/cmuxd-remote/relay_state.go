@@ -213,6 +213,9 @@ func sanitizeRelaySessionID(sessionID string) (string, error) {
 	if trimmed == "" {
 		return "", nil
 	}
+	if trimmed == "." || trimmed == ".." {
+		return "", fmt.Errorf("invalid relay session id %q", trimmed)
+	}
 	for _, r := range trimmed {
 		if (r >= 'a' && r <= 'z') ||
 			(r >= 'A' && r <= 'Z') ||
@@ -377,7 +380,7 @@ func tryLockRelaySessionDir(dir string) (*os.File, bool, error) {
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, true, nil
+			return nil, false, nil
 		}
 		return nil, false, err
 	}

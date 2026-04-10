@@ -1086,7 +1086,9 @@ enum WorkspaceRemoteSSHBatchCommandBuilder {
         ]
         if let sessionID = configuration.relaySessionID {
             scriptComponents.append("--session-id \(shellSingleQuoted(sessionID))")
-            scriptComponents.append("--log \"$HOME/.cmux/relay/\(sessionID)/relay.log\"")
+            if let relayLogPath = configuration.relayLogPath {
+                scriptComponents.append("--log \"\(relayLogPath)\"")
+            }
         }
         scriptComponents.append("--invocation-reason \(shellSingleQuoted("workspace.remote.connect"))")
         let script = scriptComponents.joined(separator: " ")
@@ -4018,14 +4020,14 @@ final class WorkspaceRemoteSessionController {
 
     func probeRelayLiveness(timeout: TimeInterval = 2.5) -> Bool? {
         if DispatchQueue.getSpecific(key: queueKey) != nil {
-            return probeRelayLivenessLocked()
+            return probeRelayLivenessLocked(timeout: timeout)
         }
 
         let semaphore = DispatchSemaphore(value: 0)
         var result: Bool?
         queue.async { [weak self] in
             defer { semaphore.signal() }
-            result = self?.probeRelayLivenessLocked()
+            result = self?.probeRelayLivenessLocked(timeout: timeout)
         }
         guard semaphore.wait(timeout: .now() + timeout) == .success else {
             return nil
@@ -4033,7 +4035,7 @@ final class WorkspaceRemoteSessionController {
         return result
     }
 
-    private func probeRelayLivenessLocked() -> Bool? {
+    private func probeRelayLivenessLocked(timeout: TimeInterval) -> Bool? {
         guard let relaySessionID = configuration.relaySessionID else {
             return nil
         }
@@ -4056,8 +4058,11 @@ final class WorkspaceRemoteSessionController {
         do {
             let result = try sshExec(
                 arguments: sshCommonArguments(batchMode: true) + [configuration.destination, command],
-                timeout: 3
+                timeout: max(0.25, timeout)
             )
+            guard result.status == 0 else {
+                return nil
+            }
             let state = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             switch state {
             case "alive":
@@ -6085,6 +6090,8 @@ struct WorkspaceRemoteConfiguration: Equatable {
     var relaySessionID: String? {
         let trimmed = relayID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty,
+              trimmed != ".",
+              trimmed != "..",
               trimmed.unicodeScalars.allSatisfy({
                   Self.relaySessionIDAllowedCharacters.contains($0)
               }) else {
