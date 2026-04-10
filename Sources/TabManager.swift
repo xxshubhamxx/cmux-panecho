@@ -1425,14 +1425,6 @@ class TabManager: ObservableObject {
         guard isDisabled != lastKnownGlobalGitMetadataWatcherDisabled else { return }
         lastKnownGlobalGitMetadataWatcherDisabled = isDisabled
 
-        if isDisabled {
-            for workspace in tabs {
-                clearWorkspaceGitProbes(workspaceId: workspace.id)
-            }
-            resetWorkspacePullRequestRefreshState()
-            return
-        }
-
         refreshWorkspaceGitMetadataWatcherConfiguration(reason: "globalSettingChanged")
     }
 
