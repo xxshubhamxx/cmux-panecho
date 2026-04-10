@@ -2624,6 +2624,46 @@ final class GhosttyMouseFocusTests: XCTestCase {
         }
     }
 
+    func testShouldInjectCJKFontFallbackKeepsCmuxOverridesAfterStandaloneRecursiveIncludes() throws {
+        try withTemporaryAppSupportDirectory { appSupportDirectory in
+            let sharedConfigURL = appSupportDirectory
+                .appendingPathComponent("shared-fonts.conf", isDirectory: false)
+            try "font-family = LXGW WenKai Mono TC\n"
+                .write(to: sharedConfigURL, atomically: true, encoding: .utf8)
+
+            _ = try writeAppSupportConfig(
+                appSupportDirectory: appSupportDirectory,
+                bundleIdentifier: "com.mitchellh.ghostty",
+                filename: "config.ghostty",
+                contents: """
+                font-family = JetBrains Mono
+                config-file = \(sharedConfigURL.path)
+                """
+            )
+            _ = try writeAppSupportConfig(
+                appSupportDirectory: appSupportDirectory,
+                bundleIdentifier: "com.cmuxterm.app",
+                filename: "config.ghostty",
+                contents: """
+                font-family =
+                font-family = JetBrains Mono
+                """
+            )
+
+            XCTAssertTrue(
+                GhosttyApp.shouldInjectCJKFontFallback(
+                    preferredLanguages: ["zh-Hans-CN"],
+                    currentBundleIdentifier: "com.cmuxterm.app",
+                    appSupportDirectory: appSupportDirectory,
+                    rangeCoverageProbe: { fontFamily, _ in
+                        XCTAssertEqual(fontFamily, "JetBrains Mono")
+                        return false
+                    }
+                )
+            )
+        }
+    }
+
     func testLoadedCJKScanPathsSkipsReleaseAppSupportWhenTaggedConfigExists() throws {
         let appSupport = FileManager.default.temporaryDirectory
             .appendingPathComponent("cmux-test-cjk-app-support-\(UUID().uuidString)")
