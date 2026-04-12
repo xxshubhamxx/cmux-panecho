@@ -636,24 +636,39 @@ final class TerminalSidebarStore: ObservableObject {
                 // Connect, subscribe, and listen for events
                 guard let fd = Self.connectWebSocket(hostname: hostname, port: wsPort, secret: secret) else {
                     consecutiveFailures += 1
-                    Self.debugLog("subscription: connect failed (\(consecutiveFailures)), retry in 5s")
-                    // After 3 consecutive failures, the daemon is gone.
-                    // Clear workspaces for this host so the iOS UI doesn't
-                    // show stale data from a daemon that no longer exists.
-                    if consecutiveFailures >= 3 {
+                    Self.debugLog("subscription: connect failed (\(consecutiveFailures)), retry with backoff")
+                    // After 3 consecutive failures, mark workspaces as
+                    // disconnected and host as offline (but keep them
+                    // visible so the user sees what was there). Continue
+                    // retrying with long backoff so we auto-recover when
+                    // the daemon comes back.
+                    if consecutiveFailures == 3 {
                         DispatchQueue.main.async { [weak self] in
                             guard let self else { return }
-                            let hostID = self.hosts.first(where: { $0.stableID == stableID })?.id
-                            if let hostID {
-                                self.workspaces.removeAll { $0.hostID == hostID && $0.remoteWorkspaceID != nil }
+                            if let hostID = self.hosts.first(where: { $0.stableID == stableID })?.id {
+                                if let hostIdx = self.hosts.firstIndex(where: { $0.id == hostID }) {
+                                    self.hosts[hostIdx].machineStatus = .offline
+                                }
+                                for i in self.workspaces.indices where self.workspaces[i].hostID == hostID {
+                                    self.workspaces[i].phase = .disconnected
+                                }
                             }
                         }
-                        // Stop retrying — discovery will restart subscription
-                        // if the daemon comes back online.
-                        break
                     }
-                    Thread.sleep(forTimeInterval: 5)
+                    // Exponential backoff: 5, 10, 20, 30 max
+                    let delay = min(30.0, 5.0 * pow(2.0, Double(min(consecutiveFailures - 1, 3))))
+                    Thread.sleep(forTimeInterval: delay)
                     continue
+                }
+                // Connected — reset failure counter and mark host online.
+                if consecutiveFailures > 0 {
+                    consecutiveFailures = 0
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        if let hostIdx = self.hosts.firstIndex(where: { $0.stableID == stableID }) {
+                            self.hosts[hostIdx].machineStatus = .online
+                        }
+                    }
                 }
                 consecutiveFailures = 0
 
@@ -1466,6 +1481,7 @@ final class TerminalSessionController: ObservableObject {
     private var transportConnectGeneration = 0
     private var pendingReconnectAfterTransportWork = false
     private var pendingReconnectUsesReconnectingPhase = false
+    private var consecutiveConnectFailures = 0
 
     private var isLiveAnchormuxSession: Bool {
         host.stableID.hasPrefix("anchormux-live-")
@@ -1613,8 +1629,11 @@ final class TerminalSessionController: ObservableObject {
                         } else {
                             self.setPhase(.failed, error: error.localizedDescription)
                         }
+                        self.consecutiveConnectFailures += 1
                         if self.shouldAutoReconnect(after: error) {
-                            self.scheduleReconnectIfNeeded(after: 2)
+                            // Exponential backoff: 2, 4, 8, 16, 30 max
+                            let delay = min(30.0, 2.0 * pow(2.0, Double(min(self.consecutiveConnectFailures - 1, 4))))
+                            self.scheduleReconnectIfNeeded(after: delay)
                         }
                     }
                     self.finishTransportConnectTask(generation: connectGeneration)
@@ -1735,6 +1754,7 @@ final class TerminalSessionController: ObservableObject {
         case .connected:
             reconnectTask?.cancel()
             reconnectTask = nil
+            consecutiveConnectFailures = 0
             setPhase(.connected, error: nil)
             syncRemoteDaemonResumeStateFromTransport()
             terminalSurface?.focusInput()
@@ -1755,7 +1775,9 @@ final class TerminalSessionController: ObservableObject {
             } else {
                 setPhase(.disconnected, error: nil)
             }
-            scheduleReconnectIfNeeded(after: 2)
+            consecutiveConnectFailures += 1
+            let delay = min(30.0, 2.0 * pow(2.0, Double(min(consecutiveConnectFailures - 1, 4))))
+            scheduleReconnectIfNeeded(after: delay)
         case .notice(let message):
             setStatusMessage(message)
         case .trustedHostKey(let hostKey):
