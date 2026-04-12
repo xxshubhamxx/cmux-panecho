@@ -230,6 +230,17 @@ struct TerminalSidebarRootView: View {
                                     }
                                     .tint(.blue)
                                     .accessibilityIdentifier("terminal.workspace.action.toggleUnread.\(workspace.id.uuidString)")
+
+                                    Button {
+                                        store.togglePinned(for: workspace.id)
+                                    } label: {
+                                        Label(
+                                            workspace.pinned ? TerminalHomeStrings.unpinAction : TerminalHomeStrings.pinAction,
+                                            systemImage: workspace.pinned ? "pin.slash.fill" : "pin.fill"
+                                        )
+                                    }
+                                    .tint(.orange)
+                                    .accessibilityIdentifier("terminal.workspace.action.togglePin.\(workspace.id.uuidString)")
                                 }
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                     Button(role: .destructive) {
@@ -733,6 +744,13 @@ private struct TerminalWorkspaceConversationRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
+                    if workspace.pinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("terminal.workspace.pinned.\(workspace.id.uuidString)")
+                    }
+
                     Text(workspace.title)
                         .font(.headline)
                         .foregroundStyle(isOffline ? .secondary : .primary)

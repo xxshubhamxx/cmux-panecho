@@ -390,6 +390,24 @@ final class TerminalSidebarStore: ObservableObject {
         guard let index = workspaces.firstIndex(where: { $0.id == workspaceID }) else { return }
         workspaces[index].pinned.toggle()
         persist()
+
+        // Sync pinned state back to the daemon so macOS and other clients
+        // pick it up via workspace.changed push.
+        let workspace = workspaces[index]
+        if let remoteID = workspace.remoteWorkspaceID,
+           let host = server(for: workspace.hostID),
+           let wsPort = host.wsPort {
+            let hostname = host.hostname
+            let secret = host.wsSecret ?? ""
+            let pinned = workspace.pinned
+            DispatchQueue.global(qos: .userInitiated).async {
+                Self.sendWSCommand(
+                    hostname: hostname, port: wsPort, secret: secret,
+                    method: "workspace.pin",
+                    params: ["workspace_id": remoteID, "pinned": pinned]
+                )
+            }
+        }
     }
 
     func controller(for workspace: TerminalWorkspace) -> TerminalSessionController {
@@ -780,6 +798,7 @@ final class TerminalSidebarStore: ObservableObject {
             // Use the daemon session ID from the macOS bridge if available.
             // This ensures iOS attaches to the same session the desktop is using.
             let daemonSessionID = wsData["session_id"] as? String
+            let pinned = wsData["pinned"] as? Bool ?? false
 
             if let existing = workspaces.first(where: { $0.remoteWorkspaceID == remoteId && $0.hostID == hostID }) {
                 var updated = existing
@@ -788,6 +807,7 @@ final class TerminalSidebarStore: ObservableObject {
                 updated.phase = .connected
                 if !preview.isEmpty { updated.preview = preview }
                 updated.unread = unreadCount > 0
+                updated.pinned = pinned
                 if let sid = daemonSessionID {
                     ScannerLog.shared.log("  ws.update title=\(title) sessionName=\(sid) (was \(existing.tmuxSessionName))")
                     updated.tmuxSessionName = sid
@@ -804,6 +824,7 @@ final class TerminalSidebarStore: ObservableObject {
                 workspace.phase = .connected
                 if !preview.isEmpty { workspace.preview = preview }
                 workspace.unread = unreadCount > 0
+                workspace.pinned = pinned
                 updatedWorkspaces.append(workspace)
             }
         }

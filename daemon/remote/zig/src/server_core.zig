@@ -86,6 +86,7 @@ fn dispatchInner(service: *session_service.Service, req: *const json_rpc.Request
     if (std.mem.eql(u8, req.method, "workspace.list")) return handleWorkspaceList(service, req);
     if (std.mem.eql(u8, req.method, "workspace.create")) return handleWorkspaceCreate(service, req);
     if (std.mem.eql(u8, req.method, "workspace.rename")) return handleWorkspaceRename(service, req);
+    if (std.mem.eql(u8, req.method, "workspace.pin")) return handleWorkspacePin(service, req);
     if (std.mem.eql(u8, req.method, "workspace.close")) return handleWorkspaceClose(service, req);
     if (std.mem.eql(u8, req.method, "workspace.select")) return handleWorkspaceSelect(service, req);
     if (std.mem.eql(u8, req.method, "pane.split")) return handlePaneSplit(service, req);
@@ -534,6 +535,7 @@ fn handleWorkspaceList(service: *session_service.Service, req: *const json_rpc.R
         phase: []const u8,
         color: ?[]const u8,
         unread_count: u32,
+        pinned: bool,
         session_id: ?[]const u8,
         focused_pane_id: ?[]const u8,
         pane_count: usize,
@@ -556,6 +558,7 @@ fn handleWorkspaceList(service: *session_service.Service, req: *const json_rpc.R
             .phase = ws.phase,
             .color = ws.color,
             .unread_count = ws.unread_count,
+            .pinned = ws.pinned,
             .session_id = ws.session_id,
             .focused_pane_id = ws.focused_pane_id,
             .pane_count = leaves.len,
@@ -606,6 +609,28 @@ fn handleWorkspaceRename(service: *session_service.Service, req: *const json_rpc
         return paramError(alloc, req.id, err);
 
     service.workspace_reg.rename(workspace_id, title) catch |err| {
+        return try errorResponse(alloc, req.id, "not_found", @errorName(err));
+    };
+
+    return try json_rpc.encodeResponse(alloc, .{
+        .id = req.id,
+        .ok = true,
+        .result = .{ .change_seq = service.workspace_reg.change_seq },
+    });
+}
+
+fn handleWorkspacePin(service: *session_service.Service, req: *const json_rpc.Request) ![]u8 {
+    const alloc = service.alloc;
+    const params = getParamsObject(req) orelse
+        return invalidParams(alloc, req.id, "workspace.pin requires params");
+    const workspace_id = getRequiredStringParam(params, "workspace_id", "workspace.pin requires workspace_id") catch |err|
+        return paramError(alloc, req.id, err);
+    const pinned: bool = if (params.get("pinned")) |v| switch (v) {
+        .bool => |b| b,
+        else => true,
+    } else true;
+
+    service.workspace_reg.setPin(workspace_id, pinned) catch |err| {
         return try errorResponse(alloc, req.id, "not_found", @errorName(err));
     };
 
@@ -748,6 +773,11 @@ fn handleWorkspaceSync(service: *session_service.Service, req: *const json_rpc.R
             else => 0,
         } else 0;
 
+        const pinned: bool = if (obj.get("pinned")) |v| switch (v) {
+            .bool => |b| b,
+            else => false,
+        } else false;
+
         try sync_workspaces.append(alloc, .{
             .id = id.?,
             .title = title.?,
@@ -756,6 +786,7 @@ fn handleWorkspaceSync(service: *session_service.Service, req: *const json_rpc.R
             .phase = if (obj.get("phase")) |v| (if (v == .string) v.string else "idle") else "idle",
             .color = if (obj.get("color")) |v| (if (v == .string) v.string else "") else "",
             .unread_count = unread_count,
+            .pinned = pinned,
             .session_id = if (obj.get("session_id")) |v| (if (v == .string) v.string else null) else null,
         });
     }
@@ -792,6 +823,7 @@ fn notifyWorkspaceSubscribers(service: *session_service.Service) void {
         phase: []const u8,
         color: ?[]const u8,
         unread_count: u32,
+        pinned: bool,
         session_id: ?[]const u8,
         focused_pane_id: ?[]const u8,
         pane_count: usize,
@@ -814,6 +846,7 @@ fn notifyWorkspaceSubscribers(service: *session_service.Service) void {
             .phase = ws.phase,
             .color = ws.color,
             .unread_count = ws.unread_count,
+            .pinned = ws.pinned,
             .session_id = ws.session_id,
             .focused_pane_id = ws.focused_pane_id,
             .pane_count = leaves.len,

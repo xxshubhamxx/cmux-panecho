@@ -124,6 +124,7 @@ final class WorkspaceDaemonBridge {
                 "phase": workspace.activeRemoteTerminalSessionCount > 0 ? "active" : "idle",
                 "color": workspace.customColor ?? "",
                 "unread_count": notificationStore.unreadCount(forTabId: workspace.id),
+                "pinned": workspace.isPinned,
             ]
             if let primarySessionID = sessionIDs.first {
                 entry["session_id"] = primarySessionID
