@@ -19,6 +19,11 @@ final class DaemonTerminalBridge: @unchecked Sendable {
     private var readOffset: UInt64 = 0
     private var readThread: Thread?
     private var running = false
+    /// Pending resize to apply after the bridge connects. Set by the
+    /// macOS surface when the real layout is known but the bridge hasn't
+    /// attached yet.
+    private var pendingResizeCols: Int = 0
+    private var pendingResizeRows: Int = 0
     private var rpcID: Int = 0
     private let idLock = NSLock()
 
@@ -177,6 +182,16 @@ final class DaemonTerminalBridge: @unchecked Sendable {
     // MARK: - Resize
 
     func resize(cols: Int, rows: Int) {
+        // If the write socket isn't connected yet, save as pending.
+        // The session loop will apply it after attaching.
+        writeLock.lock()
+        let connected = writeFD >= 0
+        writeLock.unlock()
+        if !connected {
+            pendingResizeCols = max(1, cols)
+            pendingResizeRows = max(1, rows)
+            return
+        }
         let params: [String: Any] = [
             "session_id": sessionID,
             "attachment_id": attachmentID,
@@ -219,6 +234,18 @@ final class DaemonTerminalBridge: @unchecked Sendable {
             }
 
             NSLog("📱 DaemonBridge[%@]: connected, attachment=%@", sessionID, attachmentID ?? "nil")
+
+            // Apply any pending resize that was set before the bridge connected.
+            if pendingResizeCols > 0 && pendingResizeRows > 0 {
+                let pc = pendingResizeCols
+                let pr = pendingResizeRows
+                pendingResizeCols = 0
+                pendingResizeRows = 0
+                if pc != cols || pr != rows {
+                    resize(cols: pc, rows: pr)
+                }
+            }
+
             readLoop(fd: fd)
 
             Darwin.close(fd)
