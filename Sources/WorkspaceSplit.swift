@@ -3046,6 +3046,26 @@ enum WorkspaceNativePaneContent {
     case terminal(WorkspaceTerminalPaneContent)
 }
 
+extension WorkspaceNativePaneContent {
+    var prefersNativeDropOverlay: Bool {
+        switch self {
+        case .terminal:
+            true
+        }
+    }
+}
+
+extension WorkspaceSplit.Tab {
+    var prefersNativeDropOverlay: Bool {
+        switch kind {
+        case "browser":
+            true
+        default:
+            false
+        }
+    }
+}
+
 @MainActor
 struct WorkspaceTerminalPaneContent {
     let panel: TerminalPanel

@@ -1016,33 +1016,6 @@ final class WindowTerminalPortal: NSObject {
         }
     }
 
-    /// Hide a portal entry without detaching it. Updates visibleInUI to false and
-    /// sets isHidden = true so subsequent synchronizeHostedView calls keep it hidden.
-    /// Used when a workspace is permanently unmounted (vs. transient WorkspaceSplit dismantles).
-    func hideEntry(forHostedId hostedId: ObjectIdentifier) {
-        guard var entry = entriesByHostedId[hostedId] else { return }
-        guard entry.visibleInUI else { return }
-        entry.visibleInUI = false
-        entry.transientRecoveryRetriesRemaining = 0
-        entriesByHostedId[hostedId] = entry
-        entry.hostedView?.isHidden = true
-#if DEBUG
-        dlog("portal.hideEntry hosted=\(portalDebugToken(entry.hostedView)) reason=workspaceUnmount")
-#endif
-    }
-
-    /// Update the visibleInUI flag on an existing entry without rebinding.
-    /// Used when a deferred bind is pending — this ensures synchronizeHostedView
-    /// won't hide a view that updateNSView has already marked as visible.
-    func updateEntryVisibility(forHostedId hostedId: ObjectIdentifier, visibleInUI: Bool) {
-        guard var entry = entriesByHostedId[hostedId] else { return }
-        entry.visibleInUI = visibleInUI
-        if !visibleInUI {
-            entry.transientRecoveryRetriesRemaining = 0
-        }
-        entriesByHostedId[hostedId] = entry
-    }
-
     func isHostedViewBoundToAnchor(withId hostedId: ObjectIdentifier, anchorView: NSView) -> Bool {
         guard let entry = entriesByHostedId[hostedId],
               let boundAnchor = entry.anchorView else { return false }
@@ -1983,29 +1956,12 @@ enum TerminalWindowPortalRegistry {
         }
     }
 
-    static func hideHostedView(_ hostedView: GhosttySurfaceScrollView) {
-        let hostedId = ObjectIdentifier(hostedView)
-        guard let windowId = hostedToWindowId[hostedId],
-              let portal = portalsByWindowId[windowId] else { return }
-        portal.hideEntry(forHostedId: hostedId)
-    }
-
     /// Permanently detach a hosted terminal view from the window-level portal.
     /// Use this when a terminal panel is actually closing (not transient SwiftUI dismantle).
     static func detach(hostedView: GhosttySurfaceScrollView) {
         let hostedId = ObjectIdentifier(hostedView)
         guard let windowId = hostedToWindowId.removeValue(forKey: hostedId) else { return }
         portalsByWindowId[windowId]?.detachHostedView(withId: hostedId)
-    }
-
-    /// Update the visibleInUI flag on an existing portal entry without rebinding.
-    /// Called when a bind is deferred (host not yet in window) to prevent stale
-    /// portal syncs from hiding a view that is about to become visible.
-    static func updateEntryVisibility(for hostedView: GhosttySurfaceScrollView, visibleInUI: Bool) {
-        let hostedId = ObjectIdentifier(hostedView)
-        guard let windowId = hostedToWindowId[hostedId],
-              let portal = portalsByWindowId[windowId] else { return }
-        portal.updateEntryVisibility(forHostedId: hostedId, visibleInUI: visibleInUI)
     }
 
     static func isHostedView(_ hostedView: GhosttySurfaceScrollView, boundTo anchorView: NSView) -> Bool {

@@ -653,6 +653,7 @@ private final class WorkspaceSplitPaneHostView<Content: View, EmptyContent: View
 
     private func refreshContent() {
         guard !pane.tabs.isEmpty else {
+            dropOverlayView.prefersNativeDropOverlay = false
             removeAllMountedTabContent()
             showEmptyContent()
             return
@@ -722,6 +723,9 @@ private final class WorkspaceSplitPaneHostView<Content: View, EmptyContent: View
         let isSelected = tab.id == selectedId
 
         if let nativeContent = nativeContentBuilder?(tabModel, pane.id) {
+            if isSelected {
+                dropOverlayView.prefersNativeDropOverlay = nativeContent.prefersNativeDropOverlay
+            }
             switch nativeContent {
             case .terminal(let descriptor):
                 refreshTerminalContent(
@@ -745,6 +749,9 @@ private final class WorkspaceSplitPaneHostView<Content: View, EmptyContent: View
 
         if let existing = mountedTabContent[tab.id],
            case .terminal(let descriptor, let slotView) = existing {
+            if isSelected {
+                dropOverlayView.prefersNativeDropOverlay = true
+            }
             applyTerminalContent(
                 descriptor,
                 slotView: slotView,
@@ -774,6 +781,9 @@ private final class WorkspaceSplitPaneHostView<Content: View, EmptyContent: View
             )
         }
 #endif
+        if isSelected {
+            dropOverlayView.prefersNativeDropOverlay = tabModel.prefersNativeDropOverlay
+        }
         refreshSwiftUIContent(
             for: tabModel,
             tabId: tab.id,
@@ -1888,9 +1898,15 @@ private final class WorkspaceSplitPaneDropOverlayView: NSView {
     private var controller: WorkspaceSplitController?
     private var onZoneChanged: ((DropZone?) -> Void)?
     private var onDropPerformed: (() -> Void)?
-
     var activeDropZone: DropZone? {
         didSet {
+            needsDisplay = true
+        }
+    }
+
+    var prefersNativeDropOverlay = false {
+        didSet {
+            guard oldValue != prefersNativeDropOverlay else { return }
             needsDisplay = true
         }
     }
@@ -1935,6 +1951,11 @@ private final class WorkspaceSplitPaneDropOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard let zone = activeDropZone else { return }
+        // Native pane hosts (for example terminal) can render their own drop overlay.
+        // Skip split-host fallback paint in that case.
+        if prefersNativeDropOverlay {
+            return
+        }
         let frame = workspaceSplitOverlayFrame(for: zone, in: bounds.size)
         let path = NSBezierPath(roundedRect: frame, xRadius: 8, yRadius: 8)
         NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()

@@ -9312,10 +9312,9 @@ final class Workspace: Identifiable, ObservableObject {
     /// Called before the workspace is removed from TabManager to ensure child
     /// processes receive SIGHUP even if ARC deallocation is delayed.
     func teardownAllPanels() {
-        // Hide portal-hosted content up front so a workspace being torn down
+        // Hide browser portal-hosted content up front so a workspace being torn down
         // cannot keep drawing above the next selected/restored workspace while
         // panel close work is still unwinding.
-        hideAllTerminalPortalViews()
         hideAllBrowserPortalViews()
 
         let panelEntries = Array(panels)
@@ -10215,7 +10214,6 @@ final class Workspace: Identifiable, ObservableObject {
         guard let paneId = paneId(forPanelId: panelId) else { return false }
         guard splitController.togglePaneZoom(inPane: paneId) else { return false }
         focusPanel(panelId)
-        reconcileTerminalPortalVisibilityForCurrentRenderedLayout()
         reconcileBrowserPortalVisibilityForCurrentRenderedLayout(reason: "workspace.toggleSplitZoom")
         if let browserPanel = browserPanel(for: panelId) {
             browserPanel.preparePortalHostReplacementForNextDistinctClaim(
@@ -10284,24 +10282,6 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     // MARK: - Portal Lifecycle
-
-    /// Hide any legacy terminal portal entries for this workspace before it is unmounted.
-    /// Workspace terminals are direct-mounted now, but stale portal-hosted views can still exist
-    /// during transition cases and should not cover the next workspace.
-    func hideAllTerminalPortalViews() {
-        for panel in panels.values {
-            guard let terminal = panel as? TerminalPanel else { continue }
-#if DEBUG
-            startupLog(
-                "startup.portal.hideAllTerminal workspace=\(id.uuidString.prefix(5)) " +
-                    "panel=\(terminal.id.uuidString.prefix(5)) inWindow=\(terminal.hostedView.window != nil ? 1 : 0) " +
-                    "hasSuperview=\(terminal.hostedView.superview != nil ? 1 : 0) " +
-                    "visibleFlag=\(terminal.hostedView.debugPortalVisibleInUI ? 1 : 0)"
-            )
-#endif
-            TerminalWindowPortalRegistry.hideHostedView(terminal.hostedView)
-        }
-    }
 
     func hideAllBrowserPortalViews() {
         for panel in panels.values {
@@ -10637,9 +10617,6 @@ final class Workspace: Identifiable, ObservableObject {
         flushWorkspaceWindowLayouts()
 
         let geometryPendingBefore = layoutFollowUpNeedsGeometryPass
-        let terminalPortalPendingBefore = usesLegacyWorkspaceTerminalPortals
-            ? terminalPortalVisibilityNeedsFollowUp()
-            : false
         let browserVisibilityPendingBefore = browserPortalVisibilityNeedsFollowUp()
         let terminalFocusPendingBefore = terminalFocusNeedsFollowUp()
         let browserPanelPendingBefore = browserPanelNeedsFollowUp()
@@ -10660,13 +10637,6 @@ final class Workspace: Identifiable, ObservableObject {
                 layoutFollowUpTerminalFocusPanelId = nil
             }
         }
-
-        if usesLegacyWorkspaceTerminalPortals {
-            reconcileTerminalPortalVisibilityForCurrentRenderedLayout()
-        }
-        let terminalPortalPending = usesLegacyWorkspaceTerminalPortals
-            ? terminalPortalVisibilityNeedsFollowUp()
-            : false
 
         let reason = layoutFollowUpReason ?? "workspace.layout"
         reconcileBrowserPortalVisibilityForCurrentRenderedLayout(reason: reason)
@@ -10713,7 +10683,6 @@ final class Workspace: Identifiable, ObservableObject {
         let browserExitPending = layoutFollowUpBrowserExitFocusPanelId != nil
         let needsMoreWork =
             layoutFollowUpNeedsGeometryPass ||
-            terminalPortalPending ||
             browserVisibilityPending ||
             terminalFocusPending ||
             browserPanelPending ||
@@ -10726,7 +10695,6 @@ final class Workspace: Identifiable, ObservableObject {
 
         let didMakeProgress =
             (geometryPendingBefore && !layoutFollowUpNeedsGeometryPass) ||
-            (terminalPortalPendingBefore && !terminalPortalPending) ||
             (browserVisibilityPendingBefore && !browserVisibilityPending) ||
             (terminalFocusPendingBefore && !terminalFocusPending) ||
             (browserPanelPendingBefore && !browserPanelPending) ||
@@ -10809,59 +10777,6 @@ final class Workspace: Identifiable, ObservableObject {
         }
 
         return visiblePanelIds
-    }
-
-    /// Workspace terminal panes are direct-mounted from `WorkspaceSplitNativeHost`.
-    /// The split host is now the sole owner of terminal hosted-view visibility/active state.
-    /// Keep the legacy portal machinery dormant unless a non-workspace path needs it again.
-    private var usesLegacyWorkspaceTerminalPortals: Bool { false }
-
-    @discardableResult
-    private func reconcileTerminalPortalVisibilityForCurrentRenderedLayout() -> Bool {
-        guard usesLegacyWorkspaceTerminalPortals else { return false }
-        let visiblePanelIds = renderedVisiblePanelIdsForCurrentLayout()
-        var didChange = false
-
-        for panel in panels.values {
-            guard let terminalPanel = panel as? TerminalPanel else { continue }
-            let shouldBeVisible = visiblePanelIds.contains(terminalPanel.id)
-            if terminalPanel.hostedView.debugPortalVisibleInUI != shouldBeVisible {
-                terminalPanel.hostedView.setVisibleInUI(shouldBeVisible)
-                didChange = true
-            }
-            let shouldBeActive = shouldBeVisible && focusedPanelId == terminalPanel.id
-            if terminalPanel.hostedView.debugPortalActive != shouldBeActive {
-                terminalPanel.hostedView.setActive(shouldBeActive)
-                didChange = true
-            }
-            TerminalWindowPortalRegistry.updateEntryVisibility(
-                for: terminalPanel.hostedView,
-                visibleInUI: shouldBeVisible
-            )
-        }
-
-        return didChange
-    }
-
-    private func terminalPortalVisibilityNeedsFollowUp() -> Bool {
-        guard usesLegacyWorkspaceTerminalPortals else { return false }
-        let visiblePanelIds = renderedVisiblePanelIdsForCurrentLayout()
-
-        for panel in panels.values {
-            guard let terminalPanel = panel as? TerminalPanel else { continue }
-            let shouldBeVisible = visiblePanelIds.contains(terminalPanel.id)
-            let hostedView = terminalPanel.hostedView
-
-            if shouldBeVisible {
-                if hostedView.isHidden || hostedView.window == nil || hostedView.superview == nil {
-                    return true
-                }
-            } else if !hostedView.isHidden {
-                return true
-            }
-        }
-
-        return false
     }
 
     @discardableResult
