@@ -37,6 +37,18 @@ final class DaemonConnection: @unchecked Sendable {
     private var workspaceSubscribed = false
     private var workspaceSyncProvider: (() -> [String: Any]?)?
     private var workspaceChangedHandler: (([String: Any]) -> Void)?
+    /// Workspace IDs (lowercased UUID strings) for which the macOS app has just
+    /// sent `workspace.create` to the daemon. While present, the workspace.changed
+    /// echo for that id should NOT spawn a duplicate local Workspace; field updates
+    /// are still applied. Cleared when the create RPC response arrives (success or
+    /// failure) and on workspace.changed consumption.
+    private var pendingCreates: Set<String> = []
+    /// Workspace IDs (lowercased UUID strings) for which the macOS app has just
+    /// closed locally and sent `workspace.close` to the daemon. While present,
+    /// the daemon-authority remove path should NOT close the local workspace
+    /// (it is already gone) and the daemon-authority add path should NOT
+    /// re-instantiate the workspace from a stale workspace.changed echo.
+    private var pendingDeletes: Set<String> = []
 
     /// Register a handler for `workspace.changed` push events. Invoked on the
     /// reader thread; handler is responsible for dispatching to main actor if
@@ -44,6 +56,60 @@ final class DaemonConnection: @unchecked Sendable {
     func setWorkspaceChangedHandler(_ handler: (([String: Any]) -> Void)?) {
         stateLock.lock()
         workspaceChangedHandler = handler
+        stateLock.unlock()
+    }
+
+    // MARK: - pending_creates / pending_deletes
+
+    /// Mark a workspace id as pending a daemon-side create (RPC in flight).
+    func markPendingCreate(workspaceID: UUID) {
+        stateLock.lock()
+        pendingCreates.insert(workspaceID.uuidString.lowercased())
+        stateLock.unlock()
+    }
+
+    /// Returns true and removes the entry if the workspace id was marked pending.
+    /// Call from the workspace.changed applier so the macOS-initiated create echo
+    /// only updates fields and never creates a duplicate.
+    @discardableResult
+    func consumePendingCreate(workspaceID: UUID) -> Bool {
+        stateLock.lock()
+        let removed = pendingCreates.remove(workspaceID.uuidString.lowercased()) != nil
+        stateLock.unlock()
+        return removed
+    }
+
+    /// Drop a pending create entry without consuming. Used when the create RPC
+    /// errors or times out (we should let the daemon-authority pipeline handle
+    /// the next state arriving naturally).
+    func clearPendingCreate(workspaceID: UUID) {
+        stateLock.lock()
+        pendingCreates.remove(workspaceID.uuidString.lowercased())
+        stateLock.unlock()
+    }
+
+    /// Mark a workspace id as pending a daemon-side close (local already gone,
+    /// RPC in flight, daemon may still echo it back briefly).
+    func markPendingDelete(workspaceID: UUID) {
+        stateLock.lock()
+        pendingDeletes.insert(workspaceID.uuidString.lowercased())
+        stateLock.unlock()
+    }
+
+    /// True if the workspace id is pending a daemon-side close.
+    func isPendingDelete(workspaceID: UUID) -> Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return pendingDeletes.contains(workspaceID.uuidString.lowercased())
+    }
+
+    /// Update pending_deletes after a workspace.changed event. An id that is
+    /// still present in the daemon's payload means the close hasn't propagated
+    /// yet, so we keep it in pending_deletes (suppresses re-instantiation by
+    /// the daemon-authority add path). An id that is no longer present means
+    /// the daemon has confirmed the close, so we drop it from pending_deletes.
+    func reconcilePendingDeletes(currentDaemonIDs: Set<String>) {
+        stateLock.lock()
+        pendingDeletes.formIntersection(currentDaemonIDs)
         stateLock.unlock()
     }
 
@@ -163,6 +229,38 @@ final class DaemonConnection: @unchecked Sendable {
         sendRPCAsync(method: "workspace.set_color", params: [
             "workspace_id": workspaceID.uuidString.lowercased(),
             "color": color ?? "",
+        ], completion: nil)
+    }
+
+    /// Send `workspace.create` to the daemon for a workspace the macOS app just
+    /// created locally. The caller is expected to have already inserted the id
+    /// into `pendingCreates` (via `markPendingCreate`) so the daemon's echo via
+    /// `workspace.changed` does not spawn a duplicate. On RPC failure we drop
+    /// the pending entry so a future daemon-authority push can apply.
+    func sendWorkspaceCreate(workspaceID: UUID, title: String, directory: String) {
+        sendRPCAsync(method: "workspace.create", params: [
+            "id": workspaceID.uuidString.lowercased(),
+            "title": title,
+            "directory": directory,
+        ]) { [weak self] result in
+            switch result {
+            case .success(let resp):
+                if let ok = resp["ok"] as? Bool, ok {
+                    return
+                }
+                self?.clearPendingCreate(workspaceID: workspaceID)
+            case .failure:
+                self?.clearPendingCreate(workspaceID: workspaceID)
+            }
+        }
+    }
+
+    /// Send `workspace.close` to the daemon for a workspace the macOS app just
+    /// closed locally. The caller is expected to have already inserted the id
+    /// into `pendingDeletes` (via `markPendingDelete`).
+    func sendWorkspaceClose(workspaceID: UUID) {
+        sendRPCAsync(method: "workspace.close", params: [
+            "workspace_id": workspaceID.uuidString.lowercased(),
         ], completion: nil)
     }
 

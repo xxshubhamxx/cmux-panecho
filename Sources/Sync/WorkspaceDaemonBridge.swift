@@ -32,6 +32,11 @@ final class WorkspaceDaemonBridge {
     static let flagFieldPinned = "cmux.daemon.field.pinned"
     static let flagFieldCustomTitle = "cmux.daemon.field.customTitle"
     static let flagFieldCustomColor = "cmux.daemon.field.customColor"
+    /// When on, the daemon owns workspace existence end-to-end: macOS-initiated
+    /// creates/closes also fire `workspace.create` / `workspace.close` RPCs and
+    /// daemon-pushed workspace.changed events add/remove local Workspace objects
+    /// (deduped via DaemonConnection's pending_creates / pending_deletes).
+    static let flagFieldExistence = "cmux.daemon.field.existence"
 
     static var pinnedOwnedByDaemon: Bool {
         UserDefaults.standard.bool(forKey: flagFieldPinned)
@@ -41,6 +46,9 @@ final class WorkspaceDaemonBridge {
     }
     static var customColorOwnedByDaemon: Bool {
         UserDefaults.standard.bool(forKey: flagFieldCustomColor)
+    }
+    static var existenceOwnedByDaemon: Bool {
+        UserDefaults.standard.bool(forKey: flagFieldExistence)
     }
 
     private var connection: DaemonConnection { DaemonConnection.shared }
@@ -111,7 +119,8 @@ final class WorkspaceDaemonBridge {
         let applyPinned = Self.pinnedOwnedByDaemon
         let applyTitle = Self.customTitleOwnedByDaemon
         let applyColor = Self.customColorOwnedByDaemon
-        guard applyPinned || applyTitle || applyColor else { return }
+        let applyExistence = Self.existenceOwnedByDaemon
+        guard applyPinned || applyTitle || applyColor || applyExistence else { return }
 
         let byID: [UUID: Workspace] = Dictionary(
             uniqueKeysWithValues: tabManager.tabs.compactMap { ws in (ws.id, ws) }
@@ -120,24 +129,90 @@ final class WorkspaceDaemonBridge {
         applyingDaemonState = true
         defer { applyingDaemonState = false }
 
+        // Track ids the daemon currently knows about so we can reconcile both
+        // pending_deletes and the local removal pass below.
+        var daemonIDStrings: Set<String> = []
+        var daemonUUIDs: Set<UUID> = []
+
         for entry in workspaces {
             guard let idString = entry["id"] as? String,
-                  let id = UUID(uuidString: idString),
-                  let ws = byID[id] else { continue }
+                  let id = UUID(uuidString: idString) else { continue }
+            let normalizedID = id.uuidString.lowercased()
+            daemonIDStrings.insert(normalizedID)
+            daemonUUIDs.insert(id)
 
-            if applyPinned, let pinned = entry["pinned"] as? Bool, ws.isPinned != pinned {
-                ws.isPinned = pinned
-            }
-            if applyTitle, let title = entry["title"] as? String, ws.title != title {
-                ws.title = title
-            }
-            if applyColor {
+            // 1) Existence path: instantiate local Workspace if missing.
+            if let ws = byID[id] {
+                // If macOS-initiated this create, drop the pending entry now
+                // that the daemon has acknowledged it. Field updates fall
+                // through to the existing per-field handlers below.
+                _ = connection.consumePendingCreate(workspaceID: id)
+                applyFields(
+                    to: ws,
+                    entry: entry,
+                    applyPinned: applyPinned,
+                    applyTitle: applyTitle,
+                    applyColor: applyColor
+                )
+            } else if applyExistence {
+                // No local match. Suppress re-instantiation if we have a
+                // pending close (daemon hasn't caught up yet) or if the
+                // macOS app initiated a create whose echo arrived before the
+                // local Workspace was inserted (rare; defensive).
+                if connection.isPendingDelete(workspaceID: id) { continue }
+                if connection.consumePendingCreate(workspaceID: id) { continue }
+
+                let title = (entry["title"] as? String) ?? ""
+                let directory = (entry["directory"] as? String) ?? ""
                 let color = (entry["color"] as? String)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                let normalized = (color?.isEmpty == false) ? color : nil
-                if ws.customColor != normalized {
-                    ws.customColor = normalized
-                }
+                let normalizedColor = (color?.isEmpty == false) ? color : nil
+                let pinned = (entry["pinned"] as? Bool) ?? false
+                tabManager.addWorkspaceFromDaemon(
+                    id: id,
+                    title: title,
+                    directory: directory.isEmpty ? nil : directory,
+                    color: normalizedColor,
+                    pinned: pinned
+                )
+            }
+        }
+
+        // 2) Existence path: close any local workspace the daemon no longer
+        // knows about (and that we are not already trying to close locally).
+        if applyExistence {
+            let toClose = tabManager.tabs.filter { ws in
+                !daemonUUIDs.contains(ws.id)
+                    && !connection.isPendingDelete(workspaceID: ws.id)
+            }
+            for ws in toClose {
+                tabManager.closeWorkspaceFromDaemon(ws)
+            }
+        }
+
+        // 3) Reconcile pending_deletes against the daemon's current view.
+        connection.reconcilePendingDeletes(currentDaemonIDs: daemonIDStrings)
+    }
+
+    private func applyFields(
+        to ws: Workspace,
+        entry: [String: Any],
+        applyPinned: Bool,
+        applyTitle: Bool,
+        applyColor: Bool
+    ) {
+        if applyPinned, let pinned = entry["pinned"] as? Bool, ws.isPinned != pinned {
+            ws.isPinned = pinned
+        }
+        if applyTitle, let title = entry["title"] as? String, ws.title != title {
+            ws.title = title
+        }
+        if applyColor {
+            let color = (entry["color"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = (color?.isEmpty == false) ? color : nil
+            if ws.customColor != normalized {
+                ws.customColor = normalized
             }
         }
     }

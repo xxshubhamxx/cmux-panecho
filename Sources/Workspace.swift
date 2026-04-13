@@ -7666,6 +7666,7 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     init(
+        id: UUID = UUID(),
         title: String = "Terminal",
         workingDirectory: String? = nil,
         portOrdinal: Int = 0,
@@ -7673,7 +7674,7 @@ final class Workspace: Identifiable, ObservableObject {
         initialTerminalCommand: String? = nil,
         initialTerminalEnvironment: [String: String] = [:]
     ) {
-        self.id = UUID()
+        self.id = id
         self.portOrdinal = portOrdinal
         self.processTitle = title
         self.title = title
