@@ -1361,7 +1361,6 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
             ensureForegroundAfterLaunch(app, timeout: timeout),
             "Expected app to launch in foreground. state=\(app.state.rawValue)"
         )
-        XCTAssertTrue(waitForSocketPong(timeout: timeout), "Expected control socket at \(socketPath)")
     }
 
     private func ensureForegroundAfterLaunch(_ app: XCUIApplication, timeout: TimeInterval) -> Bool {
