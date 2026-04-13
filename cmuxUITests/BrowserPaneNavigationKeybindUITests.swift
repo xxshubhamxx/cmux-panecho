@@ -472,9 +472,7 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
             "Expected Cmd+R to open the rename command palette while terminal is focused"
         )
 
-        let browserPane = app.otherElements["BrowserPanelContent.\(expectedBrowserPanelId)"].firstMatch
-        XCTAssertTrue(browserPane.waitForExistence(timeout: 5.0), "Expected browser pane content for click target")
-        browserPane.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        clickBrowserPane(app, panelId: expectedBrowserPanelId)
         XCTAssertTrue(
             waitForNonExistence(renameField, timeout: 5.0),
             "Expected clicking the browser pane to dismiss the command palette"
@@ -602,9 +600,7 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
             "Expected browser to finish navigating to the regression page before zoom. value=\(String(describing: omnibar.value))"
         )
 
-        let browserPane = app.otherElements["BrowserPanelContent.\(browserPanelId)"].firstMatch
-        XCTAssertTrue(browserPane.waitForExistence(timeout: 6.0), "Expected browser pane content before zoom")
-        browserPane.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        clickBrowserPane(app, panelId: browserPanelId)
 
         app.typeKey(XCUIKeyboardKey.return.rawValue, modifierFlags: [.command, .shift])
         XCTAssertTrue(
@@ -1255,6 +1251,21 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         }
     }
 
+    private func clickBrowserPane(_ app: XCUIApplication, panelId: String, timeout: TimeInterval = 6.0) {
+        let browserPane = app.otherElements["BrowserPanelContent.\(panelId)"].firstMatch
+        if browserPane.waitForExistence(timeout: timeout) {
+            browserPane.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            return
+        }
+
+        // Some CI runs only expose the shared webview surface accessibility ID.
+        let browserSurface = app.otherElements["BrowserWebViewSurface"].firstMatch
+        XCTAssertTrue(browserSurface.waitForExistence(timeout: timeout), "Expected browser pane content for click target")
+        browserSurface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+    }
+
     private func waitForSocketPong(timeout: TimeInterval) -> Bool {
         waitForCondition(timeout: timeout) {
             self.socketCommand("ping") == "PONG"
@@ -1345,27 +1356,26 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
     }
 
     private func launchAndEnsureForeground(_ app: XCUIApplication, timeout: TimeInterval = 12.0) {
-        // On headless CI runners (no GUI session), XCUIApplication.launch()
-        // blocks ~60s then fails with "Failed to activate application
-        // (current state: Running Background)". Mark this as an expected
-        // failure so the test can continue — keyboard and element APIs work
-        // via accessibility even when the app is in .runningBackground.
-        let options = XCTExpectedFailure.Options()
-        options.isStrict = false
-        XCTExpectFailure("App activation may fail on headless CI runners", options: options) {
-            app.launch()
+        app.launch()
+        XCTAssertTrue(
+            ensureForegroundAfterLaunch(app, timeout: timeout),
+            "Expected app to launch in foreground. state=\(app.state.rawValue)"
+        )
+        XCTAssertTrue(waitForSocketPong(timeout: timeout), "Expected control socket at \(socketPath)")
+    }
+
+    private func ensureForegroundAfterLaunch(_ app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        if app.wait(for: .runningForeground, timeout: timeout) {
+            return true
         }
-
-        if app.state == .runningForeground { return }
-
         if app.state == .runningBackground {
-            // App launched but couldn't activate — continue in background.
-            // XCUIElement queries and keyboard input work through the
-            // accessibility framework regardless of activation state.
-            return
+            app.activate()
+            if app.wait(for: .runningForeground, timeout: 6.0) {
+                return true
+            }
         }
-
-        XCTFail("App failed to start. state=\(app.state.rawValue)")
+        app.activate()
+        return app.wait(for: .runningForeground, timeout: 2.0)
     }
 
     private func waitForData(keys: [String], timeout: TimeInterval) -> Bool {
