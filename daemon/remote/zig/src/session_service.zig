@@ -602,6 +602,21 @@ pub const Service = struct {
         return runtime.has_unread_output.load(.seq_cst);
     }
 
+    /// Live count of registered terminal subscribers for a session. Useful
+    /// as a deterministic readiness/quiescence signal in tests — callers
+    /// can poll for this to drop to zero after a disconnect instead of
+    /// sleeping a best-effort interval.
+    pub fn subscriberCount(self: *Service, session_id: []const u8) usize {
+        self.sub_mutex.lock();
+        defer self.sub_mutex.unlock();
+        var count: usize = 0;
+        for (self.terminal_subs.items) |sub| {
+            if (sub.dead.load(.seq_cst)) continue;
+            if (std.mem.eql(u8, sub.session_id, session_id)) count += 1;
+        }
+        return count;
+    }
+
     fn fireWorkspaceChanged(self: *Service) void {
         if (self.on_workspace_changed) |cb| cb(self);
     }

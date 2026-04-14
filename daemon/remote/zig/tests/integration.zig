@@ -390,7 +390,7 @@ test "integration: reconnect with stale offset returns truncated=true" {
             rotated = true;
             break;
         }
-        std.Thread.sleep(20 * std.time.ns_per_ms);
+        std.Thread.yield() catch {};
     }
     try std.testing.expect(rotated);
 
@@ -814,17 +814,16 @@ test "integration: mid-frame disconnect leaves daemon healthy" {
     std.posix.shutdown(victim.fd, .both) catch {};
     victim.deinit();
 
-    // Brief settle so the Worker thread has a chance to schedule and
-    // run its defer chain (read EOF → unsubscribeAllForStream → wait
-    // for in-flight push → destroy sub). The UAF fix in
-    // session_service.zig makes the synchronization correctness-
-    // complete (no SEGV either way), but without the sleep the test's
-    // re-subscribe below was still fragile at ~5 % across 20 runs
-    // because the probe sometimes lands before the kernel delivers
-    // EOF to the Worker's read() call. 100 ms is comfortably above
-    // typical thread-wakeup on macOS; deterministic sleeps are
-    // acceptable in tests per policy.
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    // Wait for the Worker's defer chain (read EOF → unsubscribeAllForStream
+    // → wait for in-flight push → destroy sub) to actually complete, using
+    // the public subscriberCount API as a deterministic signal. This
+    // replaces a blind 100 ms sleep that was fragile on loaded machines.
+    const quiesce_deadline = deadlineIn(2000);
+    while (std.time.milliTimestamp() < quiesce_deadline) {
+        if (fx.service.subscriberCount("s-midframe") == 0) break;
+        std.Thread.yield() catch {};
+    }
+    try std.testing.expectEqual(@as(usize, 0), fx.service.subscriberCount("s-midframe"));
 
     var probe = try test_util.Client.connect(alloc, fx.socket_path);
     defer probe.deinit();
