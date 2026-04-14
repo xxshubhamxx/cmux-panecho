@@ -197,6 +197,13 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
                 self?.sendTheme()
             }
             .store(in: &panelSubscriptions)
+        // Ghostty broadcasts this one from the terminal surfaces themselves when
+        // the default background flips, even before the config re-parse completes.
+        NotificationCenter.default.publisher(for: .ghosttyDefaultBackgroundDidChange)
+            .sink { [weak self] _ in
+                self?.sendTheme()
+            }
+            .store(in: &panelSubscriptions)
     }
 
     // MARK: - Bridge inbound
@@ -512,9 +519,18 @@ enum MonacoThemeResolver {
         }
 
         #if DEBUG
+        let themeDescription = config.theme ?? "<none>"
+        let paletteSummary = (0..<16)
+            .map { index -> String in
+                guard let c = config.palette[index] else { return "\(index):nil" }
+                return "\(index):\(c.hexString())"
+            }
+            .joined(separator: " ")
         NSLog(
-            "monaco.theme bg=%@ fg=%@ isDark=%d ansi=%d font=%@/%.1f",
-            bg, fg, isDark ? 1 : 0, ansi.count, config.fontFamily, Double(config.fontSize)
+            "monaco.theme theme=%@ bg=%@ fg=%@ cursor=%@ selection=%@ isDark=%d font=%@/%.1f palette=[%@]",
+            themeDescription, bg, fg, cursor, selection,
+            isDark ? 1 : 0, config.fontFamily, Double(config.fontSize),
+            paletteSummary
         )
         #endif
 
