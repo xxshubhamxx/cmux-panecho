@@ -622,6 +622,10 @@ final class FileExplorerStore: ObservableObject {
         let path = rootPath
         Task { [weak self] in
             guard let self else { return }
+            // Guard against an in-flight refresh landing after the user switched
+            // workspaces/roots — re-check that `rootPath` is still the path we
+            // started with before letting merge mutate `rootNodes`.
+            guard await self.rootPath == path else { return }
             await self.mergeChildren(parent: nil, at: path)
         }
     }
@@ -629,12 +633,19 @@ final class FileExplorerStore: ObservableObject {
     @MainActor
     private func mergeChildren(parent: FileExplorerNode?, at path: String) async {
         guard let provider else { return }
+        // Snapshot the root before the awaited call so we can reject a merge
+        // that lost its race against a root switch (workspace/session change).
+        let expectedRoot = rootPath
         let entries: [FileExplorerEntry]
         do {
             entries = try await provider.listDirectory(path: path, showHidden: showHiddenFiles)
         } catch {
             return
         }
+        // Root changed underneath us while listDirectory was awaiting — abort
+        // before touching rootNodes with data from the old tree.
+        guard rootPath == expectedRoot else { return }
+        if parent == nil, path != rootPath { return }
 
         let sorted = entries.sorted { a, b in
             if a.isDirectory != b.isDirectory { return a.isDirectory }

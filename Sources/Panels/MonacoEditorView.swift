@@ -18,7 +18,8 @@ struct MonacoEditorView: View {
 
     @State private var focusFlashOpacity: Double = 0.0
     @State private var focusFlashAnimationGeneration: Int = 0
-    @Environment(\.colorScheme) private var colorScheme
+    @State private var ghosttyBackground: Color = Color(nsColor: NSColor(white: 0.12, alpha: 1.0))
+    @State private var ghosttyForeground: Color = Color(nsColor: NSColor(white: 0.9, alpha: 1.0))
 
     var body: some View {
         Group {
@@ -27,11 +28,8 @@ struct MonacoEditorView: View {
             } else {
                 VStack(spacing: 0) {
                     filePathHeader
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-                        .padding(.bottom, 6)
-                    Divider()
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 3)
                     MonacoWebViewRepresentable(
                         panel: panel,
                         isFocused: isFocused,
@@ -41,7 +39,7 @@ struct MonacoEditorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(backgroundColor)
+        .background(ghosttyBackground)
         .overlay {
             RoundedRectangle(cornerRadius: FocusFlashPattern.ringCornerRadius)
                 .stroke(cmuxAccentColor().opacity(focusFlashOpacity), lineWidth: 3)
@@ -52,20 +50,30 @@ struct MonacoEditorView: View {
         .onChange(of: panel.focusFlashToken) { _ in
             triggerFocusFlashAnimation()
         }
+        .onAppear { refreshHeaderPalette() }
+        .onReceive(NotificationCenter.default.publisher(for: .ghosttyConfigDidReload)) { _ in
+            refreshHeaderPalette()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .ghosttyDefaultBackgroundDidChange)) { _ in
+            refreshHeaderPalette()
+        }
     }
 
     private var filePathHeader: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "doc.text")
-                .foregroundColor(.secondary)
-                .font(.system(size: 12))
+        HStack(spacing: 0) {
             Text(panel.filePath)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.secondary)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(ghosttyForeground.opacity(0.55))
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
         }
+    }
+
+    private func refreshHeaderPalette() {
+        let config = GhosttyConfig.load(useCache: false)
+        ghosttyBackground = Color(nsColor: config.backgroundColor)
+        ghosttyForeground = Color(nsColor: config.foregroundColor)
     }
 
     private var fileUnavailableView: some View {
@@ -88,12 +96,6 @@ struct MonacoEditorView: View {
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var backgroundColor: Color {
-        colorScheme == .dark
-            ? Color(nsColor: NSColor(white: 0.12, alpha: 1.0))
-            : Color(nsColor: NSColor(white: 0.98, alpha: 1.0))
     }
 
     private func triggerFocusFlashAnimation() {
