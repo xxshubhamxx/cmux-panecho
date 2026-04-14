@@ -28,8 +28,9 @@ struct MonacoEditorView: View {
             } else {
                 VStack(spacing: 0) {
                     filePathHeader
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 3)
+                        .padding(.leading, 8)
+                        .padding(.trailing, 12)
+                        .frame(height: 24)
                     MonacoWebViewRepresentable(
                         panel: panel,
                         isFocused: isFocused,
@@ -62,7 +63,7 @@ struct MonacoEditorView: View {
     private var filePathHeader: some View {
         HStack(spacing: 0) {
             Text(panel.filePath)
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 11))
                 .foregroundColor(ghosttyForeground.opacity(0.55))
                 .lineLimit(1)
                 .truncationMode(.middle)
