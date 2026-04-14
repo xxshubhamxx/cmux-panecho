@@ -686,12 +686,12 @@ test "integration: subscribe race has no gap or overlap" {
     var fx = try Fixture.init(alloc, "race");
     defer fx.deinit();
 
-    // Steady emitter that keeps streaming past the test's lifetime so a
-    // fast subscribe-after-start still sees live pushes. A short per-line
-    // sleep forces many pump cycles instead of one giant burst.
+    // Unbounded emitter so the subscribe is guaranteed to land while the
+    // shell is still writing. closeSession below will SIGKILL it — this
+    // test explicitly doesn't exercise EOF behavior.
     var opened = try fx.service.openTerminal(
         "s-race",
-        "i=0; while [ $i -lt 200 ]; do printf 'race-line-%04d\\n' $i; i=$((i+1)); done",
+        "while true; do printf 'race-line\\n'; done",
         80,
         24,
     );
@@ -699,9 +699,8 @@ test "integration: subscribe race has no gap or overlap" {
     defer alloc.free(opened.attachment_id);
     defer fx.service.closeSession("s-race") catch {};
 
-    // Let output get flowing before we subscribe. 30 ms is enough for the
-    // pump to have drained several chunks without draining the whole run.
-    std.Thread.sleep(30 * std.time.ns_per_ms);
+    // Let output get flowing before we subscribe.
+    std.Thread.sleep(50 * std.time.ns_per_ms);
 
     var client = try test_util.Client.connect(alloc, fx.socket_path);
     defer client.deinit();

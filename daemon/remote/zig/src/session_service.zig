@@ -29,6 +29,11 @@ pub const TerminalSubscription = struct {
     last_command_seq: u64 = 0,
     /// Last notification_seq observed when we pushed to this subscriber.
     last_notification_seq: u64 = 0,
+    /// Whether we've already delivered an eof=true push to this subscriber.
+    /// The dispatch decision ("do we have anything new?") has to include
+    /// this, otherwise a PTY that closes after its last byte was pushed
+    /// would leave the subscriber hanging on eof=false forever.
+    eof_sent: bool = false,
 };
 
 pub const SubscribeSnapshot = struct {
@@ -884,8 +889,12 @@ pub const Service = struct {
         }
         const has_new_bytes = start < window.next_offset;
         const has_new_notifications = new_bell or new_command or new_notification;
+        // Emit exactly one eof=true push after the PTY closes and all
+        // bytes have been delivered. Tracked via `sub.eof_sent` so
+        // subsequent pumps don't spam empty eof frames.
+        const eof_to_announce = eof_flag and !sub.eof_sent and start >= window.next_offset;
 
-        if (!has_new_bytes and !has_new_notifications) {
+        if (!has_new_bytes and !has_new_notifications and !eof_to_announce) {
             entry.lock.unlock();
             return;
         }
@@ -915,6 +924,7 @@ pub const Service = struct {
         sub.seq += 1;
         const seq_now = sub.seq;
         const eof_now = eof_flag and raw_offset >= window.next_offset;
+        if (eof_now) sub.eof_sent = true;
         entry.lock.unlock();
 
         defer if (raw_data_owned) |d| self.alloc.free(d);
