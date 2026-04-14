@@ -434,10 +434,9 @@ final class CmuxSettingsFileStore {
         }
         if let value = jsonBool(section["warnBeforeQuit"]) {
             snapshot.managedUserDefaults[QuitWarningSettings.warnBeforeQuitKey] = .bool(value)
-        } else if let value = jsonBool(section["warnBeforeClosingTab"]) {
-            // "warnBeforeClosingTab" is now unified with "warnBeforeQuit" — accept the
-            // legacy key only as a fallback so the documented setting wins.
-            snapshot.managedUserDefaults[QuitWarningSettings.warnBeforeQuitKey] = .bool(value)
+        }
+        if let value = jsonBool(section["warnBeforeClosingTab"]) {
+            snapshot.managedUserDefaults[CloseTabWarningSettings.warnBeforeClosingTabKey] = .bool(value)
         }
         if let value = jsonBool(section["renameSelectsExistingName"]) {
             snapshot.managedUserDefaults[CommandPaletteRenameSelectionSettings.selectAllOnFocusKey] = .bool(value)
@@ -1332,6 +1331,7 @@ final class CmuxSettingsFileStore {
                     "reorderOnNotification": WorkspaceAutoReorderSettings.defaultValue,
                     "sendAnonymousTelemetry": TelemetrySettings.defaultSendAnonymousTelemetry,
                     "warnBeforeQuit": QuitWarningSettings.defaultWarnBeforeQuit,
+                    "warnBeforeClosingTab": CloseTabWarningSettings.defaultWarnBeforeClosingTab,
                     "renameSelectsExistingName": CommandPaletteRenameSelectionSettings.defaultSelectAllOnFocus,
                     "commandPaletteSearchesAllSurfaces": CommandPaletteSwitcherSearchSettings.defaultSearchAllSurfaces,
                 ],

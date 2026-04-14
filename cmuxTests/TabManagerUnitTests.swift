@@ -780,19 +780,19 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
 
 @MainActor
 final class TabManagerCloseWorkspacesWithConfirmationTests: XCTestCase {
-    private var originalWarnBeforeQuitPreference: Any?
+    private var originalWarnBeforeClosingTabPreference: Any?
 
     override func setUp() {
         super.setUp()
-        originalWarnBeforeQuitPreference = UserDefaults.standard.object(forKey: QuitWarningSettings.warnBeforeQuitKey)
-        UserDefaults.standard.removeObject(forKey: QuitWarningSettings.warnBeforeQuitKey)
+        originalWarnBeforeClosingTabPreference = UserDefaults.standard.object(forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
+        UserDefaults.standard.removeObject(forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
     }
 
     override func tearDown() {
-        if let originalWarnBeforeQuitPreference {
-            UserDefaults.standard.set(originalWarnBeforeQuitPreference, forKey: QuitWarningSettings.warnBeforeQuitKey)
+        if let originalWarnBeforeClosingTabPreference {
+            UserDefaults.standard.set(originalWarnBeforeClosingTabPreference, forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: QuitWarningSettings.warnBeforeQuitKey)
+            UserDefaults.standard.removeObject(forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
         }
         super.tearDown()
     }
@@ -916,7 +916,7 @@ final class TabManagerCloseWorkspacesWithConfirmationTests: XCTestCase {
             return false
         }
 
-        UserDefaults.standard.set(false, forKey: QuitWarningSettings.warnBeforeQuitKey)
+        UserDefaults.standard.set(false, forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
         manager.closeWorkspacesWithConfirmation([manager.tabs[0].id, second.id], allowPinned: true)
 
         XCTAssertEqual(prompts.count, 0, "Disabling the close warning should skip the multi-workspace confirmation dialog")
@@ -927,19 +927,20 @@ final class TabManagerCloseWorkspacesWithConfirmationTests: XCTestCase {
 
 @MainActor
 final class TabManagerCloseCurrentPanelTests: XCTestCase {
-    private var originalWarnBeforeQuitPreference: Any?
+    private let warnBeforeClosingTabDefaultsKey = CloseTabWarningSettings.warnBeforeClosingTabKey
+    private var originalWarnBeforeClosingTabPreference: Any?
 
     override func setUp() {
         super.setUp()
-        originalWarnBeforeQuitPreference = UserDefaults.standard.object(forKey: QuitWarningSettings.warnBeforeQuitKey)
-        UserDefaults.standard.removeObject(forKey: QuitWarningSettings.warnBeforeQuitKey)
+        originalWarnBeforeClosingTabPreference = UserDefaults.standard.object(forKey: warnBeforeClosingTabDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: warnBeforeClosingTabDefaultsKey)
     }
 
     override func tearDown() {
-        if let originalWarnBeforeQuitPreference {
-            UserDefaults.standard.set(originalWarnBeforeQuitPreference, forKey: QuitWarningSettings.warnBeforeQuitKey)
+        if let originalWarnBeforeClosingTabPreference {
+            UserDefaults.standard.set(originalWarnBeforeClosingTabPreference, forKey: warnBeforeClosingTabDefaultsKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: QuitWarningSettings.warnBeforeQuitKey)
+            UserDefaults.standard.removeObject(forKey: warnBeforeClosingTabDefaultsKey)
         }
         super.tearDown()
     }
@@ -1037,7 +1038,7 @@ final class TabManagerCloseCurrentPanelTests: XCTestCase {
             return false
         }
 
-        UserDefaults.standard.removeObject(forKey: QuitWarningSettings.warnBeforeQuitKey)
+        UserDefaults.standard.removeObject(forKey: warnBeforeClosingTabDefaultsKey)
         subject.manager.closeRuntimeSurfaceWithConfirmation(tabId: subject.workspace.id, surfaceId: subject.panelId)
 
         XCTAssertEqual(promptCount, 1, "The close-tab warning should default to enabled when unset")
@@ -1052,7 +1053,7 @@ final class TabManagerCloseCurrentPanelTests: XCTestCase {
             return false
         }
 
-        UserDefaults.standard.set(false, forKey: QuitWarningSettings.warnBeforeQuitKey)
+        UserDefaults.standard.set(false, forKey: warnBeforeClosingTabDefaultsKey)
         subject.manager.closeRuntimeSurfaceWithConfirmation(tabId: subject.workspace.id, surfaceId: subject.panelId)
         drainMainQueue()
         drainMainQueue()
@@ -1070,7 +1071,7 @@ final class TabManagerCloseCurrentPanelTests: XCTestCase {
             return false
         }
 
-        UserDefaults.standard.set(true, forKey: QuitWarningSettings.warnBeforeQuitKey)
+        UserDefaults.standard.set(true, forKey: warnBeforeClosingTabDefaultsKey)
         subject.manager.closeRuntimeSurfaceWithConfirmation(tabId: subject.workspace.id, surfaceId: subject.panelId)
 
         XCTAssertEqual(promptCount, 1, "Re-enabling the warning should restore the close-tab confirmation dialog")
@@ -1085,7 +1086,7 @@ final class TabManagerCloseCurrentPanelTests: XCTestCase {
             return false
         }
 
-        UserDefaults.standard.set(false, forKey: QuitWarningSettings.warnBeforeQuitKey)
+        UserDefaults.standard.set(false, forKey: warnBeforeClosingTabDefaultsKey)
         subject.manager.closeCurrentPanelWithConfirmation()
         drainMainQueue()
         drainMainQueue()
@@ -1105,7 +1106,7 @@ final class TabManagerCloseCurrentPanelTests: XCTestCase {
             return false
         }
 
-        UserDefaults.standard.set(true, forKey: QuitWarningSettings.warnBeforeQuitKey)
+        UserDefaults.standard.set(true, forKey: warnBeforeClosingTabDefaultsKey)
         subject.manager.closeCurrentPanelWithConfirmation()
         drainMainQueue()
         drainMainQueue()

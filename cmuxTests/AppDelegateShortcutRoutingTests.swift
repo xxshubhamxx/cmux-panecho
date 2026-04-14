@@ -57,8 +57,8 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
             }
         )
         originalSettingsFileStore = KeyboardShortcutSettings.settingsFileStore
-        originalWarnBeforeClosingTabPreference = UserDefaults.standard.object(forKey: QuitWarningSettings.warnBeforeQuitKey)
-        UserDefaults.standard.removeObject(forKey: QuitWarningSettings.warnBeforeQuitKey)
+        originalWarnBeforeClosingTabPreference = UserDefaults.standard.object(forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
+        UserDefaults.standard.removeObject(forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
         KeyboardShortcutSettings.resetAll()
     }
 
@@ -79,9 +79,9 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
             }
         }
         if let originalWarnBeforeClosingTabPreference {
-            UserDefaults.standard.set(originalWarnBeforeClosingTabPreference, forKey: QuitWarningSettings.warnBeforeQuitKey)
+            UserDefaults.standard.set(originalWarnBeforeClosingTabPreference, forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: QuitWarningSettings.warnBeforeQuitKey)
+            UserDefaults.standard.removeObject(forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
         }
         super.tearDown()
     }
@@ -1386,7 +1386,7 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
             return false
         }
 
-        UserDefaults.standard.set(false, forKey: QuitWarningSettings.warnBeforeQuitKey)
+        UserDefaults.standard.set(false, forKey: CloseTabWarningSettings.warnBeforeClosingTabKey)
 
         guard let event = makeKeyDownEvent(
             key: "w",

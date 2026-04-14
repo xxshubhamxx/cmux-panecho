@@ -52426,13 +52426,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Quit and close without confirmation."
+            "value": "Cmd+Q quits immediately without confirmation."
           }
         },
         "ja": {
           "stringUnit": {
-            "state": "needs_review",
-            "value": "確認なしに終了・タブ閉じを行います。"
+            "state": "translated",
+            "value": "Cmd+Qで確認なしにすぐ終了します。"
           }
         },
         "zh-Hans": {
@@ -52545,7 +52545,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Show a confirmation before quitting or closing tabs and workspaces."
+            "value": "Show a confirmation before quitting with Cmd+Q."
           }
         },
         "ja": {
@@ -52654,6 +52654,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "Показувати підтвердження перед виходом через Cmd+Q."
+          }
+        }
+      }
+    },
+    "settings.app.warnBeforeClosingTab": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warn Before Closing Tab"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タブを閉じる前に警告"
+          }
+        }
+      }
+    },
+    "settings.app.warnBeforeClosingTab.subtitleOff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cmd+W closes the current tab immediately without confirmation."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cmd+Wで確認なしに現在のタブをすぐ閉じます。"
+          }
+        }
+      }
+    },
+    "settings.app.warnBeforeClosingTab.subtitleOn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show a confirmation before closing a tab with Cmd+W."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cmd+Wでタブを閉じる前に確認を表示します。"
           }
         }
       }

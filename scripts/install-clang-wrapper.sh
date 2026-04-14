@@ -9,8 +9,8 @@
 # before invoking xcodebuild. Once installed the toolchain bundle is reused
 # across runs and across concurrent builds.
 #
-# This script is intentionally fast: it only does work when the wrapper file
-# or Info.plist is missing or out of date.
+# This script is intentionally fast: it only does work when the wrapper file,
+# Info.plist, or mirrored Xcode toolchain source changes.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,6 +30,11 @@ fi
 if [[ -z "$DEVELOPER_DIR_RESOLVED" ]]; then
   DEVELOPER_DIR_RESOLVED="/Applications/Xcode.app/Contents/Developer"
 fi
+if [[ ! -d "$DEVELOPER_DIR_RESOLVED" ]]; then
+  echo "install-clang-wrapper: cannot find developer dir $DEVELOPER_DIR_RESOLVED" >&2
+  exit 1
+fi
+DEVELOPER_DIR_RESOLVED="$(cd "$DEVELOPER_DIR_RESOLVED" && pwd -P)"
 XCODE_DEFAULT_BIN="$DEVELOPER_DIR_RESOLVED/Toolchains/XcodeDefault.xctoolchain/usr/bin"
 
 if [[ ! -d "$XCODE_DEFAULT_BIN" ]]; then
@@ -45,6 +50,7 @@ TOOLCHAIN_BIN="$TOOLCHAIN_USR/bin"
 TOOLCHAIN_PLIST="$TOOLCHAIN_DIR/Info.plist"
 WRAPPED_CLANG="$TOOLCHAIN_BIN/clang"
 XCODE_DEFAULT_USR="$DEVELOPER_DIR_RESOLVED/Toolchains/XcodeDefault.xctoolchain/usr"
+TOOLCHAIN_BIN_SOURCE_FILE="$TOOLCHAIN_DIR/.xcode-default-bin-source"
 
 mkdir -p "$TOOLCHAIN_BIN"
 
@@ -94,36 +100,33 @@ fi
 
 # Mirror every binary from XcodeDefault as a symlink, except clang itself
 # which we replace with our wrapper. Skip work if the symlink set already
-# matches: count entries and bail when both sides agree.
+# matches the active Xcode selection.
 need_relink=0
 xcode_count=$(/bin/ls -1 "$XCODE_DEFAULT_BIN" | /usr/bin/wc -l | tr -d ' ')
 toolchain_count=$(/bin/ls -1 "$TOOLCHAIN_BIN" 2>/dev/null | /usr/bin/wc -l | tr -d ' ')
 if [[ "$xcode_count" != "$toolchain_count" ]]; then
   need_relink=1
 fi
+if [[ $need_relink -eq 0 ]]; then
+  current_bin_source="$(cat "$TOOLCHAIN_BIN_SOURCE_FILE" 2>/dev/null || true)"
+  if [[ "$current_bin_source" != "$XCODE_DEFAULT_BIN" ]]; then
+    need_relink=1
+  fi
+fi
 
 if [[ $need_relink -eq 1 ]]; then
-  # Re-create the symlink farm, then re-install the clang wrapper at the
-  # end. We do not delete unrelated files first so a partially populated
-  # toolchain dir is repaired in place.
+  # Re-create the symlink farm from scratch so switching Xcode versions or
+  # renaming tools cannot leave stale links behind.
+  /usr/bin/find "$TOOLCHAIN_BIN" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   for src in "$XCODE_DEFAULT_BIN"/*; do
     name="$(basename "$src")"
     if [[ "$name" == "clang" ]]; then
       continue
     fi
     dest="$TOOLCHAIN_BIN/$name"
-    # Replace stale link or missing file. Leave correct links alone.
-    if [[ -L "$dest" ]]; then
-      current="$(/usr/bin/readlink "$dest" || true)"
-      if [[ "$current" == "$src" ]]; then
-        continue
-      fi
-      rm -f "$dest"
-    elif [[ -e "$dest" ]]; then
-      rm -f "$dest"
-    fi
     ln -s "$src" "$dest"
   done
+  printf '%s\n' "$XCODE_DEFAULT_BIN" > "$TOOLCHAIN_BIN_SOURCE_FILE"
 fi
 
 # Install or refresh the clang wrapper. Compare bytes to avoid touching

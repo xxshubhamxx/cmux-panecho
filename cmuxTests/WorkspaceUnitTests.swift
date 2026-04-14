@@ -889,16 +889,24 @@ final class KeyboardShortcutSettingsFileStoreTests: XCTestCase {
         XCTAssertNil(defaults.data(forKey: settingsFileBackupsDefaultsKey))
     }
 
-    func testWarnBeforeQuitSettingOverridesLegacyWarnBeforeClosingTab() throws {
+    func testSettingsFileStoreAppliesWarnBeforeQuitAndWarnBeforeClosingTabIndependently() throws {
         let defaults = UserDefaults.standard
-        let managedKey = QuitWarningSettings.warnBeforeQuitKey
-        let previousValue = defaults.object(forKey: managedKey)
+        let quitManagedKey = QuitWarningSettings.warnBeforeQuitKey
+        let closeManagedKey = CloseTabWarningSettings.warnBeforeClosingTabKey
+        let previousQuitValue = defaults.object(forKey: quitManagedKey)
+        let previousCloseValue = defaults.object(forKey: closeManagedKey)
         let previousBackups = defaults.data(forKey: settingsFileBackupsDefaultsKey)
         defer {
-            if let previousValue {
-                defaults.set(previousValue, forKey: managedKey)
+            if let previousQuitValue {
+                defaults.set(previousQuitValue, forKey: quitManagedKey)
             } else {
-                defaults.removeObject(forKey: managedKey)
+                defaults.removeObject(forKey: quitManagedKey)
+            }
+
+            if let previousCloseValue {
+                defaults.set(previousCloseValue, forKey: closeManagedKey)
+            } else {
+                defaults.removeObject(forKey: closeManagedKey)
             }
 
             if let previousBackups {
@@ -908,7 +916,8 @@ final class KeyboardShortcutSettingsFileStoreTests: XCTestCase {
             }
         }
 
-        defaults.removeObject(forKey: managedKey)
+        defaults.removeObject(forKey: quitManagedKey)
+        defaults.removeObject(forKey: closeManagedKey)
         defaults.removeObject(forKey: settingsFileBackupsDefaultsKey)
 
         let directoryURL = try makeTemporaryDirectory()
@@ -933,7 +942,8 @@ final class KeyboardShortcutSettingsFileStoreTests: XCTestCase {
             startWatching: false
         )
 
-        XCTAssertEqual(defaults.object(forKey: managedKey) as? Bool, false)
+        XCTAssertEqual(defaults.object(forKey: quitManagedKey) as? Bool, false)
+        XCTAssertEqual(defaults.object(forKey: closeManagedKey) as? Bool, true)
     }
 
     func testSettingsFileStoreAppliesWorkspaceColorDictionaryAndAllowsRemovingDefaults() throws {
