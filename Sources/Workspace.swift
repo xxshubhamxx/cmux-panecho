@@ -6997,16 +6997,39 @@ enum LocalTerminalDaemonBridge {
 
         guard config != nil else { return nil }
 
-        // Auto-enable WebSocket listener for mobile connections.
-        // Derive from CMUX_PORT (+1 offset) so each tagged build gets a unique WS port.
-        let wsPort: Int
-        if let explicit = Int(environment["CMUX_MOBILE_WS_PORT"] ?? "") {
-            wsPort = explicit
-        } else if let cmuxPort = Int(environment["CMUX_PORT"] ?? "") {
-            wsPort = cmuxPort + 1
-        } else {
-            wsPort = 52100
-        }
+        // Auto-enable WebSocket listener for mobile connections. The iOS app
+        // scans 52100-52199 for daemons (see TerminalServerDiscovery), so the
+        // port MUST land in that range or the scanner never sees it. Use a
+        // stable per-tag / per-bundle-id hash within 52101-52199, matching
+        // MobileDaemonBridgeInline.resolvePort so both code paths pick the
+        // same port and the Swift side can reuse an already-running daemon.
+        //
+        // `CMUX_PORT` (used historically as the base here) is the shell's
+        // workspace port range — it bleeds in through inherited environment
+        // when the app is launched from a cmux terminal, producing out-of-
+        // range values like 9121. That silently breaks iOS discovery even
+        // when everything else is wired up correctly.
+        let wsPort: Int = {
+            if let explicit = Int(environment["CMUX_MOBILE_WS_PORT"] ?? "") {
+                return explicit
+            }
+            if let tag = environment["CMUX_TAG"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !tag.isEmpty {
+                return 52101 + (Self.stableFNV1a(tag) % 99)
+            }
+            if let bundleId = bundle.bundleIdentifier {
+                let basePrefixes = ["com.cmuxterm.app.debug", "dev.cmux.app.dev"]
+                for prefix in basePrefixes {
+                    if bundleId.count > prefix.count, bundleId.hasPrefix(prefix) {
+                        let suffix = String(bundleId.dropFirst(prefix.count + 1))
+                        if !suffix.isEmpty {
+                            return 52101 + (Self.stableFNV1a(suffix) % 99)
+                        }
+                    }
+                }
+            }
+            return 52100
+        }()
         config?.wsPort = wsPort
         config?.wsSecret = resolveWebSocketSecret(environment: environment)
 
@@ -7019,6 +7042,17 @@ enum LocalTerminalDaemonBridge {
             return explicit
         }
         return persistedWebSocketSecret()
+    }
+
+    /// FNV-1a 32-bit hash. `String.hashValue` is randomized per process, so
+    /// we use a stable hash for deterministic port selection across launches.
+    fileprivate static func stableFNV1a(_ s: String) -> Int {
+        var hash: UInt32 = 2_166_136_261
+        for byte in s.utf8 {
+            hash ^= UInt32(byte)
+            hash &*= 16_777_619
+        }
+        return Int(hash)
     }
 
     private static func persistedWebSocketSecret() -> String {
