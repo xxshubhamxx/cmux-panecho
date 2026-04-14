@@ -6623,12 +6623,7 @@ final class Workspace: Identifiable, ObservableObject {
     private var manualUnreadMarkedAt: [UUID: Date] = [:]
     nonisolated private static let manualUnreadFocusGraceInterval: TimeInterval = 0.2
     nonisolated private static let manualUnreadClearDelayAfterFocusFlash: TimeInterval = 0.2
-    @Published var statusEntries: [String: SidebarStatusEntry] = [:] {
-        didSet {
-            guard statusEntries != oldValue else { return }
-            markSessionSnapshotDirty(reason: "statusEntries")
-        }
-    }
+    @Published var statusEntries: [String: SidebarStatusEntry] = [:]
     @Published var metadataBlocks: [String: SidebarMetadataBlock] = [:]
     @Published var logEntries: [SidebarLogEntry] = [] {
         didSet {

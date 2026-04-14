@@ -2136,7 +2136,7 @@ final class BrowserPanel: Panel, ObservableObject {
     @Published private(set) var currentURL: URL? {
         didSet {
             guard oldValue?.absoluteString != currentURL?.absoluteString else { return }
-            noteSessionPersistenceStateChanged(reason: "url")
+            noteSessionPersistenceHistoryChangedIfNeeded(reason: "url")
         }
     }
 
@@ -2170,7 +2170,7 @@ final class BrowserPanel: Panel, ObservableObject {
     @Published private(set) var canGoBack: Bool = false {
         didSet {
             guard oldValue != canGoBack else { return }
-            noteSessionPersistenceStateChanged(reason: "historyAvailability.back")
+            noteSessionPersistenceHistoryChangedIfNeeded(reason: "historyAvailability.back")
         }
     }
 
@@ -2178,7 +2178,7 @@ final class BrowserPanel: Panel, ObservableObject {
     @Published private(set) var canGoForward: Bool = false {
         didSet {
             guard oldValue != canGoForward else { return }
-            noteSessionPersistenceStateChanged(reason: "historyAvailability.forward")
+            noteSessionPersistenceHistoryChangedIfNeeded(reason: "historyAvailability.forward")
         }
     }
 
@@ -2188,6 +2188,7 @@ final class BrowserPanel: Panel, ObservableObject {
     private var restoredBackHistoryStack: [URL] = []
     private var restoredForwardHistoryStack: [URL] = []
     private var restoredHistoryCurrentURL: URL?
+    private var lastSessionPersistenceHistorySignature: String?
 
     /// Published estimated progress (0.0 - 1.0)
     @Published private(set) var estimatedProgress: Double = 0.0
@@ -2612,6 +2613,7 @@ final class BrowserPanel: Panel, ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, self.isCurrentWebView(webView, instanceID: boundWebViewInstanceID) else { return }
                 self.realignRestoredSessionHistoryToLiveCurrentIfPossible()
+                self.noteSessionPersistenceHistoryChangedIfNeeded(reason: "history.finish")
                 boundHistoryStore.recordVisit(url: webView.url, title: webView.title)
                 self.refreshFavicon(from: webView)
                 // Keep find-in-page open through load completion and refresh matches for the new DOM.
@@ -3031,7 +3033,7 @@ final class BrowserPanel: Panel, ObservableObject {
             restoredForwardHistoryStack = Array(Self.sanitizedSessionHistoryURLs(newForward).reversed())
             restoredHistoryCurrentURL = liveCurrent
             refreshNavigationAvailability()
-            noteSessionPersistenceStateChanged(reason: "history.realign")
+            noteSessionPersistenceHistoryChangedIfNeeded(reason: "history.realign")
             return
         }
 
@@ -3047,7 +3049,7 @@ final class BrowserPanel: Panel, ObservableObject {
             restoredForwardHistoryStack = Array(Self.sanitizedSessionHistoryURLs(newForward).reversed())
             restoredHistoryCurrentURL = liveCurrent
             refreshNavigationAvailability()
-            noteSessionPersistenceStateChanged(reason: "history.realign")
+            noteSessionPersistenceHistoryChangedIfNeeded(reason: "history.realign")
             return
         }
 
@@ -3060,7 +3062,7 @@ final class BrowserPanel: Panel, ObservableObject {
 #endif
         restoredForwardHistoryStack.removeAll(keepingCapacity: false)
         refreshNavigationAvailability()
-        noteSessionPersistenceStateChanged(reason: "history.realign")
+        noteSessionPersistenceHistoryChangedIfNeeded(reason: "history.realign")
     }
 
     func restoreSessionNavigationHistory(
@@ -3079,7 +3081,7 @@ final class BrowserPanel: Panel, ObservableObject {
         restoredForwardHistoryStack = Array(restoredForward.reversed())
         restoredHistoryCurrentURL = restoredCurrent
         refreshNavigationAvailability()
-        noteSessionPersistenceStateChanged(reason: "history.restore")
+        noteSessionPersistenceHistoryChangedIfNeeded(reason: "history.restore")
     }
 
     func restoreSessionSnapshot(_ snapshot: SessionBrowserPanelSnapshot) {
@@ -5521,7 +5523,7 @@ extension BrowserPanel {
         restoredForwardHistoryStack.removeAll(keepingCapacity: false)
         restoredHistoryCurrentURL = nil
         refreshNavigationAvailability()
-        noteSessionPersistenceStateChanged(reason: "history.abandon")
+        noteSessionPersistenceHistoryChangedIfNeeded(reason: "history.abandon")
     }
 
     private static func serializableSessionHistoryURLString(_ url: URL?) -> String? {
@@ -5656,6 +5658,44 @@ extension BrowserPanel {
 #endif
 
 private extension BrowserPanel {
+    func currentSessionPersistenceHistorySignature() -> String {
+        let nativeBack = webView.backForwardList.backList.compactMap {
+            Self.serializableSessionHistoryURLString($0.url)
+        }
+        let nativeForward = webView.backForwardList.forwardList.compactMap {
+            Self.serializableSessionHistoryURLString($0.url)
+        }
+
+        let backHistory: [String]
+        let forwardHistory: [String]
+        if usesRestoredSessionHistory {
+            let restoredBack = restoredBackHistoryStack.compactMap { Self.serializableSessionHistoryURLString($0) }
+            let restoredForward = restoredForwardHistoryStack.reversed().compactMap {
+                Self.serializableSessionHistoryURLString($0)
+            }
+            if isLiveSessionHistoryAlignedWithRestoredCurrent {
+                backHistory = restoredBack
+                forwardHistory = restoredForward.isEmpty ? nativeForward : restoredForward
+            } else {
+                backHistory = restoredBack + nativeBack
+                forwardHistory = nativeForward
+            }
+        } else {
+            backHistory = nativeBack
+            forwardHistory = nativeForward
+        }
+
+        let currentURLString = Self.serializableSessionHistoryURLString(resolvedCurrentSessionHistoryURL()) ?? ""
+        return "current=\(currentURLString)|back=\(backHistory)|forward=\(forwardHistory)"
+    }
+
+    func noteSessionPersistenceHistoryChangedIfNeeded(reason: String) {
+        let signature = currentSessionPersistenceHistorySignature()
+        guard signature != lastSessionPersistenceHistorySignature else { return }
+        lastSessionPersistenceHistorySignature = signature
+        noteSessionPersistenceStateChanged(reason: reason)
+    }
+
     @discardableResult
     func applyPageZoom(_ candidate: CGFloat) -> Bool {
         let clamped = max(minPageZoom, min(maxPageZoom, candidate))

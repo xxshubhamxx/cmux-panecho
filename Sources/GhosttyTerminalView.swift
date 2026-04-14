@@ -5157,24 +5157,6 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     var cellSize: CGSize = .zero
     private var lastKnownMousePointInView: NSPoint?
 
-    private static func isPinnedToBottom(_ scrollbar: GhosttyScrollbar) -> Bool {
-        let remaining = scrollbar.total > scrollbar.offset ? scrollbar.total - scrollbar.offset : 0
-        return remaining <= scrollbar.len
-    }
-
-    private static func shouldMarkSessionSnapshotDirty(
-        previous: GhosttyScrollbar?,
-        current: GhosttyScrollbar
-    ) -> Bool {
-        guard let previous else { return true }
-        if current.total != previous.total || current.len != previous.len {
-            return true
-        }
-        return isPinnedToBottom(previous)
-            && isPinnedToBottom(current)
-            && current.offset != previous.offset
-    }
-
     /// Coalesce high-frequency scrollbar updates into a single main-thread
     /// dispatch.  The action callback (which may fire thousands of times per
     /// second during bulk output like `seq 1 100000`) stores the latest value
@@ -5203,11 +5185,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         _scrollbarLock.unlock()
 
         guard let pending else { return }
-        let previousScrollbar = scrollbar
         scrollbar = pending
-        if Self.shouldMarkSessionSnapshotDirty(previous: previousScrollbar, current: pending) {
-            AppDelegate.requestSessionSnapshotDirty(reason: "terminal.output")
-        }
         NotificationCenter.default.post(
             name: .ghosttyDidUpdateScrollbar,
             object: self,
