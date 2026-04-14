@@ -8164,6 +8164,15 @@ final class Workspace: Identifiable, ObservableObject {
 
     func configureRemoteConnection(_ configuration: WorkspaceRemoteConfiguration, autoConnect: Bool = true) {
         skipControlMasterCleanupAfterDetachedRemoteTransfer = false
+        let previousRemoteConfiguration = remoteConfiguration
+        // Clear cached sidebar git state when the remote target changes (or
+        // when transitioning local→remote): otherwise local-origin badges
+        // survive even if the new remote is unsupported/offline, and because
+        // session snapshots now include git metadata for remote workspaces
+        // they would get persisted and restored as stale remote state.
+        if previousRemoteConfiguration == nil || previousRemoteConfiguration != configuration {
+            clearCachedSidebarGitMetadata()
+        }
         remoteConfiguration = configuration
         // The watcher-disabled flag only governs the local FS watcher; clear
         // any stale `true` inherited from a prior local-mode session so remote

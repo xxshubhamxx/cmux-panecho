@@ -1049,20 +1049,11 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
             return
         }
 
-        // Disable the watcher while the workspace is still local.
+        // Disable the watcher while the workspace is still local, then promote
+        // to remote. `configureRemoteConnection` is expected to clear any
+        // local-origin git metadata AND reset the disabled flag so remote git
+        // state is not accidentally suppressed going forward.
         workspace.gitMetadataWatcherDisabled = true
-
-        // Seed git state the way the remote daemon would push it down.
-        workspace.updatePanelGitBranch(panelId: panelId, branch: "feature/remote-kept", isDirty: true)
-        workspace.updatePanelPullRequest(
-            panelId: panelId,
-            number: 4242,
-            label: "PR",
-            url: try XCTUnwrap(URL(string: "https://github.com/manaflow-ai/cmux/pull/4242")),
-            status: .open,
-            branch: "feature/remote-kept"
-        )
-
         workspace.configureRemoteConnection(
             WorkspaceRemoteConfiguration(
                 destination: "cmux-macmini",
@@ -1079,13 +1070,25 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
             autoConnect: false
         )
 
-        // After promoting to remote, the stale disabled flag must have been
-        // cleared so subsequent remote git updates are preserved.
         XCTAssertFalse(workspace.gitMetadataWatcherDisabled)
+        XCTAssertTrue(workspace.panelGitBranches.isEmpty)
+        XCTAssertTrue(workspace.panelPullRequests.isEmpty)
 
-        // Flipping the flag again (e.g. if some code re-sets it) on a remote
-        // workspace must NOT purge cached sidebar git metadata, because the
-        // flag only governs the local watcher.
+        // Seed git state the way the remote daemon would push it down after
+        // the promotion completes.
+        workspace.updatePanelGitBranch(panelId: panelId, branch: "feature/remote-kept", isDirty: true)
+        workspace.updatePanelPullRequest(
+            panelId: panelId,
+            number: 4242,
+            label: "PR",
+            url: try XCTUnwrap(URL(string: "https://github.com/manaflow-ai/cmux/pull/4242")),
+            status: .open,
+            branch: "feature/remote-kept"
+        )
+
+        // Flipping the flag on a remote workspace must NOT purge cached
+        // sidebar git metadata, because the flag only governs the local
+        // watcher.
         workspace.gitMetadataWatcherDisabled = true
         XCTAssertEqual(workspace.panelGitBranches[panelId]?.branch, "feature/remote-kept")
         XCTAssertEqual(workspace.panelPullRequests[panelId]?.number, 4242)
