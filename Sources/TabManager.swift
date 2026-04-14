@@ -5383,10 +5383,6 @@ class TabManager: ObservableObject {
         insertAtEnd: Bool = false
     ) -> UUID? {
         guard let workspace = tabs.first(where: { $0.id == tabId }) else { return nil }
-        if selectedTabId != tabId {
-            selectedTabId = tabId
-        }
-
         guard let paneId = workspace.bonsplitController.focusedPaneId ?? workspace.bonsplitController.allPaneIds.first,
               let vncPanel = workspace.newVncSurface(
                 inPane: paneId,
@@ -5396,6 +5392,9 @@ class TabManager: ObservableObject {
                 insertAtEnd: insertAtEnd
               ) else {
             return nil
+        }
+        if selectedTabId != tabId {
+            selectedTabId = tabId
         }
         rememberFocusedSurface(tabId: tabId, surfaceId: vncPanel.id)
         return vncPanel.id

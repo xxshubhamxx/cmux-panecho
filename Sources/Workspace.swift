@@ -9271,9 +9271,11 @@ final class Workspace: Identifiable, ObservableObject {
 
         guard let paneId = sourcePaneId else { return nil }
 
-        let vncPanel = VncPanel(workspaceId: id, endpoint: endpoint)
-        if let username {
-            vncPanel.usernameInput = username
+        let trimmedEndpoint = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedUsername = username?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let vncPanel = VncPanel(workspaceId: id, endpoint: trimmedEndpoint)
+        if let trimmedUsername, !trimmedUsername.isEmpty {
+            vncPanel.usernameInput = trimmedUsername
         }
         if let password {
             vncPanel.passwordInput = password
@@ -9341,9 +9343,11 @@ final class Workspace: Identifiable, ObservableObject {
         let previousFocusedPanelId = focusedPanelId
         let previousHostedView = focusedTerminalPanel?.hostedView
 
-        let vncPanel = VncPanel(workspaceId: id, endpoint: endpoint)
-        if let username {
-            vncPanel.usernameInput = username
+        let trimmedEndpoint = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedUsername = username?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let vncPanel = VncPanel(workspaceId: id, endpoint: trimmedEndpoint)
+        if let trimmedUsername, !trimmedUsername.isEmpty {
+            vncPanel.usernameInput = trimmedUsername
         }
         if let password {
             vncPanel.passwordInput = password

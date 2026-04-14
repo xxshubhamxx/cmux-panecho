@@ -338,22 +338,49 @@ final class MarkdownPanelPointerObserverView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onPointerDown?()
-        forwardedMouseTarget = forwardedTarget(for: event)
-        forwardedMouseTarget?.mouseDown(with: event)
+        forwardMouseDown(event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        forwardMouseDown(event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        forwardMouseDown(event)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        forwardedMouseTarget?.mouseDragged(with: event)
+        forwardMouseDragged(event)
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        forwardMouseDragged(event)
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        forwardMouseDragged(event)
     }
 
     override func mouseUp(with event: NSEvent) {
-        forwardedMouseTarget?.mouseUp(with: event)
-        forwardedMouseTarget = nil
+        forwardMouseUp(event)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        forwardMouseUp(event)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        forwardMouseUp(event)
     }
 
     func shouldHandle(_ event: NSEvent) -> Bool {
-        guard event.type == .leftMouseDown,
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            break
+        default:
+            return false
+        }
+        guard
               let window,
               event.window === window,
               !isHiddenOrHasHiddenAncestor else { return false }
@@ -374,8 +401,50 @@ final class MarkdownPanelPointerObserverView: NSView {
 
     private func installEventMonitorIfNeeded() {
         guard eventMonitor == nil else { return }
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             self?.handleEventIfNeeded(event) ?? event
+        }
+    }
+
+    private func forwardMouseDown(_ event: NSEvent) {
+        onPointerDown?()
+        forwardedMouseTarget = forwardedTarget(for: event)
+        switch event.type {
+        case .leftMouseDown:
+            forwardedMouseTarget?.mouseDown(with: event)
+        case .rightMouseDown:
+            forwardedMouseTarget?.rightMouseDown(with: event)
+        case .otherMouseDown:
+            forwardedMouseTarget?.otherMouseDown(with: event)
+        default:
+            break
+        }
+    }
+
+    private func forwardMouseDragged(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDragged:
+            forwardedMouseTarget?.mouseDragged(with: event)
+        case .rightMouseDragged:
+            forwardedMouseTarget?.rightMouseDragged(with: event)
+        case .otherMouseDragged:
+            forwardedMouseTarget?.otherMouseDragged(with: event)
+        default:
+            break
+        }
+    }
+
+    private func forwardMouseUp(_ event: NSEvent) {
+        defer { forwardedMouseTarget = nil }
+        switch event.type {
+        case .leftMouseUp:
+            forwardedMouseTarget?.mouseUp(with: event)
+        case .rightMouseUp:
+            forwardedMouseTarget?.rightMouseUp(with: event)
+        case .otherMouseUp:
+            forwardedMouseTarget?.otherMouseUp(with: event)
+        default:
+            break
         }
     }
 
@@ -450,6 +519,14 @@ struct VncPanelView: View {
 
     private var hasHostSuggestions: Bool {
         !panel.recentTargets.isEmpty || !panel.discoveredTargets.isEmpty
+    }
+
+    private func discoveredTargetTitle(_ target: VncDiscoveredTarget) -> String {
+        let format = String(
+            localized: "vnc.panel.targets.discoveredEntry",
+            defaultValue: "%1$@ (%2$@)"
+        )
+        return String(format: format, locale: Locale.current, target.name, target.endpoint)
     }
 
     private var statusText: String {
@@ -604,7 +681,7 @@ struct VncPanelView: View {
                     if !panel.discoveredTargets.isEmpty {
                         Section(String(localized: "vnc.panel.targets.discovered", defaultValue: "Discovered")) {
                             ForEach(panel.discoveredTargets) { target in
-                                Button("\(target.name) (\(target.endpoint))") {
+                                Button(discoveredTargetTitle(target)) {
                                     panel.chooseEndpointSuggestion(target.endpoint)
                                 }
                             }
@@ -703,6 +780,7 @@ struct VncPanelView: View {
             return
         }
         if panel.isAwaitingCredentials {
+            guard !isConnectButtonDisabled else { return }
             panel.submitCredentials()
             return
         }
@@ -710,6 +788,7 @@ struct VncPanelView: View {
             panel.disconnect()
             return
         }
+        guard !isConnectButtonDisabled else { return }
         panel.connect()
     }
 

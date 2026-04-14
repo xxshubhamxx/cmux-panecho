@@ -1370,6 +1370,7 @@ final class VncPanel: Panel, ObservableObject {
     }
 
     private static let scriptMessageHandlerName = "cmuxVncPanelState"
+    private static let fakeNativeUITestEnvKey = "CMUX_UI_TEST_VNC_FAKE_NATIVE"
 
     let id: UUID
     let panelType: PanelType = .vnc
@@ -1498,7 +1499,8 @@ final class VncPanel: Panel, ObservableObject {
     }
 
     var inputLastTextForAutomation: String? {
-        inputTelemetry.lastText.isEmpty ? nil : inputTelemetry.lastText
+        guard Self.shouldExposeRawInputTextForAutomation else { return nil }
+        return inputTelemetry.lastText.isEmpty ? nil : inputTelemetry.lastText
     }
 
     var activationWindow: NSWindow? {
@@ -1518,6 +1520,10 @@ final class VncPanel: Panel, ObservableObject {
     private var nativeSessionController: VncNativeSessionController?
     private var inputTelemetry = InputTelemetry()
     private var connectAttemptID = UUID()
+
+    private static var shouldExposeRawInputTextForAutomation: Bool {
+        ProcessInfo.processInfo.environment[fakeNativeUITestEnvKey] == "1"
+    }
 
     init(
         workspaceId: UUID,
@@ -1990,7 +1996,7 @@ final class VncPanel: Panel, ObservableObject {
             }
         case .text(let text):
             inputTelemetry.textInputCount += 1
-            if !text.isEmpty {
+            if Self.shouldExposeRawInputTextForAutomation, !text.isEmpty {
                 inputTelemetry.lastText = text
             }
         case .mouseDown:

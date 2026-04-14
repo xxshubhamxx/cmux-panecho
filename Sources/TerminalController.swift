@@ -6144,18 +6144,38 @@ class TerminalController {
 
         var result: V2CallResult = .err(code: "internal_error", message: "Failed to read VNC state", data: nil)
         v2MainSync {
-            guard let ws = v2ResolveWorkspace(params: params, tabManager: tabManager) else {
+            guard let initialWorkspace = v2ResolveWorkspace(params: params, tabManager: tabManager) else {
                 result = .err(code: "not_found", message: "Workspace not found", data: nil)
                 return
             }
 
-            let surfaceId = v2UUID(params, "surface_id") ?? ws.focusedPanelId
-            guard let surfaceId else {
-                result = .err(code: "not_found", message: "No focused surface", data: nil)
-                return
+            var resolvedTabManager = tabManager
+            var resolvedWorkspace = initialWorkspace
+            let surfaceId: UUID
+            if params.keys.contains("surface_id") {
+                guard let requestedSurfaceId = v2UUID(params, "surface_id") else {
+                    result = .err(code: "invalid_params", message: "Invalid surface_id", data: nil)
+                    return
+                }
+                surfaceId = requestedSurfaceId
+                if resolvedWorkspace.panels[surfaceId] == nil {
+                    guard let located = AppDelegate.shared?.locateSurface(surfaceId: surfaceId),
+                          let locatedWorkspace = located.tabManager.tabs.first(where: { $0.id == located.workspaceId }) else {
+                        result = .err(code: "not_found", message: "Surface not found", data: ["surface_id": surfaceId.uuidString])
+                        return
+                    }
+                    resolvedTabManager = located.tabManager
+                    resolvedWorkspace = locatedWorkspace
+                }
+            } else {
+                guard let focusedSurfaceId = resolvedWorkspace.focusedPanelId else {
+                    result = .err(code: "not_found", message: "No focused surface", data: nil)
+                    return
+                }
+                surfaceId = focusedSurfaceId
             }
 
-            guard let vncPanel = ws.panels[surfaceId] as? VncPanel else {
+            guard let vncPanel = resolvedWorkspace.panels[surfaceId] as? VncPanel else {
                 result = .err(
                     code: "invalid_type",
                     message: "Surface is not a VNC panel",
@@ -6165,10 +6185,10 @@ class TerminalController {
             }
 
             result = .ok([
-                "window_id": v2OrNull(v2ResolveWindowId(tabManager: tabManager)?.uuidString),
-                "window_ref": v2Ref(kind: .window, uuid: v2ResolveWindowId(tabManager: tabManager)),
-                "workspace_id": ws.id.uuidString,
-                "workspace_ref": v2Ref(kind: .workspace, uuid: ws.id),
+                "window_id": v2OrNull(v2ResolveWindowId(tabManager: resolvedTabManager)?.uuidString),
+                "window_ref": v2Ref(kind: .window, uuid: v2ResolveWindowId(tabManager: resolvedTabManager)),
+                "workspace_id": resolvedWorkspace.id.uuidString,
+                "workspace_ref": v2Ref(kind: .workspace, uuid: resolvedWorkspace.id),
                 "surface_id": surfaceId.uuidString,
                 "surface_ref": v2Ref(kind: .surface, uuid: surfaceId),
                 "endpoint": v2OrNull(vncPanel.endpointForAutomation),
