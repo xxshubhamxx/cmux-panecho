@@ -524,6 +524,16 @@ final class SessionPersistenceTests: XCTestCase {
         )
     }
 
+    func testSessionAutosaveScheduleKeepsWhenDeadlinesAreEqual() {
+        XCTAssertTrue(
+            AppDelegate.shouldKeepExistingSessionAutosaveSchedule(
+                allowDelayExtension: false,
+                existingDeadlineUptime: 200,
+                targetDeadlineUptime: 200
+            )
+        )
+    }
+
     func testResolvedWindowFramePrefersSavedDisplayIdentity() {
         let savedFrame = SessionRectSnapshot(x: 1_200, y: 100, width: 600, height: 400)
         let savedDisplay = SessionDisplaySnapshot(

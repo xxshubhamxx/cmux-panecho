@@ -2219,13 +2219,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     nonisolated static func requestSessionSnapshotDirty(reason: String) {
-        if Thread.isMainThread {
-            MainActor.assumeIsolated {
-                AppDelegate.shared?.markSessionSnapshotDirty(reason: reason)
-            }
-            return
-        }
-
         Task { @MainActor in
             AppDelegate.shared?.markSessionSnapshotDirty(reason: reason)
         }
@@ -2450,6 +2443,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var sessionAutosaveTimer: DispatchSourceTimer?
     private var sessionAutosaveTickInFlight = false
     private var sessionSnapshotIsDirty = false
+    private var sessionSnapshotDirtyGeneration: UInt64 = 0
+    private var sessionSnapshotPendingWriteCount = 0
     private var sessionAutosaveScheduledDeadlineUptime: TimeInterval?
     private let sessionPersistenceQueue = DispatchQueue(
         label: "com.cmuxterm.app.sessionPersistence",
@@ -4358,6 +4353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func markSessionSnapshotDirty(reason: String) {
         guard !isApplyingStartupSessionRestore else { return }
+        sessionSnapshotDirtyGeneration &+= 1
         sessionSnapshotIsDirty = true
         guard Self.shouldRunSessionAutosaveTick(isTerminatingApp: isTerminatingApp) else { return }
         scheduleSessionAutosave(
@@ -4501,6 +4497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             isTerminatingApp: isTerminatingApp,
             includeScrollback: includeScrollback
         )
+        let startedDirtyGeneration = sessionSnapshotDirtyGeneration
 #if DEBUG
         let timingStart = CmuxTypingTiming.start()
         defer {
@@ -4513,14 +4510,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #endif
 
         guard let snapshot = buildSessionSnapshot(includeScrollback: includeScrollback) else {
+            if !writeSynchronously {
+                sessionSnapshotPendingWriteCount += 1
+            }
             persistSessionSnapshot(
                 nil,
                 removeWhenEmpty: removeWhenEmpty,
                 persistedGeometryData: nil,
                 synchronously: writeSynchronously
+            ) { [weak self] in
+                self?.completeSessionSnapshotPersistence(
+                    startedDirtyGeneration: startedDirtyGeneration,
+                    wroteAsynchronously: !writeSynchronously,
+                    source: "empty"
+                )
             )
-            sessionSnapshotIsDirty = false
-            sessionAutosaveScheduledDeadlineUptime = nil
             return false
         }
 
@@ -4534,14 +4538,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #if DEBUG
         debugLogSessionSaveSnapshot(snapshot, includeScrollback: includeScrollback)
 #endif
+        if !writeSynchronously {
+            sessionSnapshotPendingWriteCount += 1
+        }
         persistSessionSnapshot(
             snapshot,
             removeWhenEmpty: false,
             persistedGeometryData: persistedGeometryData,
             synchronously: writeSynchronously
+        ) { [weak self] in
+            self?.completeSessionSnapshotPersistence(
+                startedDirtyGeneration: startedDirtyGeneration,
+                wroteAsynchronously: !writeSynchronously,
+                source: includeScrollback ? "snapshot.scrollback" : "snapshot"
+            )
         )
-        sessionSnapshotIsDirty = false
-        sessionAutosaveScheduledDeadlineUptime = nil
         return true
     }
 
@@ -4594,6 +4605,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         guard !sessionAutosaveTickInFlight else {
             scheduleSessionAutosave(after: 1, source: "inFlightRetry")
+            return
+        }
+        guard sessionSnapshotPendingWriteCount == 0 else {
+            scheduleSessionAutosave(after: 1, source: "pendingWriteRetry")
             return
         }
         if let remainingQuietPeriod = remainingSessionAutosaveTypingQuietPeriod() {
@@ -4658,9 +4673,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         _ snapshot: AppSessionSnapshot?,
         removeWhenEmpty: Bool,
         persistedGeometryData: Data?,
-        synchronously: Bool
+        synchronously: Bool,
+        completion: (() -> Void)? = nil
     ) {
-        guard snapshot != nil || removeWhenEmpty || persistedGeometryData != nil else { return }
+        guard snapshot != nil || removeWhenEmpty || persistedGeometryData != nil else {
+            completion?()
+            return
+        }
 
         let writeBlock = {
             Self.removeLegacyPersistedWindowGeometry()
@@ -4679,8 +4698,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         if synchronously {
             writeBlock()
+            completion?()
         } else {
-            sessionPersistenceQueue.async(execute: writeBlock)
+            sessionPersistenceQueue.async {
+                writeBlock()
+                if let completion {
+                    Task { @MainActor in
+                        completion()
+                    }
+                }
+            }
+        }
+    }
+
+    private func completeSessionSnapshotPersistence(
+        startedDirtyGeneration: UInt64,
+        wroteAsynchronously: Bool,
+        source: String
+    ) {
+        if wroteAsynchronously {
+            sessionSnapshotPendingWriteCount = max(0, sessionSnapshotPendingWriteCount - 1)
+        }
+        sessionAutosaveScheduledDeadlineUptime = nil
+
+        let dirtiedDuringWrite = sessionSnapshotDirtyGeneration != startedDirtyGeneration
+#if DEBUG
+        dlog(
+            "session.save.completed source=\(source) async=\(wroteAsynchronously ? 1 : 0) " +
+                "dirtyDuringWrite=\(dirtiedDuringWrite ? 1 : 0) pendingWrites=\(sessionSnapshotPendingWriteCount)"
+        )
+#endif
+        if dirtiedDuringWrite {
+            sessionSnapshotIsDirty = true
+            guard sessionSnapshotPendingWriteCount == 0,
+                  Self.shouldRunSessionAutosaveTick(isTerminatingApp: isTerminatingApp) else {
+                return
+            }
+            scheduleSessionAutosave(
+                after: 0,
+                source: "persistenceCompletionRetry",
+                allowDelayExtension: false
+            )
+            return
+        }
+
+        if sessionSnapshotPendingWriteCount == 0 {
+            sessionSnapshotIsDirty = false
         }
     }
 
@@ -4786,9 +4849,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                guard let self else { return }
-                MainActor.assumeIsolated {
-                    self.markSessionSnapshotDirty(reason: reason)
+                Task { @MainActor [weak self] in
+                    self?.markSessionSnapshotDirty(reason: reason)
                 }
             }
             context.sessionSnapshotWindowObservers.append(observer)
