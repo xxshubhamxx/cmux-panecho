@@ -13,6 +13,22 @@ import {
 } from "./bridge";
 import { applyCmuxPalette, registerCmuxThemes } from "./theme";
 
+// Forward console.log into the Swift tagged debug log. Gives us a single place
+// (cmux-debug-<tag>.log) to read timings that happen inside the WKWebView
+// without needing to open the webview inspector.
+const originalConsoleLog = console.log.bind(console);
+console.log = (...args: unknown[]): void => {
+  originalConsoleLog(...args);
+  try {
+    const msg = args
+      .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+      .join(" ");
+    postToSwift({ type: "debugLog", msg });
+  } catch {
+    /* noop */
+  }
+};
+
 // Route Monaco worker requests to the bundled workers.
 self.MonacoEnvironment = {
   getWorker(_moduleId: unknown, label: string) {

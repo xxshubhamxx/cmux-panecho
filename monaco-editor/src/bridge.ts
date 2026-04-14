@@ -18,7 +18,8 @@ export type InboundMessage =
       cursor: { offset: number; length: number };
       scrollTopFraction: number;
       monacoViewState: string; // JSON-encoded ICodeEditorViewState
-    };
+    }
+  | { type: "debugLog"; msg: string };
 
 export type OutboundCommand =
   | {

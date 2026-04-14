@@ -231,6 +231,12 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
             }
         case "viewState":
             handleViewState(payload: dict)
+        case "debugLog":
+            #if DEBUG
+            if let msg = dict["msg"] as? String {
+                dlog("monaco.js \(msg)")
+            }
+            #endif
         default:
             break
         }
