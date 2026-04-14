@@ -52,14 +52,12 @@ final class EditorPanel: Panel, ObservableObject {
     var backendAfterSave: (() async -> Void)?
 
     /// Optional hook the backend view registers so `focus()` can restore
-    /// first-responder for web-based backends (Monaco's WKWebView). The
-    /// native NSTextView backend uses the `textView` reference below; Monaco
-    /// wires this closure to `makeFirstResponder` on its WKWebView and sends
-    /// a JS `focus` command. Without this, workspace focus reconciliation
-    /// paths that call `panel.focus()` without an `isFocused` transition
-    /// would leave Monaco tabs without keyboard input until the user
-    /// clicked them.
-    var backendFocus: (() -> Void)?
+    /// first-responder for web-based backends (Monaco's WKWebView). Returns
+    /// `true` when the backend was alive and actually delivered focus,
+    /// `false` when its captured coordinator has gone away (backend swap,
+    /// tab detach) — the caller then falls back to the native `textView`
+    /// path instead of silently no-op-ing.
+    var backendFocus: (() -> Bool)?
 
     /// Last known cursor/selection state. Persisted via session snapshot and
     /// restored into the text view when it is created.
@@ -116,9 +114,11 @@ final class EditorPanel: Panel, ObservableObject {
 
     func focus() {
         // Monaco registers a hook that routes through its WKWebView; when
-        // set, prefer it so web-backed tabs get keyboard focus too.
-        if let backendFocus {
-            backendFocus()
+        // set AND reachable, prefer it. If the closure reports back false
+        // (its captured coordinator has been deallocated, e.g. after a
+        // backend swap), fall through to the native NSTextView path so
+        // the tab still gets keyboard focus.
+        if let backendFocus, backendFocus() {
             return
         }
         guard let textView else { return }
