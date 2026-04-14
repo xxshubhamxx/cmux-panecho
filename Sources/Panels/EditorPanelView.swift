@@ -346,7 +346,13 @@ private final class EditorNSTextView: NSTextView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if KeyboardShortcutSettings.shortcut(for: .saveEditorFile).matches(event: event) {
-            editorPanel?.save()
+            guard let panel = editorPanel else { return true }
+            // `save()` only surfaces failures through its return value; swallowing
+            // it would let users believe a read-only/permission-denied/disk-full
+            // write succeeded. Show the same alert the close-dialog path uses.
+            if panel.isDirty, !panel.save() {
+                EditorSaveAlert.show(for: panel)
+            }
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -355,5 +361,32 @@ private final class EditorNSTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         onRequestPanelFocus?()
         super.mouseDown(with: event)
+    }
+}
+
+// MARK: - Save-failure alert
+
+/// Visually matches `Workspace.showEditorSaveFailureAlert(for:)` so both the
+/// close-time dialog and the Cmd+S shortcut surface save failures identically.
+enum EditorSaveAlert {
+    @MainActor
+    static func show(for editorPanel: EditorPanel) {
+        let alert = NSAlert()
+        let filename = (editorPanel.filePath as NSString).lastPathComponent
+        alert.messageText = String(
+            localized: "editor.saveFailed.title",
+            defaultValue: "Could not save \"\(filename)\""
+        )
+        alert.informativeText = String(
+            localized: "editor.saveFailed.message",
+            defaultValue: "The file may be read-only or the disk may be full. Your changes remain in the editor."
+        )
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: String(localized: "editor.saveFailed.ok", defaultValue: "OK"))
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window, completionHandler: nil)
+        } else {
+            alert.runModal()
+        }
     }
 }

@@ -199,7 +199,9 @@ final class MonacoEditorCoordinator: NSObject, WKScriptMessageHandler, WKNavigat
         case "changed":
             handleChanged(payload: dict)
         case "saveRequested":
-            panel.save()
+            if panel.isDirty, !panel.save() {
+                EditorSaveAlert.show(for: panel)
+            }
         case "viewState":
             handleViewState(payload: dict)
         default:
