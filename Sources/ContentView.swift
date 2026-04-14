@@ -10113,6 +10113,7 @@ struct VerticalTabsSidebar: View {
     @State private var draggedTabId: UUID?
     @State private var dropIndicator: SidebarDropIndicator?
     @State private var frozenTabItemPresentation: SidebarTabItemPresentationSnapshot?
+    @State private var terminalScrollBarVisibilityGeneration: UInt64 = 0
     @AppStorage(WorkspacePresentationModeSettings.modeKey)
     private var workspacePresentationMode = WorkspacePresentationModeSettings.defaultMode.rawValue
 
@@ -10135,6 +10136,7 @@ struct VerticalTabsSidebar: View {
     }
 
     var body: some View {
+        let _ = terminalScrollBarVisibilityGeneration
         let tabs = tabManager.tabs
         let workspaceCount = tabs.count
         let canCloseWorkspace = workspaceCount > 1
@@ -10147,6 +10149,9 @@ struct VerticalTabsSidebar: View {
         let selectedContextTargetIds = orderedSelectedTabs.map(\.id)
         let selectedRemoteContextMenuTargets = orderedSelectedTabs.filter { $0.isRemoteWorkspace }
         let selectedRemoteContextMenuWorkspaceIds = selectedRemoteContextMenuTargets.map(\.id)
+        let workspaceTerminalScrollBarHiddenById = Dictionary(
+            uniqueKeysWithValues: tabs.map { ($0.id, $0.terminalScrollBarHidden) }
+        )
         let allSelectedRemoteContextMenuTargetsConnecting = !selectedRemoteContextMenuTargets.isEmpty &&
             selectedRemoteContextMenuTargets.allSatisfy { $0.remoteConnectionState == .connecting }
         let allSelectedRemoteContextMenuTargetsDisconnected = !selectedRemoteContextMenuTargets.isEmpty &&
@@ -10178,6 +10183,10 @@ struct VerticalTabsSidebar: View {
                                 let allRemoteContextMenuTargetsDisconnected = usesSelectedContextMenuTargets
                                     ? allSelectedRemoteContextMenuTargetsDisconnected
                                     : (tab.isRemoteWorkspace && tab.remoteConnectionState == .disconnected)
+                                let allContextMenuWorkspacesHideTerminalScrollBar = !contextMenuWorkspaceIds.isEmpty &&
+                                    contextMenuWorkspaceIds.allSatisfy { workspaceId in
+                                        workspaceTerminalScrollBarHiddenById[workspaceId] == true
+                                    }
                                 let liveUnreadCount = notificationStore.unreadCount(forTabId: tab.id)
                                 let liveLatestNotificationText: String? = {
                                     guard showsSidebarNotificationMessage,
@@ -10225,6 +10234,7 @@ struct VerticalTabsSidebar: View {
                                     remoteContextMenuWorkspaceIds: remoteContextMenuWorkspaceIds,
                                     allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
                                     allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
+                                    allContextMenuWorkspacesHideTerminalScrollBar: allContextMenuWorkspacesHideTerminalScrollBar,
                                     settings: tabItemSettings,
                                     livePresentation: livePresentation,
                                     frozenPresentation: $frozenTabItemPresentation
@@ -10340,6 +10350,19 @@ struct VerticalTabsSidebar: View {
             dlog("sidebar.dragClear tab=\(debugShortSidebarTabId(draggedTabId)) reason=\(reason)")
 #endif
             draggedTabId = nil
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: Workspace.terminalScrollBarHiddenDidChangeNotification)
+                .receive(on: RunLoop.main)
+        ) { notification in
+            guard let workspace = notification.object as? Workspace,
+                  tabManager.tabs.contains(where: { $0 === workspace }) else {
+                return
+            }
+
+            // Workspace scrollbar visibility changes do not publish on TabManager.tabs,
+            // so bump a local generation to refresh the precomputed context-menu state.
+            terminalScrollBarVisibilityGeneration &+= 1
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -12624,6 +12647,7 @@ private struct TabItemView: View, Equatable {
         lhs.remoteContextMenuWorkspaceIds == rhs.remoteContextMenuWorkspaceIds &&
         lhs.allRemoteContextMenuTargetsConnecting == rhs.allRemoteContextMenuTargetsConnecting &&
         lhs.allRemoteContextMenuTargetsDisconnected == rhs.allRemoteContextMenuTargetsDisconnected &&
+        lhs.allContextMenuWorkspacesHideTerminalScrollBar == rhs.allContextMenuWorkspacesHideTerminalScrollBar &&
         lhs.settings == rhs.settings
     }
 
@@ -12654,6 +12678,7 @@ private struct TabItemView: View, Equatable {
     let remoteContextMenuWorkspaceIds: [UUID]
     let allRemoteContextMenuTargetsConnecting: Bool
     let allRemoteContextMenuTargetsDisconnected: Bool
+    let allContextMenuWorkspacesHideTerminalScrollBar: Bool
     let settings: SidebarTabItemSettingsSnapshot
     let livePresentation: SidebarTabItemPresentationSnapshot
     @Binding var frozenPresentation: SidebarTabItemPresentationSnapshot?
@@ -13458,6 +13483,20 @@ private struct TabItemView: View, Equatable {
             .disabled(allRemoteContextMenuTargetsDisconnected)
         }
 
+        Menu(String(localized: "contextMenu.workspaceSettings", defaultValue: "Workspace Settings")) {
+            Button {
+                toggleWorkspaceTerminalScrollBarHidden(targetIds: targetIds)
+            } label: {
+                Label {
+                    Text(String(localized: "contextMenu.workspaceSettings.hideTerminalScrollBar", defaultValue: "Hide Terminal Scroll Bar"))
+                } icon: {
+                    if allContextMenuWorkspacesHideTerminalScrollBar {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+        }
+
         Menu(String(localized: "contextMenu.workspaceColor", defaultValue: "Workspace Color")) {
             if tab.customColor != nil {
                 Button {
@@ -14158,6 +14197,16 @@ private struct TabItemView: View, Equatable {
     private func applyTabColor(_ hex: String?, targetIds: [UUID]) {
         for targetId in targetIds {
             tabManager.setTabColor(tabId: targetId, color: hex)
+        }
+    }
+
+    private func toggleWorkspaceTerminalScrollBarHidden(targetIds: [UUID]) {
+        let currentlyHidden = !targetIds.isEmpty && targetIds.allSatisfy { targetId in
+            tabManager.tabs.first(where: { $0.id == targetId })?.terminalScrollBarHidden == true
+        }
+        let hideScrollBar = !currentlyHidden
+        for targetId in targetIds {
+            tabManager.setWorkspaceTerminalScrollBarHidden(tabId: targetId, hidden: hideScrollBar)
         }
     }
 
