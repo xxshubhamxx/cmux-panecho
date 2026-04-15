@@ -44,11 +44,25 @@
         "ja" : { "stringUnit" : { "state" : "translated", "value" : "サーバーを編集" } }
       }
     },
+    "terminal.home.empty_action.start_on_server" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Start on %@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "%@ で開始" } }
+      }
+    },
     "terminal.home.empty_description" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Start a workspace from the pinned servers above." } },
         "ja" : { "stringUnit" : { "state" : "translated", "value" : "上の固定サーバーからワークスペースを開始してください。" } }
+      }
+    },
+    "terminal.home.empty_description_with_server" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Tap below to start a workspace on %@." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "下のボタンで %@ にワークスペースを作成します。" } }
       }
     },
     "terminal.home.empty_title" : {

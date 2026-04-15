@@ -4573,8 +4573,28 @@ final class TerminalSurface: Identifiable, ObservableObject {
     private func reapplyEffectiveGridPinIfNeeded() {
         guard let surface else { return }
         guard let pin = effectiveGridPin,
-              pin.cols > 0, pin.rows > 0,
-              cachedCellPixelSize.width > 0, cachedCellPixelSize.height > 0 else {
+              pin.cols > 0, pin.rows > 0 else {
+            attachedView?.letterboxRect = nil
+            return
+        }
+        // Refresh cell metrics on demand. `updateSize` only refreshes
+        // `cachedCellPixelSize` when the natural pixel box changes, so a
+        // pin that arrives while the view bounds are stable would
+        // otherwise see a stale .zero cache and skip — leaving no
+        // border. Querying ghostty_surface_size here is cheap (returns
+        // current state, no resize) and gives us valid metrics whenever
+        // the C surface is up.
+        if cachedCellPixelSize.width <= 0 || cachedCellPixelSize.height <= 0 {
+            let natural = ghostty_surface_size(surface)
+            if natural.columns > 0, natural.rows > 0,
+               natural.width_px > 0, natural.height_px > 0 {
+                cachedCellPixelSize = CGSize(
+                    width: CGFloat(natural.width_px) / CGFloat(natural.columns),
+                    height: CGFloat(natural.height_px) / CGFloat(natural.rows)
+                )
+            }
+        }
+        guard cachedCellPixelSize.width > 0, cachedCellPixelSize.height > 0 else {
             attachedView?.letterboxRect = nil
             return
         }

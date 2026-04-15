@@ -195,12 +195,36 @@ struct TerminalSidebarRootView: View {
 
                 Section {
                     if filteredWorkspaces.isEmpty {
-                        ContentUnavailableView(
-                            TerminalHomeStrings.emptyTitle,
-                            systemImage: "terminal",
-                            description: Text(TerminalHomeStrings.emptyDescription)
-                        )
-                        .listRowSeparator(.hidden)
+                        let configuredHosts = store.hosts.filter { store.isConfigured($0) }
+                        if let firstHost = configuredHosts.first {
+                            ContentUnavailableView {
+                                Label(TerminalHomeStrings.emptyTitle, systemImage: "terminal")
+                            } description: {
+                                Text(TerminalHomeStrings.emptyWithServersDescription(serverName: firstHost.name))
+                            } actions: {
+                                Button {
+                                    let workspaceID = store.startWorkspace(on: firstHost)
+                                    navigationPath.append(workspaceID)
+                                } label: {
+                                    Label(
+                                        TerminalHomeStrings.startWorkspaceOn(serverName: firstHost.name),
+                                        systemImage: "play.fill"
+                                    )
+                                    .labelStyle(.titleAndIcon)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.large)
+                                .accessibilityIdentifier("terminal.empty.start_workspace.\(firstHost.accessibilityIdentifierSlug)")
+                            }
+                            .listRowSeparator(.hidden)
+                        } else {
+                            ContentUnavailableView(
+                                TerminalHomeStrings.emptyTitle,
+                                systemImage: "terminal",
+                                description: Text(TerminalHomeStrings.emptyDescription)
+                            )
+                            .listRowSeparator(.hidden)
+                        }
                     } else {
                         ForEach(filteredWorkspaces) { workspace in
                             if let host = store.server(for: workspace.hostID) {
@@ -484,6 +508,32 @@ private enum TerminalHomeStrings {
     static let workspacesHeader = String(localized: "terminal.home.workspaces_header", defaultValue: "Recent")
     static let emptyTitle = String(localized: "terminal.home.empty_title", defaultValue: "No Workspaces")
     static let emptyDescription = String(localized: "terminal.home.empty_description", defaultValue: "Start a workspace from the pinned servers above.")
+
+    /// Empty-state copy when at least one configured server is pinned. Names
+    /// the server inline so the call to action is explicit ("the button below
+    /// will spin up a workspace on this server").
+    static func emptyWithServersDescription(serverName: String) -> String {
+        String(
+            format: String(
+                localized: "terminal.home.empty_description_with_server",
+                defaultValue: "Tap below to start a workspace on %@."
+            ),
+            serverName
+        )
+    }
+
+    /// Action button label for the empty state when at least one server is
+    /// pinned. Names the server so users know which one will be used when
+    /// multiple are available (we pick the first configured one).
+    static func startWorkspaceOn(serverName: String) -> String {
+        String(
+            format: String(
+                localized: "terminal.home.empty_action.start_on_server",
+                defaultValue: "Start on %@"
+            ),
+            serverName
+        )
+    }
     static let markReadAction = String(localized: "terminal.home.action.mark_read", defaultValue: "Read")
     static let markUnreadAction = String(localized: "terminal.home.action.mark_unread", defaultValue: "Unread")
     static let deleteAction = String(localized: "terminal.home.action.delete", defaultValue: "Delete")
