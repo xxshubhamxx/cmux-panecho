@@ -33,8 +33,10 @@ if ! /usr/bin/security find-identity -v -p codesigning | grep -q "$IDENTITY"; th
   exit 1
 fi
 
-PROFILE_APP_ID="$(/usr/bin/security cms -D -i "$PROFILE" 2>/dev/null \
-  | /usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.application-identifier" /dev/stdin)"
+TMP_PLIST="$(mktemp -t cmux-profile.XXXXXX.plist)"
+trap 'rm -f "$TMP_PLIST"' EXIT
+/usr/bin/security cms -D -i "$PROFILE" > "$TMP_PLIST"
+PROFILE_APP_ID="$(/usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.application-identifier" "$TMP_PLIST")"
 if [[ "$PROFILE_APP_ID" != "7WLXT3NR37.com.cmuxterm.app.nightly" ]]; then
   echo "error: profile targets unexpected app id: $PROFILE_APP_ID" >&2
   exit 1
@@ -53,7 +55,7 @@ xcodebuild -scheme cmux -configuration Release -derivedDataPath "$BUILD_DIR" \
 
 APP_DIR="$BUILD_DIR/Build/Products/Release"
 SRC_APP="$APP_DIR/cmux.app"
-DEST_APP="$APP_DIR/cmux NIGHTLY.app"
+DEST_APP="$APP_DIR/cmux NIGHTLY local.app"
 
 if [[ ! -d "$SRC_APP" ]]; then
   echo "error: cmux.app not found at $SRC_APP" >&2
@@ -64,8 +66,8 @@ rm -rf "$DEST_APP"
 
 echo "==> Rewriting Info.plist for nightly bundle"
 PL="$SRC_APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleName cmux NIGHTLY" "$PL"
-/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName cmux NIGHTLY" "$PL"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName cmux NIGHTLY local" "$PL"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName cmux NIGHTLY local" "$PL"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.cmuxterm.app.nightly" "$PL"
 /usr/libexec/PlistBuddy -c "Delete :SUPublicEDKey" "$PL" >/dev/null 2>&1 || true
 /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$PL" >/dev/null 2>&1 || true
