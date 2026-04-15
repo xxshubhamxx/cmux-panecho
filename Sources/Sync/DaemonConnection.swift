@@ -171,6 +171,14 @@ final class DaemonConnection: @unchecked Sendable {
 
     // MARK: - Compatibility statics (drop-in replacements for DaemonTerminalBridge)
 
+    /// Deterministic fallback session id used by the mac's synchronous
+    /// surface creation path. Prefer `openPane(workspaceID:command:cols:rows:)`
+    /// on any new call site — that gets a daemon-minted id that both
+    /// mac and iOS discover via `workspace.list`. This function is the
+    /// only remaining mac-side session_id minter; deleting it requires
+    /// making surface creation async, which is tracked as a follow-up
+    /// in shared-session-identity.md.
+    ///
     /// Stable across app restarts; uses surface ID only because it persists in snapshots
     /// while workspace IDs are regenerated.
     static func computeSessionID(workspaceID: UUID, surfaceID: UUID) -> String {
