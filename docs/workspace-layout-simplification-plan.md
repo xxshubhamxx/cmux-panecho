@@ -51,6 +51,7 @@ Implemented on `issue-2289-appkit-split-host`:
 - browser portal teardown is now owned by `BrowserPanel.close()` instead of a workspace-wide pre-close sweep, which keeps portal lifecycle at the retained-surface boundary
 - `Workspace` now owns render-snapshot construction directly, and the old generic `workspaceLayoutMakeRenderSnapshot` builder seam is gone from production code
 - `WorkspaceLayoutDelegate` is now `@MainActor`, matching the controller and workspace shell ownership boundary instead of relying on a nonisolated delegate protocol
+- empty panes now also come through the workspace-owned pane-content snapshot, so `WorkspaceLayoutView` and the native host no longer accept a separate empty-pane view builder
 
 No required architecture work from this simplification plan remains on this branch.
 

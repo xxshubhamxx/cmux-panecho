@@ -318,13 +318,7 @@ struct WorkspaceContentView: View {
         let splitView = WorkspaceLayoutView(
             controller: workspace.splitController,
             renderSnapshot: renderSnapshot
-        ) { paneId in
-            // Empty pane content
-            EmptyPanelView(workspace: workspace, paneId: paneId)
-                .onTapGesture {
-                    workspace.splitController.focusPane(paneId)
-                }
-        }
+        )
         .internalOnlyTabDrag()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {

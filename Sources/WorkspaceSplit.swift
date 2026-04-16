@@ -2894,27 +2894,21 @@ final class WorkspaceLayoutController {
     }
 }
 
-import SwiftUI
-
 /// Main entry point for the WorkspaceLayout library.
-struct WorkspaceLayoutView<EmptyContent: View>: View {
+struct WorkspaceLayoutView: View {
     @Bindable private var controller: WorkspaceLayoutController
     private let renderSnapshot: WorkspaceLayoutRenderSnapshot
-    private let emptyPaneBuilder: (PaneID) -> EmptyContent
 
-    /// Initialize with a controller and empty-pane builder.
+    /// Initialize with a controller and the canonical workspace-owned render snapshot.
     /// - Parameters:
     ///   - controller: The WorkspaceLayoutController managing the tab state
     ///   - renderSnapshot: The canonical snapshot resolved by the workspace runtime owner
-    ///   - emptyPane: A ViewBuilder closure that provides content for empty panes
     init(
         controller: WorkspaceLayoutController,
-        renderSnapshot: WorkspaceLayoutRenderSnapshot,
-        @ViewBuilder emptyPane: @escaping (PaneID) -> EmptyContent
+        renderSnapshot: WorkspaceLayoutRenderSnapshot
     ) {
         self.controller = controller
         self.renderSnapshot = renderSnapshot
-        self.emptyPaneBuilder = emptyPane
     }
 
     var body: some View {
@@ -2922,7 +2916,6 @@ struct WorkspaceLayoutView<EmptyContent: View>: View {
         WorkspaceLayoutNativeHost(
             controller: controller,
             renderSnapshot: renderSnapshot,
-            emptyPane: emptyPaneBuilder,
             showSplitButtons: showSplitButtons,
             onGeometryChange: { [weak controller] isDragging in
                 controller?.notifyGeometryChange(isDragging: isDragging)
@@ -2983,22 +2976,4 @@ struct WorkspaceMarkdownPaneContent {
 struct WorkspacePlaceholderPaneContent {
     unowned let workspace: Workspace
     let paneId: PaneID
-}
-
-/// Default view shown when a pane has no tabs
-struct DefaultEmptyPaneView: View {
-    init() {}
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 48))
-                .foregroundStyle(.tertiary)
-
-            Text("No Open Tabs")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
 }

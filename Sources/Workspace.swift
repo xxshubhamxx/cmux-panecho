@@ -7619,6 +7619,15 @@ final class Workspace: Identifiable, ObservableObject {
         )
     }
 
+    private func makeEmptyPaneContentDescriptor(in paneId: PaneID) -> WorkspacePaneContent {
+        .placeholder(
+            WorkspacePlaceholderPaneContent(
+                workspace: self,
+                paneId: paneId
+            )
+        )
+    }
+
     private func makePaneChromeSnapshot(
         pane: PaneState,
         projectionState: WorkspaceTabChromeProjectionState,
@@ -7674,6 +7683,7 @@ final class Workspace: Identifiable, ObservableObject {
                     tabs: chrome.tabs.map(\.tab),
                     selectedTabId: chrome.selectedTabId,
                     chrome: chrome,
+                    emptyPaneContent: chrome.tabs.isEmpty ? makeEmptyPaneContentDescriptor(in: pane.id) : nil,
                     paneContentByTabId: Dictionary(
                         uniqueKeysWithValues: chrome.tabs.map { tabSnapshot in
                             (
