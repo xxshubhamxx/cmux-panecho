@@ -7533,12 +7533,7 @@ final class Workspace: Identifiable, ObservableObject {
         context: WorkspaceLayoutRenderContext
     ) -> WorkspacePaneContent {
         guard let panel = panel(for: tab.id) else {
-            return .placeholder(
-                WorkspacePlaceholderPaneContent(
-                    workspace: self,
-                    paneId: paneId
-                )
-            )
+            return makeEmptyPaneContentDescriptor(in: paneId)
         }
 
         let isFocused = context.isWorkspaceInputActive && focusedPanelId == panel.id
@@ -7611,19 +7606,29 @@ final class Workspace: Identifiable, ObservableObject {
             )
         }
 
-        return .placeholder(
-            WorkspacePlaceholderPaneContent(
-                workspace: self,
-                paneId: paneId
-            )
-        )
+        return makeEmptyPaneContentDescriptor(in: paneId)
     }
 
     private func makeEmptyPaneContentDescriptor(in paneId: PaneID) -> WorkspacePaneContent {
         .placeholder(
             WorkspacePlaceholderPaneContent(
-                workspace: self,
-                paneId: paneId
+                paneId: paneId,
+                onCreateTerminal: { [weak self] in
+                    guard let self else { return }
+                    #if DEBUG
+                    dlog("emptyPane.newTerminal pane=\(paneId.id.uuidString.prefix(5))")
+                    #endif
+                    self.splitController.focusPane(paneId)
+                    _ = self.createTerminalPanel(inPane: paneId)
+                },
+                onCreateBrowser: { [weak self] in
+                    guard let self else { return }
+                    #if DEBUG
+                    dlog("emptyPane.newBrowser pane=\(paneId.id.uuidString.prefix(5))")
+                    #endif
+                    self.splitController.focusPane(paneId)
+                    _ = self.createBrowserPanel(inPane: paneId)
+                }
             )
         )
     }

@@ -654,8 +654,7 @@ struct WorkspaceContentView: View {
 
 /// View shown for empty panes
 struct EmptyPanelView: View {
-    @ObservedObject var workspace: Workspace
-    let paneId: PaneID
+    let descriptor: WorkspacePlaceholderPaneContent
     @ObservedObject private var keyboardShortcutSettingsObserver = KeyboardShortcutSettingsObserver.shared
 
     private struct ShortcutHint: View {
@@ -669,26 +668,6 @@ struct EmptyPanelView: View {
                 .padding(.vertical, 3)
                 .background(.white.opacity(0.18), in: Capsule())
         }
-    }
-
-    private func focusPane() {
-        workspace.splitController.focusPane(paneId)
-    }
-
-    private func createTerminal() {
-        #if DEBUG
-        dlog("emptyPane.newTerminal pane=\(paneId.id.uuidString.prefix(5))")
-        #endif
-        focusPane()
-        _ = workspace.createTerminalPanel(inPane: paneId)
-    }
-
-    private func createBrowser() {
-        #if DEBUG
-        dlog("emptyPane.newBrowser pane=\(paneId.id.uuidString.prefix(5))")
-        #endif
-        focusPane()
-        _ = workspace.createBrowserPanel(inPane: paneId)
     }
 
     private var newSurfaceShortcut: StoredShortcut {
@@ -743,14 +722,14 @@ struct EmptyPanelView: View {
                     title: "Terminal",
                     systemImage: "terminal.fill",
                     shortcut: newSurfaceShortcut,
-                    action: createTerminal
+                    action: descriptor.onCreateTerminal
                 )
 
                 emptyPaneActionButton(
                     title: "Browser",
                     systemImage: "globe",
                     shortcut: openBrowserShortcut,
-                    action: createBrowser
+                    action: descriptor.onCreateBrowser
                 )
             }
         }

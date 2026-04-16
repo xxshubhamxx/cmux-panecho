@@ -3016,8 +3016,9 @@ struct WorkspaceMarkdownPaneContent {
 
 @MainActor
 struct WorkspacePlaceholderPaneContent {
-    unowned let workspace: Workspace
     let paneId: PaneID
+    let onCreateTerminal: () -> Void
+    let onCreateBrowser: () -> Void
 }
 
 struct WorkspaceLayoutTabChromeSnapshot {

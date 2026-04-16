@@ -944,7 +944,7 @@ private final class WorkspaceLayoutPaneHostView: NSView {
             )
         case .placeholder(let descriptor):
             return AnyView(
-                EmptyPanelView(workspace: descriptor.workspace, paneId: descriptor.paneId)
+                EmptyPanelView(descriptor: descriptor)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transaction { tx in
                         tx.disablesAnimations = true

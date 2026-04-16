@@ -17,6 +17,7 @@ Implemented on `issue-2289-appkit-split-host`:
 - `WorkspaceLayoutController.createTab` now only accepts the layout-owned fields that survive into `TabItem`, and detached-surface transfer payloads no longer carry dead chrome data
 - split-view drag state and same-process tab transfer payloads now carry stable `TabID` values instead of duplicating full tab chrome payload across controller state and pasteboard transport
 - pane render snapshots no longer duplicate raw tab ordering and selection alongside pane chrome snapshots, so the native host now reads one canonical pane-tab contract
+- empty-pane placeholder descriptors now expose explicit create actions instead of handing the renderer a live `Workspace` reference, so placeholder UI follows the same action-driven boundary as the other pane content kinds
 - the layout host command and drag path now use typed `PanelType` surface kinds instead of raw `"terminal"` and `"browser"` strings
 - browser portal and visibility assumptions now sit behind a dedicated `BrowserPanelWorkspaceContentView` mounting adapter instead of leaking through `WorkspaceSplitNativeHost`
 - the keyboard/browser "insert at end" path now uses the correct reorder slot semantics, which restored the existing append-at-end invariant
