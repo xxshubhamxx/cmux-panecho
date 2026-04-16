@@ -18,6 +18,7 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
     private var cancellables = Set<AnyCancellable>()
     private var activeTeamID: String?
     private var hasAcceptedLiveSnapshot = false
+    private var emptySnapshotFallbackTask: Task<Void, Never>?
 
     init(
         inboxCacheRepository: InboxCacheRepository?,
@@ -48,6 +49,7 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
         activeTeamID = teamID
         hasAcceptedLiveSnapshot = false
         cancellables.removeAll()
+        emptySnapshotFallbackTask?.cancel()
 
         workspaceLiveSync.publisher(teamID: teamID)
             .map { rows in
@@ -59,9 +61,12 @@ final class UnifiedInboxSyncService: UnifiedInboxWorkspaceSyncing {
             .store(in: &cancellables)
 
         // If no live snapshot is accepted within 5 seconds, force-accept
-        // the next one (even if empty) to clear stale cached data.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            guard let self, !self.hasAcceptedLiveSnapshot else { return }
+        // the next one (even if empty) to clear stale cached data. Kept as
+        // a task so a reconnect to a different team cancels the previous
+        // fallback instead of firing against the new team.
+        emptySnapshotFallbackTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, let self, !self.hasAcceptedLiveSnapshot else { return }
             self.hasAcceptedLiveSnapshot = true
             self.subject.send([])
             try? self.inboxCacheRepository?.save([])
