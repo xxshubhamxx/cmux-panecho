@@ -1314,14 +1314,16 @@ final class TerminalSidebarStore: ObservableObject {
 }
 
 @MainActor
-final class TerminalSessionController: ObservableObject {
+@Observable
+final class TerminalSessionController {
     let workspaceID: TerminalWorkspace.ID
+    @ObservationIgnored
     var onUpdate: ((TerminalSessionUpdate) -> Void)?
 
-    @Published private(set) var phase: TerminalConnectionPhase
-    @Published private(set) var errorMessage: String?
-    @Published private(set) var statusMessage: String?
-    @Published private(set) var surfaceView: GhosttySurfaceView?
+    private(set) var phase: TerminalConnectionPhase
+    private(set) var errorMessage: String?
+    private(set) var statusMessage: String?
+    private(set) var surfaceView: GhosttySurfaceView?
 
     private var host: TerminalHost
     private let workspace: TerminalWorkspace
@@ -1390,11 +1392,13 @@ final class TerminalSessionController: ObservableObject {
     }
 
     deinit {
-        if let surfaceCloseObserver {
-            NotificationCenter.default.removeObserver(surfaceCloseObserver)
-        }
-        if let surfaceBellObserver {
-            NotificationCenter.default.removeObserver(surfaceBellObserver)
+        MainActor.assumeIsolated {
+            if let surfaceCloseObserver {
+                NotificationCenter.default.removeObserver(surfaceCloseObserver)
+            }
+            if let surfaceBellObserver {
+                NotificationCenter.default.removeObserver(surfaceBellObserver)
+            }
         }
     }
 

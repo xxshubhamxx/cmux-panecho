@@ -973,7 +973,7 @@ private struct ArrowNubRepresentable: UIViewRepresentable {
 struct TerminalWorkspaceScreen: View {
     let workspace: TerminalWorkspace
     let host: TerminalHost
-    @ObservedObject var controller: TerminalSessionController
+    var controller: TerminalSessionController
     @ObservedObject var store: TerminalSidebarStore
     @State private var selectedPaneIndex: Int = 0
 
