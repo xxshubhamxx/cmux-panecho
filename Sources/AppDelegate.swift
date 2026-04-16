@@ -14640,9 +14640,6 @@ final class MobileDaemonBridgeInline {
     static let shared = MobileDaemonBridgeInline()
     private var process: Process?
     private var wsPortFilePath: String?
-    #if canImport(TailscaleKit)
-    private var tailscaleManager: TailscaleNodeManager?
-    #endif
 
     private(set) var wsPort: Int?
     private(set) var daemonSocketPath: String?
@@ -14713,41 +14710,10 @@ final class MobileDaemonBridgeInline {
             try? String(port).write(toFile: wsportPath, atomically: true, encoding: .utf8)
             wsPortFilePath = wsportPath
             NSLog("📱 MobileBridge: started ws://127.0.0.1:%d socket=%@ wsport=%@", port, daemonSocket, wsportPath)
-            #if canImport(TailscaleKit)
-            startTailscaleNode(appSupport: appSupport)
-            #endif
         } catch {
             NSLog("📱 MobileBridge: failed: %@", error.localizedDescription)
         }
     }
-
-    #if canImport(TailscaleKit)
-    private func startTailscaleNode(appSupport: String) {
-        let identity = MachineIdentityStore().identity()
-        let tsStateDir = "\(appSupport)/tailscale"
-        try? FileManager.default.createDirectory(atPath: tsStateDir, withIntermediateDirectories: true)
-
-        let manager = TailscaleNodeManager(
-            machineID: identity.machineID,
-            stateDir: tsStateDir,
-            ephemeral: false
-        )
-        self.tailscaleManager = manager
-
-        Task.detached {
-            do {
-                try await manager.start()
-                let addrs = try await manager.addresses()
-                NSLog("📱 MobileBridge: Tailscale node up, hostname=cmux-%@, ip4=%@, ip6=%@",
-                      identity.machineID,
-                      addrs.ip4 ?? "none",
-                      addrs.ip6 ?? "none")
-            } catch {
-                NSLog("📱 MobileBridge: Tailscale node failed: %@", error.localizedDescription)
-            }
-        }
-    }
-    #endif
 
     /// Terminate the daemon. Always called on mac app quit; the daemon's
     /// lifecycle is coupled to ours by design.
@@ -14755,12 +14721,6 @@ final class MobileDaemonBridgeInline {
         if let p = process, p.isRunning {
             p.terminate()
         }
-        #if canImport(TailscaleKit)
-        if let manager = tailscaleManager {
-            Task { await manager.stop() }
-            tailscaleManager = nil
-        }
-        #endif
         process = nil
         wsPort = nil
         daemonSocketPath = nil

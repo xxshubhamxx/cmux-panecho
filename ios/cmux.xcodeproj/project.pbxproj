@@ -9,7 +9,6 @@
 /* Begin PBXBuildFile section */
 		025F993FBA0EEFDED92B8334 /* TerminalHostedViewContainerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AF7234CC5A1F76C14B0993D /* TerminalHostedViewContainerTests.swift */; };
 		0394710E6345FB8CA6E6D3E2 /* TerminalRemoteDaemonSessionTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC6C4A684BF81437C56D0B63 /* TerminalRemoteDaemonSessionTransportTests.swift */; };
-		0AAE0BB76105DDCC07B3604D /* TailscaleNodeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C85B0D9524FEA09ED15080BF /* TailscaleNodeManager.swift */; };
 		0F468796CD8AECF1D58004E3 /* TerminalInboxUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C173F2D34FADBC7C8F7BC8B7 /* TerminalInboxUITests.swift */; };
 		1213CAB1F473B2E96C721DD2 /* GhosttySurfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E328A139A850C17BC15CF66D /* GhosttySurfaceView.swift */; };
 		16C02A0973FA8B3803D42649 /* TerminalRemoteDaemonBootstrapTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A6987D4D8BBDFF129D00239 /* TerminalRemoteDaemonBootstrapTests.swift */; };
@@ -44,7 +43,6 @@
 		62B9ED1C5595D566F2303691 /* TerminalRemoteDaemonBootstrapTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6F50FA00DCA45209FE3C4D /* TerminalRemoteDaemonBootstrapTransportTests.swift */; };
 		6330C8D1CF60123A0488D8EC /* MobileSyncModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1FBD95A5E0909F51B3934BA /* MobileSyncModelsTests.swift */; };
 		64741B08645442F6E67ADAE2 /* AppDatabaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A87AAD10EFEEBFC5D02E5D33 /* AppDatabaseTests.swift */; };
-		65716806C18D0B964067D2FB /* TailscaleKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0ACBB1584AD9A27107F782A7 /* TailscaleKit.xcframework */; };
 		67FDF64AED03B9C8A6E64C97 /* TerminalRemoteDaemonClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE3095B52D831E750A0922D /* TerminalRemoteDaemonClientTests.swift */; };
 		687D33C05FF829D5B9643193 /* TerminalDirectDaemonTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09733A7FCCDF100195232A2A /* TerminalDirectDaemonTransportTests.swift */; };
 		68B4B225545A7A89E03C5CE8 /* TerminalSidebarStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 637C2D9FDB05591FA3059FC3 /* TerminalSidebarStore.swift */; };
@@ -79,7 +77,6 @@
 		A3C0A70ABCCC04E03F4A5AAF /* NotificationManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 507977649E0E1C7BEE72A05A /* NotificationManagerTests.swift */; };
 		AAB8DE3ACC210EBA742B146A /* TerminalWorkspaceMetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F488AD91D3EBE1FE97962C7 /* TerminalWorkspaceMetadataService.swift */; };
 		B0D54FA54A22B339C183AFE8 /* TerminalTextInputPipelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D639E6992408AFD926D7AD /* TerminalTextInputPipelineTests.swift */; };
-		B1F4225D3741A42DB23466EC /* TailscaleKit.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 0ACBB1584AD9A27107F782A7 /* TailscaleKit.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B2DC2BC8C0D8DFC2241C18A5 /* InputStrategyLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C032FB689174A5691978BF3C /* InputStrategyLabUITests.swift */; };
 		BA850F565EACFE5F2A60D7C6 /* LiveTCPDaemonTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7EAB7649D9BEC661822B7B6 /* LiveTCPDaemonTransportTests.swift */; };
 		C17D7E1277E505D749861710 /* LiveAnchormuxConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5272CEA127F60CF7B1B1D0A /* LiveAnchormuxConfigTests.swift */; };
@@ -135,26 +132,11 @@
 		};
 /* End PBXContainerItemProxy section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		D20D9EF8A2CFCD9C3FDD49C7 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				B1F4225D3741A42DB23466EC /* TailscaleKit.xcframework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
 		06DC281E643F44D11704E22E /* TerminalHostEditorUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalHostEditorUITests.swift; sourceTree = "<group>"; };
 		074C11F04DFA0038FE350494 /* Ghostty-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Ghostty-Bridging-Header.h"; sourceTree = "<group>"; };
 		09733A7FCCDF100195232A2A /* TerminalDirectDaemonTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalDirectDaemonTransportTests.swift; sourceTree = "<group>"; };
 		09845253A2CD1B748C97D0AA /* TerminalRemoteDaemonBootstrapTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalRemoteDaemonBootstrapTransport.swift; sourceTree = "<group>"; };
-		0ACBB1584AD9A27107F782A7 /* TailscaleKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = TailscaleKit.xcframework; path = ../TailscaleKit.xcframework; sourceTree = "<group>"; };
 		0AF7234CC5A1F76C14B0993D /* TerminalHostedViewContainerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalHostedViewContainerTests.swift; sourceTree = "<group>"; };
 		0B65F7731CA990B817F7426D /* TerminalDaemonConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalDaemonConnection.swift; sourceTree = "<group>"; };
 		0F1AA3EA4F9C83566660C6B4 /* InboxCacheRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxCacheRepository.swift; sourceTree = "<group>"; };
@@ -233,7 +215,6 @@
 		C18818FD4536DFDC6D6FA1D5 /* KeyboardSyncUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardSyncUITests.swift; sourceTree = "<group>"; };
 		C23026BB86D65831DC46C0F9 /* TerminalServerDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalServerDiscovery.swift; sourceTree = "<group>"; };
 		C2CE228A54A779328A936C9A /* TerminalWebSocketDaemonTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalWebSocketDaemonTransport.swift; sourceTree = "<group>"; };
-		C85B0D9524FEA09ED15080BF /* TailscaleNodeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailscaleNodeManager.swift; sourceTree = "<group>"; };
 		CB4B72E3C6B3BD557316FA09 /* cmuxd-remote */ = {isa = PBXFileReference; path = "cmuxd-remote"; sourceTree = "<group>"; };
 		D01F9176DE666BAE97AA807B /* LocalConfig.example.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = LocalConfig.example.plist; sourceTree = "<group>"; };
 		D3FF5B325FC76EBB175EE6CA /* ServerScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerScannerView.swift; sourceTree = "<group>"; };
@@ -274,7 +255,6 @@
 				FF9986603E0678AFADBA5539 /* NIOCore in Frameworks */,
 				70A45D6AC127FEFAC106706A /* NIOSSH in Frameworks */,
 				C7D1BFF48FD30657271F28AE /* NIOTransportServices in Frameworks */,
-				65716806C18D0B964067D2FB /* TailscaleKit.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -289,14 +269,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		0701689F6CF2DADB7C4A5FF6 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				0ACBB1584AD9A27107F782A7 /* TailscaleKit.xcframework */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
 		0F1AEEAEEF55364C5E4029D3 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -310,7 +282,6 @@
 		1E475E953D388611EBA89522 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
-				C85B0D9524FEA09ED15080BF /* TailscaleNodeManager.swift */,
 				BF2A5F96F101FD1746C3FB91 /* TerminalBackendContracts.swift */,
 			);
 			name = Shared;
@@ -472,7 +443,6 @@
 				DDEDE4855B855104A6EC0141 /* Resources */,
 				1E475E953D388611EBA89522 /* Shared */,
 				F80B6A470B95146C17D0BE5A /* Sources */,
-				0701689F6CF2DADB7C4A5FF6 /* Frameworks */,
 				0F1AEEAEEF55364C5E4029D3 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -612,7 +582,6 @@
 				35CFA4F0D45E49F370ECBCDF /* Sources */,
 				59260B41E0AD3DA23B6DF09F /* Resources */,
 				619D11C7B9AB804217EA26D4 /* Frameworks */,
-				D20D9EF8A2CFCD9C3FDD49C7 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -746,7 +715,6 @@
 				C9E3B69A93DD87E682311505 /* SignInView.swift in Sources */,
 				8D3227A416DC344EFBA9B571 /* StackAuthApp.swift in Sources */,
 				5FE9793039F5691D04C24116 /* StackAuthUser.swift in Sources */,
-				0AAE0BB76105DDCC07B3604D /* TailscaleNodeManager.swift in Sources */,
 				69995971655E7D3B5A3D329D /* TerminalBackendContracts.swift in Sources */,
 				8BC0E9F0AC5CAEC84129BEAC /* TerminalCacheRepository.swift in Sources */,
 				21E8F66868FFA39149D80688 /* TerminalDaemonConnection.swift in Sources */,
@@ -1143,10 +1111,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = 7WLXT3NR37;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"\"..\"",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(inherited)",
@@ -1188,10 +1152,6 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = 7WLXT3NR37;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"\"..\"",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(inherited)",
@@ -1234,10 +1194,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = 7WLXT3NR37;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"\"..\"",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				"HEADER_SEARCH_PATHS[sdk=iphoneos*]" = (
 					"$(inherited)",

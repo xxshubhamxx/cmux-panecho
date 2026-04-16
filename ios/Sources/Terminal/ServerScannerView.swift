@@ -1,5 +1,4 @@
 import SwiftUI
-import TailscaleKit
 
 struct DiscoveredServer: Identifiable {
     let id = UUID()
@@ -9,16 +8,14 @@ struct DiscoveredServer: Identifiable {
     let version: String
     let workspaceCount: Int
     let wsSecret: String
-    let isTailscale: Bool
 
-    init(hostname: String, port: Int, name: String, version: String, workspaceCount: Int, wsSecret: String, isTailscale: Bool = false) {
+    init(hostname: String, port: Int, name: String, version: String, workspaceCount: Int, wsSecret: String) {
         self.hostname = hostname
         self.port = port
         self.name = name
         self.version = version
         self.workspaceCount = workspaceCount
         self.wsSecret = wsSecret
-        self.isTailscale = isTailscale
     }
 }
 
@@ -90,46 +87,37 @@ final class ServerScanner: ObservableObject {
 
         log.log("scan.start secret=\(secret.isEmpty ? "empty" : "\(secret.prefix(8))...") relay=\(relayHost ?? "none")")
 
-        // Build immediate candidates (localhost + relay host)
-        var candidates: [(String, Int, Bool)] = []
+        // Build immediate candidates (localhost + relay host). For
+        // cross-network reach, users install Tailscale (or any VPN/SSH
+        // tunnel of choice) and add the mac's tailnet hostname:port as
+        // a relay host — cmux no longer ships an embedded Tailscale node.
+        var candidates: [(String, Int)] = []
 
         for port in 52100...52199 {
-            candidates.append(("127.0.0.1", port, false))
+            candidates.append(("127.0.0.1", port))
         }
 
         if let relayHost, relayHost != "127.0.0.1" {
             log.log("scan.relay adding \(relayHost):52100-52199")
             for port in 52100...52199 {
-                candidates.append((relayHost, port, false))
+                candidates.append((relayHost, port))
             }
         }
 
         log.log("scan.candidates count=\(candidates.count)")
 
-        // Start port scanning and TailscaleKit discovery concurrently.
-        // Port scanning proceeds immediately; TailscaleKit has a 10s timeout.
         var found: [DiscoveredServer] = []
         var seenEndpoints: Set<String> = []
 
-        // Probe known candidates first (non-blocking)
         found = await probeCandidates(candidates, secret: secret, existing: found, seen: &seenEndpoints)
         log.log("scan.probe.done found=\(found.count)")
-
-        // TailscaleKit peer discovery is disabled until auth is configured.
-        // tailscale_start() blocks forever without an auth key, and Swift task
-        // cancellation cannot interrupt a blocked C/Go function call.
-        // TailscaleKit peer discovery disabled until auth flow is implemented.
-        // tailscale_start() blocks forever without an auth key.
-        #if !targetEnvironment(simulator)
-        log.log("tailscale.skip reason=no_auth_configured")
-        #endif
 
         self.servers = found.sorted { $0.port < $1.port }
         log.log("scan.complete total=\(found.count)")
     }
 
     private func probeCandidates(
-        _ candidates: [(String, Int, Bool)],
+        _ candidates: [(String, Int)],
         secret: String,
         existing: [DiscoveredServer],
         seen: inout Set<String>
@@ -143,9 +131,9 @@ final class ServerScanner: ObservableObject {
             let batch = candidates[batchStart..<batchEnd]
 
             let results = await withTaskGroup(of: DiscoveredServer?.self) { group in
-                for (host, port, isTailscale) in batch {
+                for (host, port) in batch {
                     group.addTask {
-                        await Self.probeAndIdentify(hostname: host, port: port, secret: secret, isTailscale: isTailscale)
+                        await Self.probeAndIdentify(hostname: host, port: port, secret: secret)
                     }
                 }
                 var batchResults: [DiscoveredServer] = []
@@ -169,16 +157,16 @@ final class ServerScanner: ObservableObject {
         return found
     }
 
-    static func probeAndIdentify(hostname: String, port: Int, secret: String, isTailscale: Bool = false) async -> DiscoveredServer? {
+    static func probeAndIdentify(hostname: String, port: Int, secret: String) async -> DiscoveredServer? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
-                let result = Self.probeSync(hostname: hostname, port: port, secret: secret, isTailscale: isTailscale)
+                let result = Self.probeSync(hostname: hostname, port: port, secret: secret)
                 continuation.resume(returning: result)
             }
         }
     }
 
-    static func probeSync(hostname: String, port: Int, secret: String, isTailscale: Bool = false) -> DiscoveredServer? {
+    static func probeSync(hostname: String, port: Int, secret: String) -> DiscoveredServer? {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
@@ -226,8 +214,7 @@ final class ServerScanner: ObservableObject {
             name: name,
             version: version,
             workspaceCount: workspaceCount,
-            wsSecret: secret,
-            isTailscale: isTailscale
+            wsSecret: secret
         )
     }
 
@@ -534,9 +521,6 @@ private struct ServerScanRow: View {
     private var displayName: String {
         if server.hostname == "127.0.0.1" {
             return "Local (:\(server.port))"
-        }
-        if server.isTailscale {
-            return "\(server.name) (Tailscale)"
         }
         return "\(server.hostname) (:\(server.port))"
     }

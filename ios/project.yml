@@ -63,8 +63,6 @@ targets:
         product: NIOSSH
       - package: SwiftNIOTransportServices
         product: NIOTransportServices
-      - framework: ../TailscaleKit.xcframework
-        embed: true
     settings:
       base:
         MARKETING_VERSION: "1.0"
