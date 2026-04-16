@@ -57,6 +57,7 @@ Implemented on `issue-2289-appkit-split-host`:
 - empty panes now also come through the workspace-owned pane-content snapshot, so `WorkspaceLayoutView` and the native host no longer accept a separate empty-pane view builder
 - `workspaceSplitContextMenuState` now lives in `Sources/WorkspaceSplit.swift`, so workspace-owned chrome projection no longer depends on a helper defined in `Sources/WorkspaceSplitNativeHost.swift`
 - the canonical `WorkspaceLayoutRenderSnapshot` family now lives in `Sources/WorkspaceSplit.swift` instead of `Sources/WorkspaceSplitNativeHost.swift`, so `Workspace` owns runtime snapshot assembly without depending on renderer-local type definitions
+- file-drop handling for native panes is now installed from `Workspace` initialization instead of being mutated from `WorkspaceContentView.body`, so SwiftUI render passes no longer reconfigure split-controller command callbacks
 
 No required architecture work from this simplification plan remains on this branch.
 

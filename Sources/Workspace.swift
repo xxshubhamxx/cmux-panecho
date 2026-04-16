@@ -7089,6 +7089,9 @@ final class Workspace: Identifiable, ObservableObject {
         splitController.onExternalTabDrop = { [weak self] request in
             self?.handleExternalTabDrop(request) ?? false
         }
+        splitController.onFileDrop = { [weak self] urls, paneId in
+            self?.handlePaneFileDrop(urls: urls, in: paneId) ?? false
+        }
         splitController.onTabCloseRequest = { [weak self] tabId, _ in
             self?.markExplicitClose(surfaceId: tabId)
         }
@@ -7115,6 +7118,14 @@ final class Workspace: Identifiable, ObservableObject {
             splitController.selectTab(initialTabId)
         }
         tmuxLayoutSnapshot = splitController.layoutSnapshot()
+    }
+
+    private func handlePaneFileDrop(urls: [URL], in paneId: PaneID) -> Bool {
+        guard let tabId = splitController.selectedTab(inPane: paneId)?.id,
+              let panel = terminalPanel(for: tabId) else {
+            return false
+        }
+        return panel.hostedView.handleDroppedURLs(urls)
     }
 
     deinit {

@@ -302,19 +302,6 @@ struct WorkspaceContentView: View {
         // AppKit-backed views can still intercept drags. Disable drop acceptance for them.
         let _ = { workspace.splitController.isInteractive = isWorkspaceInputActive }()
 
-
-        // Wire up file drop handling so WorkspaceSplit's PaneDragContainerView can forward
-        // Finder file drops to the correct terminal panel.
-        let _ = {
-            workspace.splitController.onFileDrop = { [weak workspace] urls, paneId in
-                guard let workspace else { return false }
-                // Find the focused panel in this pane and drop the files into it.
-                guard let tabId = workspace.splitController.selectedTab(inPane: paneId)?.id,
-                      let panel = workspace.terminalPanel(for: tabId) else { return false }
-                return panel.hostedView.handleDroppedURLs(urls)
-            }
-        }()
-
         let splitView = WorkspaceLayoutView(
             controller: workspace.splitController,
             renderSnapshot: renderSnapshot
