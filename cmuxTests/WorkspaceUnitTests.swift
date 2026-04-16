@@ -2326,6 +2326,14 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         let snapshot = workspaceLayoutMakeRenderSnapshot(
             controller: workspace.splitController,
             tabChromeBuilder: { tab, _ in workspace.renderTabChrome(for: tab) },
+            paneContentBuilder: { _, paneId in
+                .placeholder(
+                    WorkspacePlaceholderPaneContent(
+                        workspace: workspace,
+                        paneId: paneId
+                    )
+                )
+            },
             showSplitButtons: true
         )
 

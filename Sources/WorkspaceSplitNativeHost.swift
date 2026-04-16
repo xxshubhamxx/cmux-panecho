@@ -271,10 +271,9 @@ private enum WorkspaceLayoutTabChromeTitleSource: String {
 #endif
 
 @MainActor
-struct WorkspaceLayoutNativeHost<Content: View, EmptyContent: View>: NSViewRepresentable {
+struct WorkspaceLayoutNativeHost<EmptyContent: View>: NSViewRepresentable {
     @Bindable private var controller: WorkspaceLayoutController
     private let renderSnapshot: WorkspaceLayoutRenderSnapshot
-    private let contentBuilder: (WorkspaceLayout.Tab, PaneID) -> Content
     private let emptyPaneBuilder: (PaneID) -> EmptyContent
     private let showSplitButtons: Bool
     private let onGeometryChange: ((_ isDragging: Bool) -> Void)?
@@ -282,24 +281,21 @@ struct WorkspaceLayoutNativeHost<Content: View, EmptyContent: View>: NSViewRepre
     init(
         controller: WorkspaceLayoutController,
         renderSnapshot: WorkspaceLayoutRenderSnapshot,
-        @ViewBuilder content: @escaping (WorkspaceLayout.Tab, PaneID) -> Content,
         @ViewBuilder emptyPane: @escaping (PaneID) -> EmptyContent,
         showSplitButtons: Bool,
         onGeometryChange: ((_ isDragging: Bool) -> Void)?
     ) {
         self.controller = controller
         self.renderSnapshot = renderSnapshot
-        self.contentBuilder = content
         self.emptyPaneBuilder = emptyPane
         self.showSplitButtons = showSplitButtons
         self.onGeometryChange = onGeometryChange
     }
 
-    func makeNSView(context: Context) -> WorkspaceLayoutRootHostView<Content, EmptyContent> {
+    func makeNSView(context: Context) -> WorkspaceLayoutRootHostView<EmptyContent> {
         let view = WorkspaceLayoutRootHostView(
             controller: controller,
             renderSnapshot: renderSnapshot,
-            contentBuilder: contentBuilder,
             emptyPaneBuilder: emptyPaneBuilder,
             showSplitButtons: showSplitButtons,
             onGeometryChange: onGeometryChange
@@ -308,11 +304,10 @@ struct WorkspaceLayoutNativeHost<Content: View, EmptyContent: View>: NSViewRepre
         return view
     }
 
-    func updateNSView(_ nsView: WorkspaceLayoutRootHostView<Content, EmptyContent>, context: Context) {
+    func updateNSView(_ nsView: WorkspaceLayoutRootHostView<EmptyContent>, context: Context) {
         nsView.update(
             controller: controller,
             renderSnapshot: renderSnapshot,
-            contentBuilder: contentBuilder,
             emptyPaneBuilder: emptyPaneBuilder,
             showSplitButtons: showSplitButtons,
             onGeometryChange: onGeometryChange
@@ -321,17 +316,16 @@ struct WorkspaceLayoutNativeHost<Content: View, EmptyContent: View>: NSViewRepre
 }
 
 @MainActor
-final class WorkspaceLayoutRootHostView<Content: View, EmptyContent: View>: NSView {
+final class WorkspaceLayoutRootHostView<EmptyContent: View>: NSView {
     private var controller: WorkspaceLayoutController
     private var renderSnapshot: WorkspaceLayoutRenderSnapshot
-    private var contentBuilder: (WorkspaceLayout.Tab, PaneID) -> Content
     private var emptyPaneBuilder: (PaneID) -> EmptyContent
     private var showSplitButtons: Bool
     private var onGeometryChange: ((_ isDragging: Bool) -> Void)?
 
     private var currentRootView: NSView?
-    private var paneHosts: [UUID: WorkspaceLayoutPaneHostView<Content, EmptyContent>] = [:]
-    private var splitHosts: [UUID: WorkspaceLayoutNativeSplitView<Content, EmptyContent>] = [:]
+    private var paneHosts: [UUID: WorkspaceLayoutPaneHostView<EmptyContent>] = [:]
+    private var splitHosts: [UUID: WorkspaceLayoutNativeSplitView<EmptyContent>] = [:]
     private var renderedPaneIds: Set<UUID> = []
     private var renderedSplitIds: Set<UUID> = []
     private var lastContainerFrame: CGRect = .zero
@@ -339,14 +333,12 @@ final class WorkspaceLayoutRootHostView<Content: View, EmptyContent: View>: NSVi
     init(
         controller: WorkspaceLayoutController,
         renderSnapshot: WorkspaceLayoutRenderSnapshot,
-        contentBuilder: @escaping (WorkspaceLayout.Tab, PaneID) -> Content,
         emptyPaneBuilder: @escaping (PaneID) -> EmptyContent,
         showSplitButtons: Bool,
         onGeometryChange: ((_ isDragging: Bool) -> Void)?
     ) {
         self.controller = controller
         self.renderSnapshot = renderSnapshot
-        self.contentBuilder = contentBuilder
         self.emptyPaneBuilder = emptyPaneBuilder
         self.showSplitButtons = showSplitButtons
         self.onGeometryChange = onGeometryChange
@@ -365,14 +357,12 @@ final class WorkspaceLayoutRootHostView<Content: View, EmptyContent: View>: NSVi
     func update(
         controller: WorkspaceLayoutController,
         renderSnapshot: WorkspaceLayoutRenderSnapshot,
-        contentBuilder: @escaping (WorkspaceLayout.Tab, PaneID) -> Content,
         emptyPaneBuilder: @escaping (PaneID) -> EmptyContent,
         showSplitButtons: Bool,
         onGeometryChange: ((_ isDragging: Bool) -> Void)?
     ) {
         self.controller = controller
         self.renderSnapshot = renderSnapshot
-        self.contentBuilder = contentBuilder
         self.emptyPaneBuilder = emptyPaneBuilder
         self.showSplitButtons = showSplitButtons
         self.onGeometryChange = onGeometryChange
@@ -487,12 +477,11 @@ final class WorkspaceLayoutRootHostView<Content: View, EmptyContent: View>: NSVi
         }
     }
 
-    private func paneHost(for snapshot: WorkspaceLayoutPaneRenderSnapshot) -> WorkspaceLayoutPaneHostView<Content, EmptyContent> {
+    private func paneHost(for snapshot: WorkspaceLayoutPaneRenderSnapshot) -> WorkspaceLayoutPaneHostView<EmptyContent> {
         if let existing = paneHosts[snapshot.paneId.id] {
             existing.update(
                 snapshot: snapshot,
                 controller: controller,
-                contentBuilder: contentBuilder,
                 emptyPaneBuilder: emptyPaneBuilder
             )
             return existing
@@ -502,14 +491,13 @@ final class WorkspaceLayoutRootHostView<Content: View, EmptyContent: View>: NSVi
             rootHost: self,
             snapshot: snapshot,
             controller: controller,
-            contentBuilder: contentBuilder,
             emptyPaneBuilder: emptyPaneBuilder
         )
         paneHosts[snapshot.paneId.id] = host
         return host
     }
 
-    private func splitHost(for snapshot: WorkspaceLayoutSplitRenderSnapshot) -> WorkspaceLayoutNativeSplitView<Content, EmptyContent> {
+    private func splitHost(for snapshot: WorkspaceLayoutSplitRenderSnapshot) -> WorkspaceLayoutNativeSplitView<EmptyContent> {
         guard let split = workspaceSplitFindSplitState(
             in: controller.internalController.rootNode,
             id: snapshot.splitId
@@ -554,8 +542,8 @@ private func workspaceSplitFindSplitState(in node: SplitNode, id: UUID) -> Split
 }
 
 @MainActor
-private final class WorkspaceLayoutNativeSplitView<Content: View, EmptyContent: View>: NSSplitView, NSSplitViewDelegate {
-    private weak var rootHost: WorkspaceLayoutRootHostView<Content, EmptyContent>?
+private final class WorkspaceLayoutNativeSplitView<EmptyContent: View>: NSSplitView, NSSplitViewDelegate {
+    private weak var rootHost: WorkspaceLayoutRootHostView<EmptyContent>?
     private var splitState: SplitState
     private var splitAppearance: WorkspaceLayoutConfiguration.Appearance
 
@@ -572,7 +560,7 @@ private final class WorkspaceLayoutNativeSplitView<Content: View, EmptyContent: 
 
     init(
         splitState: SplitState,
-        rootHost: WorkspaceLayoutRootHostView<Content, EmptyContent>,
+        rootHost: WorkspaceLayoutRootHostView<EmptyContent>,
         firstChild: NSView,
         secondChild: NSView,
         appearance: WorkspaceLayoutConfiguration.Appearance
@@ -604,7 +592,7 @@ private final class WorkspaceLayoutNativeSplitView<Content: View, EmptyContent: 
 
     func update(
         splitState: SplitState,
-        rootHost: WorkspaceLayoutRootHostView<Content, EmptyContent>,
+        rootHost: WorkspaceLayoutRootHostView<EmptyContent>,
         firstChild: NSView,
         secondChild: NSView,
         appearance: WorkspaceLayoutConfiguration.Appearance
@@ -777,11 +765,10 @@ private final class WorkspaceLayoutNativeSplitView<Content: View, EmptyContent: 
 }
 
 @MainActor
-private final class WorkspaceLayoutPaneHostView<Content: View, EmptyContent: View>: NSView {
-    private weak var rootHost: WorkspaceLayoutRootHostView<Content, EmptyContent>?
+private final class WorkspaceLayoutPaneHostView<EmptyContent: View>: NSView {
+    private weak var rootHost: WorkspaceLayoutRootHostView<EmptyContent>?
     private var snapshot: WorkspaceLayoutPaneRenderSnapshot
     private var controller: WorkspaceLayoutController
-    private var contentBuilder: (WorkspaceLayout.Tab, PaneID) -> Content
     private var emptyPaneBuilder: (PaneID) -> EmptyContent
 
     private let tabBarView = WorkspaceLayoutNativeTabBarView(frame: .zero)
@@ -793,16 +780,14 @@ private final class WorkspaceLayoutPaneHostView<Content: View, EmptyContent: Vie
     private var activeDropZone: DropZone? = nil
 
     init(
-        rootHost: WorkspaceLayoutRootHostView<Content, EmptyContent>,
+        rootHost: WorkspaceLayoutRootHostView<EmptyContent>,
         snapshot: WorkspaceLayoutPaneRenderSnapshot,
         controller: WorkspaceLayoutController,
-        contentBuilder: @escaping (WorkspaceLayout.Tab, PaneID) -> Content,
         emptyPaneBuilder: @escaping (PaneID) -> EmptyContent
     ) {
         self.rootHost = rootHost
         self.snapshot = snapshot
         self.controller = controller
-        self.contentBuilder = contentBuilder
         self.emptyPaneBuilder = emptyPaneBuilder
         super.init(frame: .zero)
         wantsLayer = true
@@ -816,7 +801,6 @@ private final class WorkspaceLayoutPaneHostView<Content: View, EmptyContent: Vie
         update(
             snapshot: snapshot,
             controller: controller,
-            contentBuilder: contentBuilder,
             emptyPaneBuilder: emptyPaneBuilder
         )
     }
@@ -829,12 +813,10 @@ private final class WorkspaceLayoutPaneHostView<Content: View, EmptyContent: Vie
     func update(
         snapshot: WorkspaceLayoutPaneRenderSnapshot,
         controller: WorkspaceLayoutController,
-        contentBuilder: @escaping (WorkspaceLayout.Tab, PaneID) -> Content,
         emptyPaneBuilder: @escaping (PaneID) -> EmptyContent
     ) {
         self.snapshot = snapshot
         self.controller = controller
-        self.contentBuilder = contentBuilder
         self.emptyPaneBuilder = emptyPaneBuilder
         layer?.backgroundColor = TabBarColors.nsColorPaneBackground(
             for: controller.configuration.appearance
@@ -954,72 +936,68 @@ private final class WorkspaceLayoutPaneHostView<Content: View, EmptyContent: Vie
     }
 
     private func refreshContent(for tab: WorkspaceLayout.Tab, selectedId: UUID?) {
-        let tabModel = tab
         let isSelected = tab.id.id == selectedId
 
-        if let nativeContent = snapshot.nativeContent(tabId: tab.id.id) {
-            if isSelected {
-                dropOverlayView.prefersNativeDropOverlay = nativeContent.prefersNativeDropOverlay
-            }
-            switch nativeContent {
-            case .terminal(let descriptor):
-                refreshTerminalContent(
-                    descriptor,
-                    for: tab.id.id,
-                    isSelected: isSelected
-                )
-            case .browser(let descriptor):
-                refreshBrowserContent(
-                    descriptor,
-                    for: tab.id.id,
-                    isSelected: isSelected
-                )
-            }
-#if DEBUG
-            if isSelected {
-                let paneShort = String(snapshot.paneId.id.uuidString.prefix(5))
-                let tabShort = String(tab.id.id.uuidString.prefix(5))
-                startupLog(
-                    "startup.host.refreshContent.native pane=\(paneShort) " +
-                        "tab=\(tabShort)"
-                )
-            }
-#endif
-            return
+        let paneContent = snapshot.paneContent(tabId: tab.id.id)
+        if isSelected {
+            dropOverlayView.prefersNativeDropOverlay = paneContent.prefersNativeDropOverlay
         }
 
-        if let existing = mountedTabContent[tab.id.id],
-           case .terminal(let descriptor, let slotView) = existing {
-            if isSelected {
-                dropOverlayView.prefersNativeDropOverlay = true
-            }
-            applyTerminalContent(
+        switch paneContent {
+        case .terminal(let descriptor):
+            refreshTerminalContent(
                 descriptor,
-                slotView: slotView,
+                for: tab.id.id,
                 isSelected: isSelected
             )
+        case .browser(let descriptor):
+            refreshBrowserContent(
+                descriptor,
+                for: tab.id.id,
+                isSelected: isSelected
+            )
+        case .markdown(let descriptor):
+            refreshHostedContent(
+                rootView: AnyView(
+                    MarkdownPanelView(
+                        panel: descriptor.panel,
+                        isVisibleInUI: descriptor.isVisibleInUI,
+                        onRequestPanelFocus: descriptor.onRequestPanelFocus
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .environment(\.paneDropZone, isSelected ? activeDropZone : nil)
+                    .transaction { tx in
+                        tx.disablesAnimations = true
+                    }
+                    .animation(nil, value: snapshot.selectedTabId)
+                ),
+                for: tab.id.id,
+                isSelected: isSelected
+            )
+        case .placeholder(let descriptor):
+            refreshHostedContent(
+                rootView: AnyView(
+                    EmptyPanelView(workspace: descriptor.workspace, paneId: descriptor.paneId)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transaction { tx in
+                            tx.disablesAnimations = true
+                        }
+                        .animation(nil, value: snapshot.selectedTabId)
+                ),
+                for: tab.id.id,
+                isSelected: isSelected
+            )
+        }
 #if DEBUG
-            if isSelected {
-                let paneShort = String(snapshot.paneId.id.uuidString.prefix(5))
-                let tabShort = String(tab.id.id.uuidString.prefix(5))
-                let panelShort = String(descriptor.panel.id.uuidString.prefix(5))
-                startupLog(
-                    "startup.host.refreshContent.cachedTerminal pane=\(paneShort) " +
-                        "tab=\(tabShort) panel=\(panelShort)"
-                )
-            }
-#endif
-            return
-        }
-
         if isSelected {
-            dropOverlayView.prefersNativeDropOverlay = false
+            let paneShort = String(snapshot.paneId.id.uuidString.prefix(5))
+            let tabShort = String(tab.id.id.uuidString.prefix(5))
+            startupLog(
+                "startup.host.refreshContent pane=\(paneShort) " +
+                    "tab=\(tabShort)"
+            )
         }
-        refreshSwiftUIContent(
-            for: tabModel,
-            tabId: tab.id.id,
-            isSelected: isSelected
-        )
+#endif
     }
 
     private func refreshTerminalContent(
@@ -1189,27 +1167,17 @@ private final class WorkspaceLayoutPaneHostView<Content: View, EmptyContent: Vie
         slotView.isHidden = !isSelected
     }
 
-    private func refreshSwiftUIContent(
-        for tab: WorkspaceLayout.Tab,
-        tabId: UUID,
+    private func refreshHostedContent(
+        rootView: AnyView,
+        for tabId: UUID,
         isSelected: Bool
     ) {
-        let rootView = AnyView(
-            contentBuilder(tab, snapshot.paneId)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .environment(\.paneDropZone, isSelected ? activeDropZone : nil)
-                .transaction { tx in
-                    tx.disablesAnimations = true
-                }
-                .animation(nil, value: snapshot.selectedTabId)
-        )
-
         let entry: WorkspaceLayoutMountedPaneContent
         if let existing = mountedTabContent[tabId],
-           case .swiftUI(let hostingController, let slotView) = existing {
+           case .hosting(let hostingController, let slotView) = existing {
             hostingController.rootView = rootView
             slotView.installContentView(hostingController.view)
-            entry = .swiftUI(hostingController: hostingController, slotView: slotView)
+            entry = .hosting(hostingController: hostingController, slotView: slotView)
         } else {
             if let existing = mountedTabContent[tabId] {
                 tearDownMountedContent(existing)
@@ -1224,11 +1192,11 @@ private final class WorkspaceLayoutPaneHostView<Content: View, EmptyContent: Vie
             slotView.installContentView(hostingController.view)
             contentContainer.addSubview(slotView)
 
-            entry = .swiftUI(hostingController: hostingController, slotView: slotView)
+            entry = .hosting(hostingController: hostingController, slotView: slotView)
             mountedTabContent[tabId] = entry
         }
 
-        guard case .swiftUI(_, let slotView) = entry else { return }
+        guard case .hosting(_, let slotView) = entry else { return }
         if slotView.superview !== contentContainer {
             slotView.removeFromSuperview()
             contentContainer.addSubview(slotView)
@@ -1252,7 +1220,7 @@ private final class WorkspaceLayoutPaneHostView<Content: View, EmptyContent: Vie
             hostView.prepareForRemoval(reason: "workspaceHostRemoval")
             hostView.removeFromSuperview()
             slotView.removeFromSuperview()
-        case .swiftUI(let hostingController, let slotView):
+        case .hosting(let hostingController, let slotView):
             hostingController.view.removeFromSuperview()
             slotView.removeFromSuperview()
         }
@@ -1301,11 +1269,11 @@ private final class WorkspaceLayoutPaneContentSlotView: NSView {
 private enum WorkspaceLayoutMountedPaneContent {
     case terminal(descriptor: WorkspaceTerminalPaneContent, slotView: WorkspaceLayoutPaneContentSlotView)
     case browser(hostView: BrowserPanelWorkspaceContentView, slotView: WorkspaceLayoutPaneContentSlotView)
-    case swiftUI(hostingController: NSHostingController<AnyView>, slotView: WorkspaceLayoutPaneContentSlotView)
+    case hosting(hostingController: NSHostingController<AnyView>, slotView: WorkspaceLayoutPaneContentSlotView)
 
     var slotView: WorkspaceLayoutPaneContentSlotView {
         switch self {
-        case .terminal(_, let slotView), .browser(_, let slotView), .swiftUI(_, let slotView):
+        case .terminal(_, let slotView), .browser(_, let slotView), .hosting(_, let slotView):
             return slotView
         }
     }
@@ -1332,10 +1300,13 @@ struct WorkspaceLayoutPaneRenderSnapshot {
     let tabs: [WorkspaceLayout.Tab]
     let selectedTabId: UUID?
     let chrome: WorkspaceLayoutPaneChromeSnapshot
-    let nativeContentByTabId: [UUID: WorkspaceNativePaneContent]
+    let paneContentByTabId: [UUID: WorkspacePaneContent]
 
-    func nativeContent(tabId: UUID) -> WorkspaceNativePaneContent? {
-        nativeContentByTabId[tabId]
+    func paneContent(tabId: UUID) -> WorkspacePaneContent {
+        guard let paneContent = paneContentByTabId[tabId] else {
+            preconditionFailure("Missing pane content for tab \(tabId) in pane \(paneId.id)")
+        }
+        return paneContent
     }
 }
 
@@ -1416,7 +1387,7 @@ private func workspaceLayoutMakePaneChromeSnapshot(
 func workspaceLayoutMakeRenderSnapshot(
     controller: WorkspaceLayoutController,
     tabChromeBuilder: WorkspaceLayoutTabChromeProvider?,
-    nativeContentBuilder: WorkspaceLayoutNativeContentProvider? = nil,
+    paneContentBuilder: WorkspaceLayoutPaneContentProvider,
     showSplitButtons: Bool
 ) -> WorkspaceLayoutRenderSnapshot {
     let root = controller.internalController.zoomedNode ?? controller.internalController.rootNode
@@ -1425,7 +1396,7 @@ func workspaceLayoutMakeRenderSnapshot(
             node: root,
             controller: controller,
             tabChromeBuilder: tabChromeBuilder,
-            nativeContentBuilder: nativeContentBuilder,
+            paneContentBuilder: paneContentBuilder,
             showSplitButtons: showSplitButtons
         )
     )
@@ -1436,7 +1407,7 @@ func workspaceLayoutMakeRenderNodeSnapshot(
     node: SplitNode,
     controller: WorkspaceLayoutController,
     tabChromeBuilder: WorkspaceLayoutTabChromeProvider?,
-    nativeContentBuilder: WorkspaceLayoutNativeContentProvider? = nil,
+    paneContentBuilder: WorkspaceLayoutPaneContentProvider,
     showSplitButtons: Bool
 ) -> WorkspaceLayoutRenderNodeSnapshot {
     switch node {
@@ -1454,12 +1425,12 @@ func workspaceLayoutMakeRenderNodeSnapshot(
                 tabs: chrome.tabs.map(\.tab),
                 selectedTabId: chrome.selectedTabId,
                 chrome: chrome,
-                nativeContentByTabId: Dictionary(
-                    uniqueKeysWithValues: chrome.tabs.compactMap { tabSnapshot in
-                        guard let nativeContent = nativeContentBuilder?(tabSnapshot.tab, pane.id) else {
-                            return nil
-                        }
-                        return (tabSnapshot.tab.id.id, nativeContent)
+                paneContentByTabId: Dictionary(
+                    uniqueKeysWithValues: chrome.tabs.map { tabSnapshot in
+                        (
+                            tabSnapshot.tab.id.id,
+                            paneContentBuilder(tabSnapshot.tab, pane.id)
+                        )
                     }
                 )
             )
@@ -1472,14 +1443,14 @@ func workspaceLayoutMakeRenderNodeSnapshot(
                     node: split.first,
                     controller: controller,
                     tabChromeBuilder: tabChromeBuilder,
-                    nativeContentBuilder: nativeContentBuilder,
+                    paneContentBuilder: paneContentBuilder,
                     showSplitButtons: showSplitButtons
                 ),
                 second: workspaceLayoutMakeRenderNodeSnapshot(
                     node: split.second,
                     controller: controller,
                     tabChromeBuilder: tabChromeBuilder,
-                    nativeContentBuilder: nativeContentBuilder,
+                    paneContentBuilder: paneContentBuilder,
                     showSplitButtons: showSplitButtons
                 )
             )

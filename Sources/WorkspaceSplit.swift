@@ -376,7 +376,7 @@ enum WorkspaceLayout {
 }
 
 typealias WorkspaceLayoutTabChromeProvider = @MainActor (WorkspaceLayout.Tab, PaneID) -> WorkspaceLayout.Tab
-typealias WorkspaceLayoutNativeContentProvider = @MainActor (WorkspaceLayout.Tab, PaneID) -> WorkspaceNativePaneContent?
+typealias WorkspaceLayoutPaneContentProvider = @MainActor (WorkspaceLayout.Tab, PaneID) -> WorkspacePaneContent
 
 protocol WorkspaceLayoutDelegate: AnyObject {
     func workspaceSplit(_ controller: WorkspaceLayoutController, shouldCreateTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) -> Bool
@@ -394,6 +394,23 @@ protocol WorkspaceLayoutDelegate: AnyObject {
     func workspaceSplit(_ controller: WorkspaceLayoutController, didRequestTabContextAction action: TabContextAction, for tab: WorkspaceLayout.Tab, inPane pane: PaneID)
     func workspaceSplit(_ controller: WorkspaceLayoutController, didChangeGeometry snapshot: LayoutSnapshot)
     func workspaceSplit(_ controller: WorkspaceLayoutController, shouldNotifyDuringDrag: Bool) -> Bool
+}
+
+struct WorkspaceLayoutRenderContext {
+    let notificationStore: TerminalNotificationStore?
+    let isWorkspaceVisible: Bool
+    let isWorkspaceInputActive: Bool
+    let appearance: PanelAppearance
+    let workspacePortalPriority: Int
+    let usesWorkspacePaneOverlay: Bool
+    let showSplitButtons: Bool
+
+    func panelVisibleInUI(isSelectedInPane: Bool, isFocused: Bool) -> Bool {
+        guard isWorkspaceVisible else { return false }
+        // During pane/tab reparenting, WorkspaceSplit can transiently report selected=false
+        // for the currently focused panel. Keep focused content visible to avoid blank frames.
+        return isSelectedInPane || isFocused
+    }
 }
 
 extension WorkspaceLayoutDelegate {
@@ -2881,60 +2898,32 @@ final class WorkspaceLayoutController {
 
 import SwiftUI
 
-/// Main entry point for the WorkspaceLayout library
-///
-/// Usage:
-/// ```swift
-/// struct MyApp: View {
-///     @State private var controller = WorkspaceLayoutController()
-///
-///     var body: some View {
-///         WorkspaceLayoutView(controller: controller) { tab, paneId in
-///             MyContentView(for: tab)
-///                 .onTapGesture { controller.focusPane(paneId) }
-///         } emptyPane: { paneId in
-///             Text("Empty pane")
-///         }
-///     }
-/// }
-/// ```
-struct WorkspaceLayoutView<Content: View, EmptyContent: View>: View {
+/// Main entry point for the WorkspaceLayout library.
+struct WorkspaceLayoutView<EmptyContent: View>: View {
     @Bindable private var controller: WorkspaceLayoutController
-    private let renderSnapshot: WorkspaceLayoutRenderSnapshot?
-    private let contentBuilder: (WorkspaceLayout.Tab, PaneID) -> Content
+    private let renderSnapshot: WorkspaceLayoutRenderSnapshot
     private let emptyPaneBuilder: (PaneID) -> EmptyContent
-    private let tabChromeProvider: WorkspaceLayoutTabChromeProvider?
 
-    /// Initialize with a controller, content builder, and empty pane builder
+    /// Initialize with a controller and empty-pane builder.
     /// - Parameters:
     ///   - controller: The WorkspaceLayoutController managing the tab state
-    ///   - content: A ViewBuilder closure that provides content for each tab. Receives the tab and pane ID.
+    ///   - renderSnapshot: The canonical snapshot resolved by the workspace runtime owner
     ///   - emptyPane: A ViewBuilder closure that provides content for empty panes
     init(
         controller: WorkspaceLayoutController,
-        renderSnapshot: WorkspaceLayoutRenderSnapshot? = nil,
-        tabChrome: WorkspaceLayoutTabChromeProvider? = nil,
-        @ViewBuilder content: @escaping (WorkspaceLayout.Tab, PaneID) -> Content,
+        renderSnapshot: WorkspaceLayoutRenderSnapshot,
         @ViewBuilder emptyPane: @escaping (PaneID) -> EmptyContent
     ) {
         self.controller = controller
         self.renderSnapshot = renderSnapshot
-        self.tabChromeProvider = tabChrome
-        self.contentBuilder = content
         self.emptyPaneBuilder = emptyPane
     }
 
     var body: some View {
         let showSplitButtons = controller.configuration.allowSplits && controller.configuration.appearance.showSplitButtons
-        let resolvedRenderSnapshot = renderSnapshot ?? workspaceLayoutMakeRenderSnapshot(
-            controller: controller,
-            tabChromeBuilder: tabChromeProvider,
-            showSplitButtons: showSplitButtons
-        )
         WorkspaceLayoutNativeHost(
             controller: controller,
-            renderSnapshot: resolvedRenderSnapshot,
-            content: contentBuilder,
+            renderSnapshot: renderSnapshot,
             emptyPane: emptyPaneBuilder,
             showSplitButtons: showSplitButtons,
             onGeometryChange: { [weak controller] isDragging in
@@ -2944,38 +2933,21 @@ struct WorkspaceLayoutView<Content: View, EmptyContent: View>: View {
     }
 }
 
-// MARK: - Convenience initializer with default empty view
-
-extension WorkspaceLayoutView where EmptyContent == DefaultEmptyPaneView {
-    /// Initialize with a controller and content builder, using the default empty pane view
-    /// - Parameters:
-    ///   - controller: The WorkspaceLayoutController managing the tab state
-    ///   - content: A ViewBuilder closure that provides content for each tab. Receives the tab and pane ID.
-    init(
-        controller: WorkspaceLayoutController,
-        renderSnapshot: WorkspaceLayoutRenderSnapshot? = nil,
-        tabChrome: WorkspaceLayoutTabChromeProvider? = nil,
-        @ViewBuilder content: @escaping (WorkspaceLayout.Tab, PaneID) -> Content
-    ) {
-        self.controller = controller
-        self.renderSnapshot = renderSnapshot
-        self.tabChromeProvider = tabChrome
-        self.contentBuilder = content
-        self.emptyPaneBuilder = { _ in DefaultEmptyPaneView() }
-    }
-}
-
 @MainActor
-enum WorkspaceNativePaneContent {
+enum WorkspacePaneContent {
     case terminal(WorkspaceTerminalPaneContent)
     case browser(WorkspaceBrowserPaneContent)
+    case markdown(WorkspaceMarkdownPaneContent)
+    case placeholder(WorkspacePlaceholderPaneContent)
 }
 
-extension WorkspaceNativePaneContent {
+extension WorkspacePaneContent {
     var prefersNativeDropOverlay: Bool {
         switch self {
         case .terminal, .browser:
             true
+        case .markdown, .placeholder:
+            false
         }
     }
 }
@@ -3000,6 +2972,19 @@ struct WorkspaceBrowserPaneContent {
     let isVisibleInUI: Bool
     let portalPriority: Int
     let onRequestPanelFocus: () -> Void
+}
+
+@MainActor
+struct WorkspaceMarkdownPaneContent {
+    let panel: MarkdownPanel
+    let isVisibleInUI: Bool
+    let onRequestPanelFocus: () -> Void
+}
+
+@MainActor
+struct WorkspacePlaceholderPaneContent {
+    unowned let workspace: Workspace
+    let paneId: PaneID
 }
 
 /// Default view shown when a pane has no tabs

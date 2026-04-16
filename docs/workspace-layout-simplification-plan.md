@@ -41,7 +41,9 @@ Implemented on `issue-2289-appkit-split-host`:
 - `Workspace` internals now read and mutate that canonical surface state directly for session restore, focus, close, detach/attach, sidebar ordering, browser/markdown creation, remote tty/port updates, and tab chrome projection
 - `WorkspaceContentView` no longer assembles tab chrome projection state locally, and `Workspace` now builds the layout render snapshot that the AppKit host applies
 - `Workspace` now also resolves terminal/browser native pane content while building that render snapshot, so the AppKit host no longer asks `WorkspaceContentView` to rebuild runtime native descriptors from tabs during rendering
-- `WorkspaceLayoutView` and `WorkspaceLayoutNativeHost` no longer expose a separate native-content builder seam; the host consumes one canonical snapshot tree plus the SwiftUI fallback builder for non-native surfaces
+- `WorkspaceLayoutView` and `WorkspaceLayoutNativeHost` no longer expose a separate native-content builder seam; the host consumes one canonical snapshot tree for all pane content
+- all current surface kinds, terminal, browser, and markdown, now mount through the same workspace-owned pane-content descriptor path inside the AppKit host, and the dead `PanelContentView` fallback path is gone
+- `WorkspaceLayoutView` now requires a workspace-owned render snapshot instead of synthesizing one internally, so the shell boundary is purely "apply this snapshot" even for markdown and placeholder tabs
 - `TabManager`, `ContentView`, `WorkspaceContentView`, `TerminalController`, `AppleScriptSupport`, `GhosttyTerminalView`, and `TerminalImageTransfer` now consume canonical surface snapshots/accessors instead of wrapper-shaped metadata dictionaries
 - the old wrapper-shaped surface metadata API is gone from `Workspace`, so production code no longer reaches into parallel `panelTitles`-style stores
 - `TerminalController` workspace resolution now prefers its attached `TabManager` and only falls back to `AppDelegate` window contexts for cross-window routing, which keeps socket and telemetry ownership aligned with the runtime workspace owner

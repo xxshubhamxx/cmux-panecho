@@ -7534,12 +7534,19 @@ final class Workspace: Identifiable, ObservableObject {
         )
     }
 
-    private func makeNativePaneContent(
+    private func makePaneContentDescriptor(
         for tab: WorkspaceLayout.Tab,
         in paneId: PaneID,
         context: WorkspaceLayoutRenderContext
-    ) -> WorkspaceNativePaneContent? {
-        guard let panel = panel(for: tab.id) else { return nil }
+    ) -> WorkspacePaneContent {
+        guard let panel = panel(for: tab.id) else {
+            return .placeholder(
+                WorkspacePlaceholderPaneContent(
+                    workspace: self,
+                    paneId: paneId
+                )
+            )
+        }
 
         let isFocused = context.isWorkspaceInputActive && focusedPanelId == panel.id
         let isSelectedInPane = splitController.selectedTab(inPane: paneId)?.id == tab.id
@@ -7596,7 +7603,27 @@ final class Workspace: Identifiable, ObservableObject {
             )
         }
 
-        return nil
+        if let markdownPanel = panel as? MarkdownPanel {
+            return .markdown(
+                WorkspaceMarkdownPaneContent(
+                    panel: markdownPanel,
+                    isVisibleInUI: isVisibleInUI,
+                    onRequestPanelFocus: { [weak self, weak markdownPanel] in
+                        guard let self, let markdownPanel else { return }
+                        guard context.isWorkspaceInputActive else { return }
+                        guard self.panels[markdownPanel.id] != nil else { return }
+                        self.focusPanel(markdownPanel.id)
+                    }
+                )
+            )
+        }
+
+        return .placeholder(
+            WorkspacePlaceholderPaneContent(
+                workspace: self,
+                paneId: paneId
+            )
+        )
     }
 
     @MainActor
@@ -7607,8 +7634,8 @@ final class Workspace: Identifiable, ObservableObject {
             tabChromeBuilder: { [projectionState] tab, _ in
                 self.renderTabChrome(for: tab, using: projectionState)
             },
-            nativeContentBuilder: { [weak self] tab, paneId in
-                self?.makeNativePaneContent(for: tab, in: paneId, context: context)
+            paneContentBuilder: { tab, paneId in
+                return self.makePaneContentDescriptor(for: tab, in: paneId, context: context)
             },
             showSplitButtons: context.showSplitButtons
         )

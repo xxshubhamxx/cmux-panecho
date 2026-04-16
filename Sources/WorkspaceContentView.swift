@@ -235,23 +235,6 @@ struct TmuxWorkspacePaneOverlayObservedView: View {
     }
 }
 
-struct WorkspaceLayoutRenderContext {
-    let notificationStore: TerminalNotificationStore?
-    let isWorkspaceVisible: Bool
-    let isWorkspaceInputActive: Bool
-    let appearance: PanelAppearance
-    let workspacePortalPriority: Int
-    let usesWorkspacePaneOverlay: Bool
-    let showSplitButtons: Bool
-
-    func panelVisibleInUI(isSelectedInPane: Bool, isFocused: Bool) -> Bool {
-        guard isWorkspaceVisible else { return false }
-        // During pane/tab reparenting, WorkspaceSplit can transiently report selected=false
-        // for the currently focused panel. Keep focused content visible to avoid blank frames.
-        return isSelectedInPane || isFocused
-    }
-}
-
 /// View that renders a Workspace's content using WorkspaceLayoutView
 struct WorkspaceContentView: View {
     @ObservedObject var workspace: Workspace
@@ -300,8 +283,6 @@ struct WorkspaceContentView: View {
 
     var body: some View {
         let appearance = PanelAppearance.fromConfig(config)
-        let isSplit = workspace.splitController.allPaneIds.count > 1 ||
-            workspace.panels.count > 1
         let usesWorkspacePaneOverlay = TmuxOverlayExperimentSettings.target().usesWorkspacePaneOverlay
         let showSplitButtons =
             workspace.splitController.configuration.allowSplits &&
@@ -337,55 +318,7 @@ struct WorkspaceContentView: View {
         let splitView = WorkspaceLayoutView(
             controller: workspace.splitController,
             renderSnapshot: renderSnapshot
-        ) { tab, paneId in
-            let _ = Self.debugPanelLookup(tab: tab, workspace: workspace)
-            if let panel = workspace.panel(for: tab.id) {
-                let isFocused = isWorkspaceInputActive && workspace.focusedPanelId == panel.id
-                let isSelectedInPane = workspace.splitController.selectedTab(inPane: paneId)?.id == tab.id
-                let isVisibleInUI = renderContext.panelVisibleInUI(
-                    isSelectedInPane: isSelectedInPane,
-                    isFocused: isFocused
-                )
-                let showsNotificationRing = Workspace.shouldShowUnreadIndicator(
-                    hasUnreadNotification: renderContext.notificationStore?.hasVisibleNotificationIndicator(
-                        forTabId: workspace.id,
-                        surfaceId: panel.id
-                    ) ?? false,
-                    isManuallyUnread: workspace.isPanelManuallyUnread(panel.id)
-                )
-                PanelContentView(
-                    panel: panel,
-                    paneId: paneId,
-                    isFocused: isFocused,
-                    isSelectedInPane: isSelectedInPane,
-                    isVisibleInUI: isVisibleInUI,
-                    portalPriority: renderContext.workspacePortalPriority,
-                    isSplit: isSplit,
-                    appearance: renderContext.appearance,
-                    hasUnreadNotification: showsNotificationRing && !renderContext.usesWorkspacePaneOverlay,
-                    onFocus: {
-                        // Keep WorkspaceSplit focus in sync with the AppKit first responder for the
-                        // active workspace. This prevents divergence between the blue focused-tab
-                        // indicator and where keyboard input/flash-focus actually lands.
-                        guard isWorkspaceInputActive else { return }
-                        guard workspace.panels[panel.id] != nil else { return }
-                        workspace.focusPanel(panel.id, trigger: .terminalFirstResponder)
-                    },
-                    onRequestPanelFocus: {
-                        guard isWorkspaceInputActive else { return }
-                        guard workspace.panels[panel.id] != nil else { return }
-                        workspace.focusPanel(panel.id)
-                    },
-                    onTriggerFlash: { workspace.triggerDebugFlash(panelId: panel.id) }
-                )
-                .onTapGesture {
-                    workspace.splitController.focusPane(paneId)
-                }
-            } else {
-                // Fallback for tabs without panels (shouldn't happen normally)
-                EmptyPanelView(workspace: workspace, paneId: paneId)
-            }
-        } emptyPane: { paneId in
+        ) { paneId in
             // Empty pane content
             EmptyPanelView(workspace: workspace, paneId: paneId)
                 .onTapGesture {
@@ -723,35 +656,6 @@ struct WorkspaceContentView: View {
         guard GhosttyApp.shared.backgroundLogEnabled else { return }
         GhosttyApp.shared.logBackground(message)
     }
-}
-
-extension WorkspaceContentView {
-    #if DEBUG
-    static func debugPanelLookup(tab: WorkspaceLayout.Tab, workspace: Workspace) {
-        let found = workspace.panel(for: tab.id) != nil
-        if !found {
-            let ts = ISO8601DateFormatter().string(from: Date())
-            let line = "[\(ts)] PANEL NOT FOUND for tabId=\(tab.id) ws=\(workspace.id) panelCount=\(workspace.panels.count)\n"
-            let logPath = "/tmp/cmux-panel-debug.log"
-            if let handle = FileHandle(forWritingAtPath: logPath) {
-                handle.seekToEndOfFile()
-                handle.write(Data(line.utf8))
-                handle.closeFile()
-            } else {
-                FileManager.default.createFile(atPath: logPath, contents: line.data(using: .utf8))
-            }
-            startupLog(
-                "startup.host.panelLookupMissing workspace=\(workspace.id.uuidString.prefix(5)) " +
-                    "tab=\(tab.id.uuid.uuidString.prefix(5)) panelCount=\(workspace.panels.count)"
-            )
-        }
-    }
-    #else
-    static func debugPanelLookup(tab: WorkspaceLayout.Tab, workspace: Workspace) {
-        _ = tab
-        _ = workspace
-    }
-    #endif
 }
 
 /// View shown for empty panes
