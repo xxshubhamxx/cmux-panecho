@@ -3007,6 +3007,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return .terminateLater
     }
 
+    /// Bypass the Cmd+Q warning dialog from an automation socket so the next
+    /// NSApp.terminate() goes straight to applicationWillTerminate with the
+    /// keep-daemon default (shouldKillDaemonOnQuit = false).
+    func suppressQuitWarningForAutomation() {
+        isQuitWarningConfirmed = true
+        shouldKillDaemonOnQuit = false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         isTerminatingApp = true
         #if DEBUG

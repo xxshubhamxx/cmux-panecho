@@ -2398,6 +2398,8 @@ class TerminalController {
             return v2Result(id: id, self.v2DebugType(params: params))
         case "debug.app.activate":
             return v2Result(id: id, self.v2DebugActivateApp())
+        case "debug.app.quit_keep_daemon":
+            return v2Result(id: id, self.v2DebugQuitKeepDaemon())
         case "debug.command_palette.toggle":
             return v2Result(id: id, self.v2DebugToggleCommandPalette(params: params))
         case "debug.command_palette.rename_tab.open":
@@ -10997,6 +10999,22 @@ class TerminalController {
     private func v2DebugActivateApp() -> V2CallResult {
         let resp = activateApp()
         return resp == "OK" ? .ok([:]) : .err(code: "internal_error", message: resp, data: nil)
+    }
+
+    /// Socket-driven equivalent of Cmd+Q → "Quit (keep daemon)". Bypasses the
+    /// confirm alert, preserves the daemon (shouldKillDaemonOnQuit stays
+    /// false), and hands off to NSApp.terminate so applicationWillTerminate
+    /// runs the full save/cleanup path. Lets us close the loop on
+    /// daemon-survival testing without the UI.
+    private func v2DebugQuitKeepDaemon() -> V2CallResult {
+        guard let delegate = AppDelegate.shared else {
+            return .err(code: "unavailable", message: "AppDelegate not available", data: nil)
+        }
+        DispatchQueue.main.async {
+            delegate.suppressQuitWarningForAutomation()
+            NSApp.terminate(nil)
+        }
+        return .ok([:])
     }
 
     private func v2DebugToggleCommandPalette(params: [String: Any]) -> V2CallResult {
