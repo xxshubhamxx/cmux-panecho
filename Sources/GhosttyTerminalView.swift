@@ -4289,7 +4289,6 @@ final class TerminalSurface: Identifiable, ObservableObject {
             let shellCommand = "env \(envPrefix) \(shell) -l"
 
             let bridge = DaemonTerminalBridge(
-                socketPath: daemonSocket,
                 sessionID: initialSessionID,
                 shellCommand: shellCommand
             )

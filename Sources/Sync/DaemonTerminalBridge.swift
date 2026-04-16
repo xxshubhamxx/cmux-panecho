@@ -29,9 +29,7 @@ final class DaemonTerminalBridge: @unchecked Sendable {
     /// Authoritative `session.view_size` delivery from the daemon.
     var onViewSize: ((_ cols: Int, _ rows: Int) -> Void)?
 
-    init(socketPath: String, sessionID: String?, shellCommand: String) {
-        // socketPath is ignored — DaemonConnection owns the socket path.
-        _ = socketPath
+    init(sessionID: String?, shellCommand: String) {
         self.sessionID = sessionID
         self.shellCommand = shellCommand
     }

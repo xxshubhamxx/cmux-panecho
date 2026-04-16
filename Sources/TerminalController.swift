@@ -3860,11 +3860,9 @@ class TerminalController {
                 // createSurface() which is triggered by the SwiftUI
                 // view lifecycle. For headless testing, start the
                 // bridge directly if the daemon is running.
-                guard let daemonSocket = MobileDaemonBridgeInline.shared.daemonSocketPath,
-                      MobileDaemonBridgeInline.shared.isRunning else { continue }
+                guard MobileDaemonBridgeInline.shared.isRunning else { continue }
                 let savedSessionID = surface.savedDaemonSessionID
                 let bridge = DaemonTerminalBridge(
-                    socketPath: daemonSocket,
                     sessionID: savedSessionID,
                     shellCommand: "/bin/zsh -l"
                 )

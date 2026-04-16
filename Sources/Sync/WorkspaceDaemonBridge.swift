@@ -177,7 +177,7 @@ final class WorkspaceDaemonBridge {
                 // workspace via workspace.open_pane) carry a live pane with
                 // a daemon-minted session id. Adopt it so the new mac tab
                 // attaches to the running shell rather than minting a
-                // second pane via createSurface's openPane fallback.
+                // second pane when createSurface calls workspace.open_pane.
                 let adoptedSessionID: String? = {
                     if let panes = entry["panes"] as? [[String: Any]],
                        let first = panes.first,
