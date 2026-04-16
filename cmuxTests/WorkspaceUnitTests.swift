@@ -2330,22 +2330,20 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         workspace.setPanelCustomTitle(panelId: panelId, title: "Snapshot custom title")
         workspace.setPanelPinned(panelId: panelId, pinned: true)
         workspace.markPanelUnread(panelId)
-        let projectionState = workspace.makeTabChromeProjectionState(notificationStore: nil)
-
-        let snapshot = workspaceLayoutMakeRenderSnapshot(
-            controller: workspace.splitController,
-            tabChromeBuilder: { tab, _ in
-                workspace.renderTabChrome(for: tab, using: projectionState)
-            },
-            paneContentBuilder: { _, paneId in
-                .placeholder(
-                    WorkspacePlaceholderPaneContent(
-                        workspace: workspace,
-                        paneId: paneId
-                    )
-                )
-            },
-            showSplitButtons: true
+        let snapshot = workspace.makeLayoutRenderSnapshot(
+            context: WorkspaceLayoutRenderContext(
+                notificationStore: nil,
+                isWorkspaceVisible: true,
+                isWorkspaceInputActive: true,
+                appearance: PanelAppearance(
+                    dividerColor: .clear,
+                    unfocusedOverlayNSColor: .clear,
+                    unfocusedOverlayOpacity: 0
+                ),
+                workspacePortalPriority: 0,
+                usesWorkspacePaneOverlay: false,
+                showSplitButtons: true
+            )
         )
 
         guard let pane = firstPaneSnapshot(from: snapshot),

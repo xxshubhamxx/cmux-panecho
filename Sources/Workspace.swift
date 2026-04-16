@@ -7619,18 +7619,104 @@ final class Workspace: Identifiable, ObservableObject {
         )
     }
 
+    private func makePaneChromeSnapshot(
+        pane: PaneState,
+        projectionState: WorkspaceTabChromeProjectionState,
+        showSplitButtons: Bool
+    ) -> WorkspaceLayoutPaneChromeSnapshot {
+        let selectedTabId = pane.selectedTabId ?? pane.tabs.first?.id
+        let paneId = pane.id
+        let renderedTabs = pane.tabs.map { tab in
+            renderTabChrome(
+                for: WorkspaceLayout.Tab(from: tab),
+                using: projectionState
+            )
+        }
+        let tabs = renderedTabs.enumerated().map { index, tab in
+            WorkspaceLayoutTabChromeSnapshot(
+                tab: tab,
+                contextMenuState: workspaceSplitContextMenuState(
+                    for: tab,
+                    paneId: paneId,
+                    tabs: renderedTabs,
+                    at: index,
+                    controller: splitController
+                ),
+                isSelected: selectedTabId == tab.id.id,
+                showsZoomIndicator: splitController.zoomedPaneId == paneId && selectedTabId == tab.id.id
+            )
+        }
+        return WorkspaceLayoutPaneChromeSnapshot(
+            paneId: paneId,
+            tabs: tabs,
+            selectedTabId: selectedTabId,
+            isFocused: splitController.focusedPaneId == paneId,
+            showSplitButtons: showSplitButtons,
+            chromeRevision: pane.chromeRevision
+        )
+    }
+
+    private func makeRenderNodeSnapshot(
+        node: SplitNode,
+        projectionState: WorkspaceTabChromeProjectionState,
+        context: WorkspaceLayoutRenderContext
+    ) -> WorkspaceLayoutRenderNodeSnapshot {
+        switch node {
+        case .pane(let pane):
+            let chrome = makePaneChromeSnapshot(
+                pane: pane,
+                projectionState: projectionState,
+                showSplitButtons: context.showSplitButtons
+            )
+            return .pane(
+                WorkspaceLayoutPaneRenderSnapshot(
+                    paneId: pane.id,
+                    tabs: chrome.tabs.map(\.tab),
+                    selectedTabId: chrome.selectedTabId,
+                    chrome: chrome,
+                    paneContentByTabId: Dictionary(
+                        uniqueKeysWithValues: chrome.tabs.map { tabSnapshot in
+                            (
+                                tabSnapshot.tab.id.id,
+                                makePaneContentDescriptor(
+                                    for: tabSnapshot.tab,
+                                    in: pane.id,
+                                    context: context
+                                )
+                            )
+                        }
+                    )
+                )
+            )
+        case .split(let split):
+            return .split(
+                WorkspaceLayoutSplitRenderSnapshot(
+                    splitId: split.id,
+                    first: makeRenderNodeSnapshot(
+                        node: split.first,
+                        projectionState: projectionState,
+                        context: context
+                    ),
+                    second: makeRenderNodeSnapshot(
+                        node: split.second,
+                        projectionState: projectionState,
+                        context: context
+                    )
+                )
+            )
+        }
+    }
+
     @MainActor
     func makeLayoutRenderSnapshot(context: WorkspaceLayoutRenderContext) -> WorkspaceLayoutRenderSnapshot {
         let projectionState = makeTabChromeProjectionState(notificationStore: context.notificationStore)
-        return workspaceLayoutMakeRenderSnapshot(
-            controller: splitController,
-            tabChromeBuilder: { [projectionState] tab, _ in
-                self.renderTabChrome(for: tab, using: projectionState)
-            },
-            paneContentBuilder: { tab, paneId in
-                return self.makePaneContentDescriptor(for: tab, in: paneId, context: context)
-            },
-            showSplitButtons: context.showSplitButtons
+        let root = splitController.internalController.zoomedNode ?? splitController.internalController.rootNode
+        return WorkspaceLayoutRenderSnapshot(
+            root: makeRenderNodeSnapshot(
+                node: root,
+                projectionState: projectionState,
+                context: context
+            )
         )
     }
 

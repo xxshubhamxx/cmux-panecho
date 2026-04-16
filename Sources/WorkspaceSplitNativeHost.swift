@@ -1346,119 +1346,6 @@ struct WorkspaceLayoutRenderSnapshot {
 }
 
 @MainActor
-private func workspaceLayoutMakePaneChromeSnapshot(
-    pane: PaneState,
-    controller: WorkspaceLayoutController,
-    tabChromeBuilder: WorkspaceLayoutTabChromeProvider?,
-    showSplitButtons: Bool,
-    isFocused: Bool
-) -> WorkspaceLayoutPaneChromeSnapshot {
-    let selectedTabId = pane.selectedTabId ?? pane.tabs.first?.id
-    let paneId = pane.id
-    let renderTabs = pane.tabs.map { tab in
-        let baseTab = WorkspaceLayout.Tab(from: tab)
-        return tabChromeBuilder?(baseTab, paneId) ?? baseTab
-    }
-    let tabs = renderTabs.enumerated().map { index, tab in
-        WorkspaceLayoutTabChromeSnapshot(
-            tab: tab,
-            contextMenuState: workspaceSplitContextMenuState(
-                for: tab,
-                paneId: paneId,
-                tabs: renderTabs,
-                at: index,
-                controller: controller
-            ),
-            isSelected: selectedTabId == tab.id.id,
-            showsZoomIndicator: controller.zoomedPaneId == paneId && selectedTabId == tab.id.id
-        )
-    }
-    return WorkspaceLayoutPaneChromeSnapshot(
-        paneId: paneId,
-        tabs: tabs,
-        selectedTabId: selectedTabId,
-        isFocused: isFocused,
-        showSplitButtons: showSplitButtons,
-        chromeRevision: pane.chromeRevision
-    )
-}
-
-@MainActor
-func workspaceLayoutMakeRenderSnapshot(
-    controller: WorkspaceLayoutController,
-    tabChromeBuilder: WorkspaceLayoutTabChromeProvider?,
-    paneContentBuilder: WorkspaceLayoutPaneContentProvider,
-    showSplitButtons: Bool
-) -> WorkspaceLayoutRenderSnapshot {
-    let root = controller.internalController.zoomedNode ?? controller.internalController.rootNode
-    return WorkspaceLayoutRenderSnapshot(
-        root: workspaceLayoutMakeRenderNodeSnapshot(
-            node: root,
-            controller: controller,
-            tabChromeBuilder: tabChromeBuilder,
-            paneContentBuilder: paneContentBuilder,
-            showSplitButtons: showSplitButtons
-        )
-    )
-}
-
-@MainActor
-func workspaceLayoutMakeRenderNodeSnapshot(
-    node: SplitNode,
-    controller: WorkspaceLayoutController,
-    tabChromeBuilder: WorkspaceLayoutTabChromeProvider?,
-    paneContentBuilder: WorkspaceLayoutPaneContentProvider,
-    showSplitButtons: Bool
-) -> WorkspaceLayoutRenderNodeSnapshot {
-    switch node {
-    case .pane(let pane):
-        let chrome = workspaceLayoutMakePaneChromeSnapshot(
-            pane: pane,
-            controller: controller,
-            tabChromeBuilder: tabChromeBuilder,
-            showSplitButtons: showSplitButtons,
-            isFocused: controller.focusedPaneId == pane.id
-        )
-        return .pane(
-            WorkspaceLayoutPaneRenderSnapshot(
-                paneId: pane.id,
-                tabs: chrome.tabs.map(\.tab),
-                selectedTabId: chrome.selectedTabId,
-                chrome: chrome,
-                paneContentByTabId: Dictionary(
-                    uniqueKeysWithValues: chrome.tabs.map { tabSnapshot in
-                        (
-                            tabSnapshot.tab.id.id,
-                            paneContentBuilder(tabSnapshot.tab, pane.id)
-                        )
-                    }
-                )
-            )
-        )
-    case .split(let split):
-        return .split(
-            WorkspaceLayoutSplitRenderSnapshot(
-                splitId: split.id,
-                first: workspaceLayoutMakeRenderNodeSnapshot(
-                    node: split.first,
-                    controller: controller,
-                    tabChromeBuilder: tabChromeBuilder,
-                    paneContentBuilder: paneContentBuilder,
-                    showSplitButtons: showSplitButtons
-                ),
-                second: workspaceLayoutMakeRenderNodeSnapshot(
-                    node: split.second,
-                    controller: controller,
-                    tabChromeBuilder: tabChromeBuilder,
-                    paneContentBuilder: paneContentBuilder,
-                    showSplitButtons: showSplitButtons
-                )
-            )
-        )
-    }
-}
-
-@MainActor
 private final class WorkspaceLayoutNativeTabBarView: NSView {
     private var snapshot: WorkspaceLayoutPaneChromeSnapshot?
     private var controller: WorkspaceLayoutController?
@@ -3236,7 +3123,7 @@ private final class WorkspaceLayoutPaneDropOverlayView: NSView {
 }
 
 @MainActor
-private func workspaceSplitContextMenuState(
+func workspaceSplitContextMenuState(
     for tab: WorkspaceLayout.Tab,
     paneId: PaneID,
     tabs: [WorkspaceLayout.Tab],
