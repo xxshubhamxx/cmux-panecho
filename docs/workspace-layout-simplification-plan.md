@@ -50,6 +50,7 @@ Implemented on `issue-2289-appkit-split-host`:
 - focused behavior coverage for the ownership cut passes, including workspace state, content visibility, socket security, session persistence, sidebar ordering, browser config, and remote connection suites
 - browser portal teardown is now owned by `BrowserPanel.close()` instead of a workspace-wide pre-close sweep, which keeps portal lifecycle at the retained-surface boundary
 - `Workspace` now owns render-snapshot construction directly, and the old generic `workspaceLayoutMakeRenderSnapshot` builder seam is gone from production code
+- `WorkspaceLayoutDelegate` is now `@MainActor`, matching the controller and workspace shell ownership boundary instead of relying on a nonisolated delegate protocol
 
 No required architecture work from this simplification plan remains on this branch.
 

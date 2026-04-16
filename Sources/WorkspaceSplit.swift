@@ -375,6 +375,7 @@ enum WorkspaceLayout {
     }
 }
 
+@MainActor
 protocol WorkspaceLayoutDelegate: AnyObject {
     func workspaceSplit(_ controller: WorkspaceLayoutController, shouldCreateTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) -> Bool
     func workspaceSplit(_ controller: WorkspaceLayoutController, shouldCloseTab tab: WorkspaceLayout.Tab, inPane pane: PaneID) -> Bool
