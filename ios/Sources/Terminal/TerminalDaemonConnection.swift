@@ -26,6 +26,11 @@ actor TerminalDaemonConnection {
     private var subscribed = false
     private let pushConfigurator: PushNotificationConfigurator
     private var lastPushConfiguration: PushNotificationConfigurator.DaemonConfiguration?
+    /// Continuations waiting for the next post-reconnect workspace.subscribe
+    /// round to complete. Resumed after the subscribe RPC returns, whether
+    /// it succeeded or not — by that point the refresh cycle has made one
+    /// full pass and the caller can dismiss its spinner.
+    private var pendingSubscribeRoundWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         hostname: String,
@@ -85,11 +90,29 @@ actor TerminalDaemonConnection {
     /// Force an immediate reconnect: tear down the current client so the
     /// subscription loop wakes from `waitForTransportFailure` and goes
     /// through `ensureConnected` again on the next iteration. Used by
-    /// pull-to-refresh and the (planned) scenePhase-active hook so the
-    /// user doesn't have to wait for the 5s hello probe + 2s backoff
-    /// after a known-good reconnect signal.
+    /// scenePhase-active hook and by `kickAndAwaitFirstSync` below.
     func kickReconnect() async {
         await teardownClient()
+    }
+
+    /// Pull-to-refresh variant: kicks the connection, then suspends until
+    /// the subscription loop completes its next workspace.subscribe round
+    /// (success or error). Lets the refreshable spinner dismiss only after
+    /// fresh state has arrived instead of after a blind delay.
+    func kickAndAwaitFirstSync() async {
+        await withCheckedContinuation { continuation in
+            pendingSubscribeRoundWaiters.append(continuation)
+            Task { await self.teardownClient() }
+        }
+    }
+
+    private func resumeSubscribeRoundWaiters() {
+        guard !pendingSubscribeRoundWaiters.isEmpty else { return }
+        let waiters = pendingSubscribeRoundWaiters
+        pendingSubscribeRoundWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     func workspaceRename(workspaceID: String, title: String) async throws {
@@ -112,6 +135,9 @@ actor TerminalDaemonConnection {
             } catch {
                 consecutiveFailures += 1
                 onEvent(.connectFailed(consecutiveFailures: consecutiveFailures))
+                // Unblock any pull-to-refresh waiters so the spinner
+                // dismisses even when the daemon can't be reached.
+                resumeSubscribeRoundWaiters()
                 let delay = min(30.0, 5.0 * pow(2.0, Double(min(consecutiveFailures - 1, 3))))
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 continue
@@ -136,6 +162,7 @@ actor TerminalDaemonConnection {
             if let initialResult, let initialJSON = Self.encodeWorkspaceList(initialResult) {
                 onEvent(.workspacesJSON(initialJSON))
             }
+            resumeSubscribeRoundWaiters()
 
             await waitForTransportFailure(client: connectionClient)
 
@@ -144,24 +171,17 @@ actor TerminalDaemonConnection {
             onEvent(.disconnected)
 
             if !subscribed || Task.isCancelled { break }
-            // Brief pause before reconnect attempt to avoid tight loops on
-            // immediate failures.
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            // If the next ensureConnected() fails immediately the outer
+            // exponential-backoff path (consecutiveFailures) kicks in, so
+            // no blanket pause is needed here.
         }
     }
 
     private func waitForTransportFailure(client: TerminalRemoteDaemonClient) async {
-        // Lightweight liveness probe: poll with no-op RPCs until one fails.
-        // The dispatcher fails pending RPCs when the transport drops.
-        while !Task.isCancelled && subscribed {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if Task.isCancelled || !subscribed { return }
-            do {
-                _ = try await client.sendHello()
-            } catch {
-                return
-            }
-        }
+        // The dispatcher marks the client closed and resumes any awaiters
+        // as soon as transport.readLine throws, so waiting is purely
+        // event-driven — no hello polling needed.
+        await client.awaitClose()
     }
 
     private func ensureConnected() async throws -> (TerminalRemoteDaemonClient, TerminalRemoteDaemonHello) {

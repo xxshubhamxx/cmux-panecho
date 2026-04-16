@@ -68,8 +68,10 @@ final class TerminalDaemonConnectionPool: @unchecked Sendable {
         return connections.removeValue(forKey: stableID)
     }
 
-    /// Kick every pooled connection to tear down + reconnect immediately.
-    /// Backs the workspace-list pull-to-refresh.
+    /// Kick every pooled connection to tear down + reconnect immediately,
+    /// returning only after each one's next workspace.subscribe round
+    /// completes (or the connect fails and the waiter is released). Backs
+    /// the workspace-list pull-to-refresh.
     func refreshAll() async {
         let snapshot: [TerminalDaemonConnection] = {
             lock.lock()
@@ -78,7 +80,7 @@ final class TerminalDaemonConnectionPool: @unchecked Sendable {
         }()
         await withTaskGroup(of: Void.self) { group in
             for connection in snapshot {
-                group.addTask { await connection.kickReconnect() }
+                group.addTask { await connection.kickAndAwaitFirstSync() }
             }
         }
     }

@@ -322,6 +322,9 @@ actor TerminalRemoteDaemonClient {
     private var pendingWorkspaceEvents: [String] = []
     private var dispatcher: Task<Void, Never>?
     private var transportFailure: Error?
+    /// Continuations suspended on `awaitClose`. Resumed exactly once by
+    /// `failPending` when the dispatcher notices the transport dropped.
+    private var closeWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(transport: any TerminalRemoteDaemonTransport, rpcTimeoutSeconds: TimeInterval = 30) {
         self.transport = transport
@@ -333,6 +336,16 @@ actor TerminalRemoteDaemonClient {
 
     func isClosed() -> Bool {
         transportFailure != nil
+    }
+
+    /// Suspends until the dispatcher observes the transport close. Returns
+    /// immediately if the transport already failed. Replaces the previous
+    /// 5s polling hello-probe with an event-driven wait.
+    func awaitClose() async {
+        if transportFailure != nil { return }
+        await withCheckedContinuation { continuation in
+            closeWaiters.append(continuation)
+        }
     }
 
     func setPushHandler(sessionID: String, handler: @escaping @Sendable (TerminalPushEvent) -> Void) {
@@ -769,6 +782,11 @@ actor TerminalRemoteDaemonClient {
         pendingRequests.removeAll()
         for (_, continuation) in snapshot {
             continuation.resume(throwing: error)
+        }
+        let closeSnapshot = closeWaiters
+        closeWaiters.removeAll()
+        for waiter in closeSnapshot {
+            waiter.resume()
         }
     }
 
