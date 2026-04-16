@@ -853,16 +853,16 @@ private final class WorkspaceLayoutPaneHostView: NSView {
     }
 
     private func refreshContent() {
-        guard !snapshot.tabs.isEmpty else {
+        guard !snapshot.chrome.tabs.isEmpty else {
             removeAllMountedTabContent()
             refreshEmptyPaneContent()
             return
         }
 
-        let selectedId = snapshot.selectedTabId ?? snapshot.tabs.first?.id.id
-        let targetIds = Set(snapshot.tabs.map(\.id.id))
-        for tab in snapshot.tabs {
-            refreshContent(for: tab, selectedId: selectedId)
+        let selectedId = snapshot.chrome.selectedTabId ?? snapshot.chrome.tabs.first?.tab.id.id
+        let targetIds = Set(snapshot.chrome.tabs.map(\.tab.id.id))
+        for tabSnapshot in snapshot.chrome.tabs {
+            refreshContent(for: tabSnapshot.tab, selectedId: selectedId)
         }
 
         for (tabId, content) in mountedTabContent where !targetIds.contains(tabId) {
@@ -940,7 +940,7 @@ private final class WorkspaceLayoutPaneHostView: NSView {
                 .transaction { tx in
                     tx.disablesAnimations = true
                 }
-                .animation(nil, value: snapshot.selectedTabId)
+                .animation(nil, value: snapshot.chrome.selectedTabId)
             )
         case .placeholder(let descriptor):
             return AnyView(
@@ -949,7 +949,7 @@ private final class WorkspaceLayoutPaneHostView: NSView {
                     .transaction { tx in
                         tx.disablesAnimations = true
                     }
-                    .animation(nil, value: snapshot.selectedTabId)
+                    .animation(nil, value: snapshot.chrome.selectedTabId)
             )
         case .terminal, .browser:
             preconditionFailure("Native pane content should not be hosted through NSHostingController")
@@ -1089,7 +1089,7 @@ private final class WorkspaceLayoutPaneHostView: NSView {
             hostView.update(
                 descriptor: descriptor,
                 activeDropZone: isSelected ? activeDropZone : nil,
-                selectedTabId: snapshot.selectedTabId
+                selectedTabId: snapshot.chrome.selectedTabId
             )
             slotView.installContentView(hostView)
             entry = .browser(hostView: hostView, slotView: slotView)
@@ -1101,7 +1101,7 @@ private final class WorkspaceLayoutPaneHostView: NSView {
             hostView.update(
                 descriptor: descriptor,
                 activeDropZone: isSelected ? activeDropZone : nil,
-                selectedTabId: snapshot.selectedTabId
+                selectedTabId: snapshot.chrome.selectedTabId
             )
 
             let slotView = WorkspaceLayoutPaneContentSlotView(frame: contentContainer.bounds)

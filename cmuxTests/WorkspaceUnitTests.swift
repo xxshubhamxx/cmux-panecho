@@ -2347,7 +2347,7 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         )
 
         guard let pane = firstPaneSnapshot(from: snapshot),
-              let renderedTab = pane.tabs.first else {
+              let renderedTab = pane.chrome.tabs.first?.tab else {
             XCTFail("Expected pane snapshot with a rendered tab")
             return
         }

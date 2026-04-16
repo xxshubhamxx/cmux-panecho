@@ -3038,8 +3038,6 @@ struct WorkspaceLayoutPaneChromeSnapshot {
 
 struct WorkspaceLayoutPaneRenderSnapshot {
     let paneId: PaneID
-    let tabs: [WorkspaceLayout.Tab]
-    let selectedTabId: UUID?
     let chrome: WorkspaceLayoutPaneChromeSnapshot
     let emptyPaneContent: WorkspacePaneContent?
     let paneContentByTabId: [UUID: WorkspacePaneContent]

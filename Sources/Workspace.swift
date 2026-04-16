@@ -7680,8 +7680,6 @@ final class Workspace: Identifiable, ObservableObject {
             return .pane(
                 WorkspaceLayoutPaneRenderSnapshot(
                     paneId: pane.id,
-                    tabs: chrome.tabs.map(\.tab),
-                    selectedTabId: chrome.selectedTabId,
                     chrome: chrome,
                     emptyPaneContent: chrome.tabs.isEmpty ? makeEmptyPaneContentDescriptor(in: pane.id) : nil,
                     paneContentByTabId: Dictionary(
