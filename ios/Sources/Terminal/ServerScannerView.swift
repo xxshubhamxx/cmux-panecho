@@ -190,23 +190,58 @@ final class ServerScanner {
             }
         }
         guard connectResult == 0 else { return nil }
+        ScannerLog.shared.log("probe.connect ok host=\(hostname):\(port)")
 
         let req = "GET / HTTP/1.1\r\nHost: \(hostname):\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n"
         _ = req.data(using: .utf8)?.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
         var buf = [UInt8](repeating: 0, count: 4096)
         let n = read(fd, &buf, buf.count)
-        guard n > 0, String(bytes: buf[0..<n], encoding: .utf8)?.contains("101") == true else { return nil }
+        guard n > 0 else {
+            ScannerLog.shared.log("probe.upgrade.fail host=\(hostname):\(port) n=\(n) errno=\(errno)")
+            return nil
+        }
+        let httpResponse = String(bytes: buf[0..<n], encoding: .utf8) ?? ""
+        guard httpResponse.contains("101") else {
+            ScannerLog.shared.log("probe.upgrade.reject host=\(hostname):\(port) resp=\(httpResponse.prefix(80))")
+            return nil
+        }
+        ScannerLog.shared.log("probe.upgrade ok host=\(hostname):\(port)")
 
         wsSend(fd: fd, data: "{\"secret\":\"\(secret)\"}")
-        guard let authResp = wsRecv(fd: fd), authResp.contains("authenticated") else { return nil }
+        guard let authResp = wsRecv(fd: fd) else {
+            ScannerLog.shared.log("probe.auth.norecv host=\(hostname):\(port)")
+            return nil
+        }
+        guard authResp.contains("authenticated") else {
+            ScannerLog.shared.log("probe.auth.reject host=\(hostname):\(port) resp=\(authResp.prefix(120))")
+            return nil
+        }
+        ScannerLog.shared.log("probe.auth ok host=\(hostname):\(port)")
 
         wsSend(fd: fd, data: "{\"id\":1,\"method\":\"hello\"}")
-        guard let helloResp = wsRecv(fd: fd),
-              let helloData = helloResp.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: helloData) as? [String: Any],
-              let result = json["result"] as? [String: Any],
+        // The daemon starts pushing workspace.changed events as soon as the
+        // WebSocket is authenticated. Our hello response can land behind
+        // one or more of those pushes, so skip any frame that isn't the
+        // id=1 reply we're waiting for.
+        var helloResult: [String: Any]?
+        var lastFrame = ""
+        for _ in 0..<10 {
+            guard let frame = wsRecv(fd: fd) else { break }
+            lastFrame = frame
+            guard let frameData = frame.data(using: .utf8),
+                  let frameJSON = try? JSONSerialization.jsonObject(with: frameData) as? [String: Any] else {
+                continue
+            }
+            if let id = frameJSON["id"] as? Int, id == 1,
+               let result = frameJSON["result"] as? [String: Any] {
+                helloResult = result
+                break
+            }
+        }
+        guard let result = helloResult,
               let name = result["name"] as? String,
               let version = result["version"] as? String else {
+            ScannerLog.shared.log("probe.hello.parse host=\(hostname):\(port) last=\(lastFrame.prefix(120))")
             return nil
         }
 
