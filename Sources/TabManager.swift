@@ -2038,18 +2038,20 @@ class TabManager: ObservableObject {
                     sendWelcomeWhenReady(to: newWorkspace)
                 }
             }
-            // When the daemon owns workspace existence, mirror the local create
-            // to the daemon so the rest of the system (CLI list, iOS, web) sees
-            // it. The pending_creates entry suppresses the daemon's echo from
-            // re-instantiating the same workspace locally.
-            if WorkspaceDaemonBridge.existenceOwnedByDaemon {
-                DaemonConnection.shared.markPendingCreate(workspaceID: newWorkspace.id)
-                DaemonConnection.shared.sendWorkspaceCreate(
-                    workspaceID: newWorkspace.id,
-                    title: newWorkspace.title,
-                    directory: newWorkspace.currentDirectory
-                )
-            }
+            // Register the workspace with the daemon BEFORE the surface
+            // lazy-renders and fires workspace.open_pane. Without this the
+            // openPane RPC races sync: sync is queued on a 50ms debounce,
+            // SwiftUI renders the surface within that window, openPane sees
+            // the workspace missing and exhausts its 5 retries. Firing
+            // workspace.create here guarantees the daemon has the workspace
+            // by the time openPane lands. pendingCreate dedupes the
+            // inbound workspace.changed echo.
+            DaemonConnection.shared.markPendingCreate(workspaceID: newWorkspace.id)
+            DaemonConnection.shared.sendWorkspaceCreate(
+                workspaceID: newWorkspace.id,
+                title: newWorkspace.title,
+                directory: newWorkspace.currentDirectory
+            )
             return newWorkspace
         }
     }
