@@ -1359,20 +1359,26 @@ final class SessionIndexStore: ObservableObject {
         }
         defer { sqlite3_close(db) }
 
+        // Prefer the session's owning project.worktree over session.directory
+        // for cwd: opencode binds sessions to a project_id, and `--session` must
+        // be run from the project's worktree or it fails with
+        // "No context found for instance". session.directory can point at a
+        // sibling worktree the user was browsing when the session was created.
         var sql = """
-            SELECT s.id, s.title, s.directory, s.time_updated, (
+            SELECT s.id, s.title, COALESCE(p.worktree, s.directory) AS cwd, s.time_updated, (
                 SELECT data FROM message
                 WHERE session_id = s.id AND data LIKE '%"role":"assistant"%'
                 ORDER BY time_created DESC LIMIT 1
             ) AS last_assistant
             FROM session s
+            LEFT JOIN project p ON p.id = s.project_id
             """
         var conditions: [String] = []
         if !needle.isEmpty {
-            conditions.append("(LOWER(s.title) LIKE ? OR LOWER(s.directory) LIKE ?)")
+            conditions.append("(LOWER(s.title) LIKE ? OR LOWER(COALESCE(p.worktree, s.directory)) LIKE ?)")
         }
         if cwdFilter != nil {
-            conditions.append("s.directory = ?")
+            conditions.append("COALESCE(p.worktree, s.directory) = ?")
         }
         if !conditions.isEmpty {
             sql += " WHERE " + conditions.joined(separator: " AND ")
