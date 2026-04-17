@@ -1750,7 +1750,13 @@ fileprivate static func runtimeReadClipboardCallback(
             guard let callbackContext = GhosttyApp.callbackContext(from: userdata) else { return }
             let callbackSurfaceId = callbackContext.surfaceId
             let callbackTabId = callbackContext.tabId
-            callbackContext.terminalSurface?.suppressRuntimeSurfaceRestart(reason: "ghostty.close_surface_cb")
+            if !needsConfirmClose {
+                // Confirmed-close flows suppress restart when the host actually begins closing.
+                // Suppressing here would strand the panel if the user cancels the dialog.
+                callbackContext.terminalSurface?.suppressRuntimeSurfaceRestart(
+                    reason: "ghostty.close_surface_cb"
+                )
+            }
 
 #if DEBUG
             cmuxWriteChildExitProbe(
