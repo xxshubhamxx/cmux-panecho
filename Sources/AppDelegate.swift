@@ -44,6 +44,116 @@ final class MainWindowHostingView<Content: View>: NSHostingView<Content> {
     }
 }
 
+/// Caches the application-level accessibility window hierarchy so repeated AX polls
+/// can reuse the same snapshot while the app window graph is unchanged.
+final class CmuxApplicationAccessibilityHierarchyCache {
+    enum Resolution {
+        case passthrough
+        case handled(Any?)
+    }
+
+    struct WindowToken: Equatable {
+        let identity: ObjectIdentifier
+        let windowNumber: Int
+        let isVisible: Bool
+        let isMiniaturized: Bool
+    }
+
+    struct StateToken: Equatable {
+        let windows: [WindowToken]
+        let mainWindow: ObjectIdentifier?
+        let focusedWindow: ObjectIdentifier?
+
+        init(windows: [NSWindow], mainWindow: NSWindow?, focusedWindow: NSWindow?) {
+            self.windows = windows.map {
+                WindowToken(
+                    identity: ObjectIdentifier($0),
+                    windowNumber: $0.windowNumber,
+                    isVisible: $0.isVisible,
+                    isMiniaturized: $0.isMiniaturized
+                )
+            }
+            self.mainWindow = mainWindow.map(ObjectIdentifier.init)
+            self.focusedWindow = focusedWindow.map(ObjectIdentifier.init)
+        }
+    }
+
+    struct Snapshot {
+        let windows: [NSWindow]
+        let visibleChildren: [NSWindow]
+        let mainWindow: NSWindow?
+        let focusedWindow: NSWindow?
+    }
+
+    static let shared = CmuxApplicationAccessibilityHierarchyCache()
+
+    private var cachedStateToken: StateToken?
+    private var cachedSnapshot: Snapshot?
+
+    func resolve(attribute: NSAccessibility.Attribute, application: NSApplication) -> Resolution {
+        guard Self.supportsCaching(attribute) else { return .passthrough }
+        let windows = application.windows
+        let stateToken = StateToken(
+            windows: windows,
+            mainWindow: application.mainWindow,
+            focusedWindow: application.keyWindow
+        )
+        let value = value(for: attribute, stateToken: stateToken) {
+            Snapshot(
+                windows: windows,
+                visibleChildren: windows.filter { $0.isVisible && !$0.isMiniaturized },
+                mainWindow: application.mainWindow,
+                focusedWindow: application.keyWindow
+            )
+        }
+        return .handled(value)
+    }
+
+    func value(
+        for attribute: NSAccessibility.Attribute,
+        stateToken: StateToken,
+        builder: () -> Snapshot
+    ) -> Any? {
+        guard Self.supportsCaching(attribute) else { return nil }
+
+        let snapshot: Snapshot
+        if cachedStateToken == stateToken, let cachedSnapshot {
+            snapshot = cachedSnapshot
+        } else {
+            snapshot = builder()
+            cachedStateToken = stateToken
+            cachedSnapshot = snapshot
+        }
+
+        switch attribute.rawValue {
+        case NSAccessibility.Attribute.windows.rawValue,
+             NSAccessibility.Attribute.children.rawValue:
+            return snapshot.windows
+        case NSAccessibility.Attribute.visibleChildren.rawValue:
+            return snapshot.visibleChildren
+        case NSAccessibility.Attribute.mainWindow.rawValue:
+            return snapshot.mainWindow
+        case NSAccessibility.Attribute.focusedWindow.rawValue:
+            return snapshot.focusedWindow
+        default:
+            return nil
+        }
+    }
+
+    private static func supportsCaching(_ attribute: NSAccessibility.Attribute) -> Bool {
+        switch attribute.rawValue {
+        case NSAccessibility.Attribute.windows.rawValue,
+             NSAccessibility.Attribute.children.rawValue,
+             NSAccessibility.Attribute.visibleChildren.rawValue,
+             NSAccessibility.Attribute.mainWindow.rawValue,
+             NSAccessibility.Attribute.focusedWindow.rawValue:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 private enum CmuxThemeNotifications {
     static let reloadConfig = Notification.Name("com.cmuxterm.themes.reload-config")
 }
@@ -2345,6 +2455,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let targetClass: AnyClass = NSApplication.self
         let originalSelector = #selector(NSApplication.sendEvent(_:))
         let swizzledSelector = #selector(NSApplication.cmux_applicationSendEvent(_:))
+        guard let originalMethod = class_getInstanceMethod(targetClass, originalSelector),
+              let swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector) else {
+            return
+        }
+        method_exchangeImplementations(originalMethod, swizzledMethod)
+    }()
+    private static let didInstallApplicationAccessibilitySwizzle: Void = {
+        let targetClass: AnyClass = NSApplication.self
+        let originalSelector = #selector(NSApplication.accessibilityAttributeValue(_:))
+        let swizzledSelector = #selector(NSApplication.cmux_accessibilityAttributeValue(_:))
         guard let originalMethod = class_getInstanceMethod(targetClass, originalSelector),
               let swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector) else {
             return
@@ -10239,6 +10359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     static func installWindowResponderSwizzlesForTesting() {
+        _ = didInstallApplicationAccessibilitySwizzle
         _ = didInstallWindowKeyEquivalentSwizzle
         _ = didInstallWindowFirstResponderSwizzle
         _ = didInstallWindowSendEventSwizzle
@@ -10257,6 +10378,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #endif
 
     private func installWindowResponderSwizzles() {
+        _ = Self.didInstallApplicationAccessibilitySwizzle
         _ = Self.didInstallApplicationSendEventSwizzle
         _ = Self.didInstallWindowKeyEquivalentSwizzle
         _ = Self.didInstallWindowFirstResponderSwizzle
@@ -14057,6 +14179,22 @@ private final class CmuxFieldEditorOwningWebViewBox: NSObject {
 }
 
 private extension NSApplication {
+    @objc func cmux_accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
+        if Thread.isMainThread {
+            switch CmuxApplicationAccessibilityHierarchyCache.shared.resolve(
+                attribute: attribute,
+                application: self
+            ) {
+            case .handled(let value):
+                return value
+            case .passthrough:
+                break
+            }
+        }
+
+        return cmux_accessibilityAttributeValue(attribute)
+    }
+
     @objc func cmux_applicationSendEvent(_ event: NSEvent) {
 #if DEBUG
         let typingTimingStart = event.type == .keyDown ? CmuxTypingTiming.start() : nil
