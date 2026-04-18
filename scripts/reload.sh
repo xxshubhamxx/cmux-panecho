@@ -345,13 +345,13 @@ command = sys.argv[2:]
 try:
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
 except OSError as exc:
-    raise SystemExit(f"open lock: {exc}")
+    raise SystemExit(f"error: open lock: {exc}")
 
 try:
     flags = fcntl.fcntl(fd, fcntl.F_GETFD)
     fcntl.fcntl(fd, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
 except OSError as exc:
-    raise SystemExit(f"fcntl lock fd: {exc}")
+    raise SystemExit(f"error: fcntl lock fd: {exc}")
 
 try:
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -360,12 +360,15 @@ except BlockingIOError:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
     except OSError as exc:
-        raise SystemExit(f"flock: {exc}")
+        raise SystemExit(f"error: flock: {exc}")
 except OSError as exc:
-    raise SystemExit(f"flock: {exc}")
+    raise SystemExit(f"error: flock: {exc}")
 
-os.execvp(command[0], command)
-' "$XCODEBUILD_LOCK" xcodebuild "${XCODEBUILD_ARGS[@]}" 2>&1 | tee "$XCODE_LOG" | grep -E '(warning:|error:|fatal:|BUILD FAILED|BUILD SUCCEEDED|\*\* BUILD)'
+try:
+    os.execvp(command[0], command)
+except OSError as exc:
+    raise SystemExit(f"error: exec: {exc}")
+' "$XCODEBUILD_LOCK" xcodebuild "${XCODEBUILD_ARGS[@]}" 2>&1 | tee "$XCODE_LOG" | grep -E '(warning:|error:|fatal:|BUILD FAILED|BUILD SUCCEEDED|\*\* BUILD|^==> )'
 XCODE_PIPESTATUS=("${PIPESTATUS[@]}")
 set -e
 XCODE_EXIT="${XCODE_PIPESTATUS[0]}"

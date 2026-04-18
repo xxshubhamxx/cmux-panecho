@@ -40,45 +40,6 @@ lookup_pinned_ghosttykit_sha256() {
   ' "$checksums_file"
 }
 
-validate_xcframework_archive() {
-  local archive="$1"
-  python3 - "$archive" <<'PY'
-from pathlib import PurePosixPath
-import sys
-import tarfile
-
-archive = sys.argv[1]
-root = "GhosttyKit.xcframework"
-
-def normalize(name: str) -> str:
-    while name.startswith("./"):
-        name = name[2:]
-    return name
-
-def is_safe_member(name: str) -> bool:
-    path = PurePosixPath(name)
-    return not path.is_absolute() and ".." not in path.parts
-
-with tarfile.open(archive, "r:gz") as tar:
-    saw_root = False
-    for member in tar.getmembers():
-        name = normalize(member.name)
-        if not is_safe_member(name):
-            raise SystemExit(f"unsafe archive entry: {member.name}")
-        if name != root and not name.startswith(root + "/"):
-            raise SystemExit(f"unexpected archive entry: {member.name}")
-        if member.islnk() or member.issym():
-            target = normalize(member.linkname)
-            if not target or not is_safe_member(target):
-                raise SystemExit(f"unsafe archive link target: {member.linkname}")
-        elif not (member.isfile() or member.isdir()):
-            raise SystemExit(f"unsupported archive member: {member.name}")
-        saw_root = True
-    if not saw_root:
-        raise SystemExit(f"archive missing {root}")
-PY
-}
-
 validate_bridge_header() {
   local path="$1"
   python3 - "$path" <<'PY'
@@ -143,6 +104,7 @@ LOCAL_KEY_STAMP="$LOCAL_XCFRAMEWORK/.ghostty_state_key"
 LEGACY_LOCAL_SHA_STAMP="$LOCAL_XCFRAMEWORK/.ghostty_sha"
 LOCK_DIR="$CACHE_ROOT/$GHOSTTY_KEY.lock"
 GHOSTTYKIT_CHECKSUMS_FILE="${CMUX_GHOSTTYKIT_CHECKSUMS_FILE:-$SCRIPT_DIR/ghosttykit-checksums.txt}"
+GHOSTTYKIT_ARCHIVE_VALIDATOR="${CMUX_GHOSTTYKIT_ARCHIVE_VALIDATOR:-$SCRIPT_DIR/validate-xcframework-archive.py}"
 
 mkdir -p "$CACHE_ROOT"
 
@@ -211,7 +173,7 @@ try_fetch_prebuilt_xcframework() {
     return 1
   fi
 
-  if ! validate_xcframework_archive "$tmp_tar"; then
+  if ! python3 "$GHOSTTYKIT_ARCHIVE_VALIDATOR" "$tmp_tar"; then
     rm -rf "$tmp_dir"
     echo "==> Prebuilt xcframework archive failed validation; falling back to local build." >&2
     return 1
