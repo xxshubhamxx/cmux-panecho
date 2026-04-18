@@ -773,6 +773,14 @@ private struct SectionPopoverView: View {
         // debounce: rapid keystrokes bump `id:` which cancels this task
         // before the sleep completes, preventing an unnecessary search.
         .task(id: query) {
+            // Any pagination task from the previous query lifecycle is now
+            // superseded. Cancel explicitly — reassigning `loadTask =
+            // Task { … }` later doesn't cancel the previous handle on its
+            // own, so without this a stale page could still land and
+            // append rows that don't match the new query.
+            loadTask?.cancel()
+            loadTask = nil
+
             let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
             activeQuery = trimmed
             errorMessages = []
@@ -840,6 +848,15 @@ private struct SectionPopoverView: View {
             guard !Task.isCancelled else { return }
             applyOutcome(outcome, append: false)
         }
+        .onDisappear {
+            // .task(id: query) auto-cancels on disappear, but the
+            // separate loadTask slot (used by loadMore) is ours to
+            // manage. Cancel it so a fetch in flight when the popover
+            // closes doesn't keep running to completion.
+            loadTask?.cancel()
+            loadTask = nil
+            isLoading = false
+        }
     }
 
     private var loadingRow: some View {
@@ -858,8 +875,9 @@ private struct SectionPopoverView: View {
     /// Append the next page to `loaded`. Triggered by the sentinel row's
     /// onAppear. In snapshot mode (empty-query directory scope) this is a
     /// pure in-memory array slice — zero store calls. In typed-query mode
-    /// it fires a paged search. Reassigning `loadTask` implicitly cancels
-    /// any earlier load-more still in flight.
+    /// it fires a paged search. Explicitly cancels any earlier load-more
+    /// still in flight so a superseded page can't append stale rows after
+    /// a query change.
     private func loadMore() {
         guard !isLoading, hasMore else { return }
 
@@ -875,6 +893,7 @@ private struct SectionPopoverView: View {
         let search = self.search
         let query = activeQuery
         let offset = loaded.count
+        loadTask?.cancel()
         loadTask = Task { @MainActor in
             let outcome = await search(query, scope, offset, Self.pageSize)
             guard !Task.isCancelled else { return }

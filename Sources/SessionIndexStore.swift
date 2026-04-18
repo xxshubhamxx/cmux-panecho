@@ -489,7 +489,12 @@ final class SessionIndexStore: ObservableObject {
         }
 
         let bag = ErrorBag()
-        let cwdFilter = (cwd?.isEmpty == false) ? cwd : nil
+        // The per-agent loaders interpret `cwdFilter == nil` as "no filter,
+        // return all entries". When `cwd` is nil here we specifically mean
+        // the "(no folder)" bucket — entries that genuinely have no cwd.
+        // Fetch unfiltered and post-filter locally to preserve that scope.
+        let noFolderScope = (cwd == nil) || ((cwd ?? "").isEmpty)
+        let cwdFilter = noFolderScope ? nil : cwd
         // Large limit so every per-agent loader returns all matching rows.
         // Claude's `searchMaxFiles` cap still applies (currently 1500); if
         // anyone has more Claude sessions in a single cwd we'll bump it.
@@ -506,9 +511,12 @@ final class SessionIndexStore: ObservableObject {
             needle: "", agent: .opencode, cwdFilter: cwdFilter,
             offset: 0, limit: bigLimit, errorBag: bag
         )
-        let merged = (await c) + (await x) + (await o)
+        var merged = (await c) + (await x) + (await o)
         if Task.isCancelled {
             return DirectorySnapshot(cwd: key, entries: [], errors: [])
+        }
+        if noFolderScope {
+            merged = merged.filter { ($0.cwd ?? "").isEmpty }
         }
         let sorted = merged.sorted { $0.modified > $1.modified }
         let snapshot = DirectorySnapshot(cwd: key, entries: sorted, errors: bag.snapshot())
