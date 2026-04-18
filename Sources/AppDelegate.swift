@@ -44,8 +44,12 @@ final class MainWindowHostingView<Content: View>: NSHostingView<Content> {
     }
 }
 
-/// Caches the application-level accessibility window hierarchy so repeated AX polls
-/// can reuse the same snapshot while the app window graph is unchanged.
+/// Caches `AXWindows` responses so repeated AX polls can reuse the same
+/// snapshot while the app window graph is unchanged. Only `.windows` is
+/// cached; `.children` and `.visibleChildren` fall through to AppKit so the
+/// menu bar stays present in the accessibility tree for VoiceOver and other
+/// AX clients. `.mainWindow` / `.focusedWindow` also fall through, so AppKit
+/// remains authoritative on focus transitions.
 final class CmuxApplicationAccessibilityHierarchyCache {
     enum Resolution {
         case passthrough
@@ -61,10 +65,8 @@ final class CmuxApplicationAccessibilityHierarchyCache {
 
     struct StateToken: Equatable {
         let windows: [WindowToken]
-        let mainWindow: ObjectIdentifier?
-        let focusedWindow: ObjectIdentifier?
 
-        init(windows: [NSWindow], mainWindow: NSWindow?, focusedWindow: NSWindow?) {
+        init(windows: [NSWindow]) {
             self.windows = windows.map {
                 WindowToken(
                     identity: ObjectIdentifier($0),
@@ -73,38 +75,48 @@ final class CmuxApplicationAccessibilityHierarchyCache {
                     isMiniaturized: $0.isMiniaturized
                 )
             }
-            self.mainWindow = mainWindow.map(ObjectIdentifier.init)
-            self.focusedWindow = focusedWindow.map(ObjectIdentifier.init)
         }
     }
 
     struct Snapshot {
         let windows: [NSWindow]
-        let visibleChildren: [NSWindow]
-        let mainWindow: NSWindow?
-        let focusedWindow: NSWindow?
     }
 
     static let shared = CmuxApplicationAccessibilityHierarchyCache()
 
     private var cachedStateToken: StateToken?
     private var cachedSnapshot: Snapshot?
+    private var windowCloseObserver: NSObjectProtocol?
+
+    init(notificationCenter: NotificationCenter = .default) {
+        // Drop strong refs to any window the instant it closes so the cache
+        // never keeps a closed NSWindow alive between AX polls.
+        windowCloseObserver = notificationCenter.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.invalidate()
+        }
+    }
+
+    deinit {
+        if let windowCloseObserver {
+            NotificationCenter.default.removeObserver(windowCloseObserver)
+        }
+    }
+
+    func invalidate() {
+        cachedStateToken = nil
+        cachedSnapshot = nil
+    }
 
     func resolve(attribute: NSAccessibility.Attribute, application: NSApplication) -> Resolution {
         guard Self.supportsCaching(attribute) else { return .passthrough }
         let windows = application.windows
-        let stateToken = StateToken(
-            windows: windows,
-            mainWindow: application.mainWindow,
-            focusedWindow: application.keyWindow
-        )
+        let stateToken = StateToken(windows: windows)
         let value = value(for: attribute, stateToken: stateToken) {
-            Snapshot(
-                windows: windows,
-                visibleChildren: windows.filter { $0.isVisible && !$0.isMiniaturized },
-                mainWindow: application.mainWindow,
-                focusedWindow: application.keyWindow
-            )
+            Snapshot(windows: windows)
         }
         return .handled(value)
     }
@@ -126,31 +138,15 @@ final class CmuxApplicationAccessibilityHierarchyCache {
         }
 
         switch attribute.rawValue {
-        case NSAccessibility.Attribute.windows.rawValue,
-             NSAccessibility.Attribute.children.rawValue:
+        case NSAccessibility.Attribute.windows.rawValue:
             return snapshot.windows
-        case NSAccessibility.Attribute.visibleChildren.rawValue:
-            return snapshot.visibleChildren
-        case NSAccessibility.Attribute.mainWindow.rawValue:
-            return snapshot.mainWindow
-        case NSAccessibility.Attribute.focusedWindow.rawValue:
-            return snapshot.focusedWindow
         default:
             return nil
         }
     }
 
     private static func supportsCaching(_ attribute: NSAccessibility.Attribute) -> Bool {
-        switch attribute.rawValue {
-        case NSAccessibility.Attribute.windows.rawValue,
-             NSAccessibility.Attribute.children.rawValue,
-             NSAccessibility.Attribute.visibleChildren.rawValue,
-             NSAccessibility.Attribute.mainWindow.rawValue,
-             NSAccessibility.Attribute.focusedWindow.rawValue:
-            return true
-        default:
-            return false
-        }
+        attribute.rawValue == NSAccessibility.Attribute.windows.rawValue
     }
 }
 

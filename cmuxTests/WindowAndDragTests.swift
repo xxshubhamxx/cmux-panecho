@@ -1455,13 +1455,16 @@ final class ApplicationAccessibilityHierarchyCacheTests: XCTestCase {
             XCTFail("Expected NSWindow array", file: file, line: line)
             return
         }
-        XCTAssertEqual(actualWindows.count, expected.count, file: file, line: line)
+        guard actualWindows.count == expected.count else {
+            XCTFail("Expected \(expected.count) windows, got \(actualWindows.count)", file: file, line: line)
+            return
+        }
         for (lhs, rhs) in zip(actualWindows, expected) {
             XCTAssertTrue(lhs === rhs, file: file, line: line)
         }
     }
 
-    func testRepeatedAttributeQueriesReuseSingleHierarchyBuildUntilStateChanges() {
+    func testRepeatedWindowsQueriesReuseSingleHierarchyBuildUntilStateChanges() {
         let firstWindow = makeWindow()
         let secondWindow = makeWindow()
         defer {
@@ -1470,54 +1473,20 @@ final class ApplicationAccessibilityHierarchyCacheTests: XCTestCase {
         }
 
         let cache = CmuxApplicationAccessibilityHierarchyCache()
-        let state = CmuxApplicationAccessibilityHierarchyCache.StateToken(
-            windows: [firstWindow, secondWindow],
-            mainWindow: firstWindow,
-            focusedWindow: secondWindow
-        )
+        let state = CmuxApplicationAccessibilityHierarchyCache.StateToken(windows: [firstWindow, secondWindow])
         var buildCount = 0
 
-        let windowsValue = cache.value(for: .windows, stateToken: state) {
+        let firstValue = cache.value(for: .windows, stateToken: state) {
             buildCount += 1
-            return .init(
-                windows: [firstWindow, secondWindow],
-                visibleChildren: [firstWindow],
-                mainWindow: firstWindow,
-                focusedWindow: secondWindow
-            )
+            return .init(windows: [firstWindow, secondWindow])
         }
-        let childrenValue = cache.value(for: .children, stateToken: state) {
+        let secondValue = cache.value(for: .windows, stateToken: state) {
             XCTFail("Expected cached snapshot for repeated state")
-            return .init(
-                windows: [],
-                visibleChildren: [],
-                mainWindow: nil,
-                focusedWindow: nil
-            )
-        }
-        let focusedValue = cache.value(for: .focusedWindow, stateToken: state) {
-            XCTFail("Expected cached snapshot for repeated state")
-            return .init(
-                windows: [],
-                visibleChildren: [],
-                mainWindow: nil,
-                focusedWindow: nil
-            )
-        }
-        let visibleChildrenValue = cache.value(for: .visibleChildren, stateToken: state) {
-            XCTFail("Expected cached snapshot for repeated state")
-            return .init(
-                windows: [],
-                visibleChildren: [],
-                mainWindow: nil,
-                focusedWindow: nil
-            )
+            return .init(windows: [])
         }
 
-        assertWindowsEqual(windowsValue, [firstWindow, secondWindow])
-        assertWindowsEqual(childrenValue, [firstWindow, secondWindow])
-        XCTAssertTrue((focusedValue as? NSWindow) === secondWindow)
-        assertWindowsEqual(visibleChildrenValue, [firstWindow])
+        assertWindowsEqual(firstValue, [firstWindow, secondWindow])
+        assertWindowsEqual(secondValue, [firstWindow, secondWindow])
         XCTAssertEqual(buildCount, 1, "Expected a single hierarchy build for repeated AX queries with no invalidation")
     }
 
@@ -1530,49 +1499,56 @@ final class ApplicationAccessibilityHierarchyCacheTests: XCTestCase {
         }
 
         let cache = CmuxApplicationAccessibilityHierarchyCache()
-        let initialState = CmuxApplicationAccessibilityHierarchyCache.StateToken(
-            windows: [window],
-            mainWindow: window,
-            focusedWindow: window
-        )
-        let updatedState = CmuxApplicationAccessibilityHierarchyCache.StateToken(
-            windows: [window, otherWindow],
-            mainWindow: otherWindow,
-            focusedWindow: otherWindow
-        )
+        let initialState = CmuxApplicationAccessibilityHierarchyCache.StateToken(windows: [window])
+        let updatedState = CmuxApplicationAccessibilityHierarchyCache.StateToken(windows: [window, otherWindow])
         var buildCount = 0
 
         _ = cache.value(for: .windows, stateToken: initialState) {
             buildCount += 1
-            return .init(
-                windows: [window],
-                visibleChildren: [window],
-                mainWindow: window,
-                focusedWindow: window
-            )
+            return .init(windows: [window])
         }
         let updatedWindowsValue = cache.value(for: .windows, stateToken: updatedState) {
             buildCount += 1
-            return .init(
-                windows: [window, otherWindow],
-                visibleChildren: [window, otherWindow],
-                mainWindow: otherWindow,
-                focusedWindow: otherWindow
-            )
-        }
-        let updatedMainValue = cache.value(for: .mainWindow, stateToken: updatedState) {
-            XCTFail("Expected updated state to stay cached after rebuild")
-            return .init(
-                windows: [],
-                visibleChildren: [],
-                mainWindow: nil,
-                focusedWindow: nil
-            )
+            return .init(windows: [window, otherWindow])
         }
 
         assertWindowsEqual(updatedWindowsValue, [window, otherWindow])
-        XCTAssertTrue((updatedMainValue as? NSWindow) === otherWindow)
         XCTAssertEqual(buildCount, 2, "Expected the cache to rebuild once after the hierarchy token changes")
+    }
+
+    func testNonWindowsAttributesStayPassthrough() {
+        let cache = CmuxApplicationAccessibilityHierarchyCache()
+
+        for attribute: NSAccessibility.Attribute in [.children, .visibleChildren, .mainWindow, .focusedWindow] {
+            switch cache.resolve(attribute: attribute, application: NSApp) {
+            case .passthrough:
+                break
+            case .handled:
+                XCTFail("Expected \(attribute.rawValue) to fall back to AppKit")
+            }
+        }
+    }
+
+    func testWindowCloseNotificationInvalidatesCache() {
+        let window = makeWindow()
+        defer { window.orderOut(nil) }
+
+        let center = NotificationCenter()
+        let cache = CmuxApplicationAccessibilityHierarchyCache(notificationCenter: center)
+        let state = CmuxApplicationAccessibilityHierarchyCache.StateToken(windows: [window])
+        var buildCount = 0
+
+        _ = cache.value(for: .windows, stateToken: state) {
+            buildCount += 1
+            return .init(windows: [window])
+        }
+        center.post(name: NSWindow.willCloseNotification, object: window)
+        _ = cache.value(for: .windows, stateToken: state) {
+            buildCount += 1
+            return .init(windows: [window])
+        }
+
+        XCTAssertEqual(buildCount, 2, "Expected NSWindow.willCloseNotification to invalidate the cache")
     }
 }
 #endif
