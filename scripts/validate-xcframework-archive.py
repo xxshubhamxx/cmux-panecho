@@ -32,13 +32,14 @@ def main() -> None:
                 raise SystemExit(f"unsafe archive entry: {member.name}")
             if name != ROOT and not name.startswith(ROOT + "/"):
                 raise SystemExit(f"unexpected archive entry: {member.name}")
+            if name == ROOT or name == ROOT + "/":
+                saw_root = True
             if member.islnk() or member.issym():
                 target = normalize(member.linkname)
                 if not target or not is_safe_member(target):
                     raise SystemExit(f"unsafe archive link target: {member.linkname}")
             elif not (member.isfile() or member.isdir()):
                 raise SystemExit(f"unsupported archive member: {member.name}")
-            saw_root = True
 
         if not saw_root:
             raise SystemExit(f"archive missing {ROOT}")
