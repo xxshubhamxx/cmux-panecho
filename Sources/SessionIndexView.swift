@@ -1126,6 +1126,10 @@ private struct SectionPopoverHost: NSViewRepresentable {
             )
             hostingController.view.invalidateIntrinsicContentSize()
             hostingController.view.layoutSubtreeIfNeeded()
+            #if DEBUG
+            let fs = hostingController.view.fittingSize
+            dlog("sessions.popover.refreshContent id=\(identity) fitting=\(Int(fs.width))x\(Int(fs.height))")
+            #endif
             updateContentSize()
         }
 
@@ -1140,11 +1144,15 @@ private struct SectionPopoverHost: NSViewRepresentable {
             // updateNSView (which fires on parent re-renders, e.g. ObservedObject
             // store changes) would reset SectionPopoverView's @State on every
             // tick — typed query gone, loaded reset, looks like infinite loading.
-            if !popover.isShown {
+            let transitionHiddenToShown = !popover.isShown
+            if transitionHiddenToShown {
                 presentationCount += 1
                 refreshContent()
             }
             updateContentSize()
+            #if DEBUG
+            dlog("sessions.popover.present transitionHiddenToShown=\(transitionHiddenToShown) presentationCount=\(presentationCount) contentSize=\(Int(popover.contentSize.width))x\(Int(popover.contentSize.height))")
+            #endif
             guard !popover.isShown else { return }
             popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .maxX)
         }
