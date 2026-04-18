@@ -1437,4 +1437,142 @@ final class TmuxWorkspacePaneOverlayTests: XCTestCase {
         )
     }
 }
+
+@MainActor
+final class ApplicationAccessibilityHierarchyCacheTests: XCTestCase {
+    private func makeWindow() -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        return window
+    }
+
+    private func assertWindowsEqual(_ actual: Any?, _ expected: [NSWindow], file: StaticString = #filePath, line: UInt = #line) {
+        guard let actualWindows = actual as? [NSWindow] else {
+            XCTFail("Expected NSWindow array", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(actualWindows.count, expected.count, file: file, line: line)
+        for (lhs, rhs) in zip(actualWindows, expected) {
+            XCTAssertTrue(lhs === rhs, file: file, line: line)
+        }
+    }
+
+    func testRepeatedAttributeQueriesReuseSingleHierarchyBuildUntilStateChanges() {
+        let firstWindow = makeWindow()
+        let secondWindow = makeWindow()
+        defer {
+            firstWindow.orderOut(nil)
+            secondWindow.orderOut(nil)
+        }
+
+        let cache = CmuxApplicationAccessibilityHierarchyCache()
+        let state = CmuxApplicationAccessibilityHierarchyCache.StateToken(
+            windows: [firstWindow, secondWindow],
+            mainWindow: firstWindow,
+            focusedWindow: secondWindow
+        )
+        var buildCount = 0
+
+        let windowsValue = cache.value(for: .windows, stateToken: state) {
+            buildCount += 1
+            return .init(
+                windows: [firstWindow, secondWindow],
+                visibleChildren: [firstWindow],
+                mainWindow: firstWindow,
+                focusedWindow: secondWindow
+            )
+        }
+        let childrenValue = cache.value(for: .children, stateToken: state) {
+            XCTFail("Expected cached snapshot for repeated state")
+            return .init(
+                windows: [],
+                visibleChildren: [],
+                mainWindow: nil,
+                focusedWindow: nil
+            )
+        }
+        let focusedValue = cache.value(for: .focusedWindow, stateToken: state) {
+            XCTFail("Expected cached snapshot for repeated state")
+            return .init(
+                windows: [],
+                visibleChildren: [],
+                mainWindow: nil,
+                focusedWindow: nil
+            )
+        }
+        let visibleChildrenValue = cache.value(for: .visibleChildren, stateToken: state) {
+            XCTFail("Expected cached snapshot for repeated state")
+            return .init(
+                windows: [],
+                visibleChildren: [],
+                mainWindow: nil,
+                focusedWindow: nil
+            )
+        }
+
+        assertWindowsEqual(windowsValue, [firstWindow, secondWindow])
+        assertWindowsEqual(childrenValue, [firstWindow, secondWindow])
+        XCTAssertTrue((focusedValue as? NSWindow) === secondWindow)
+        assertWindowsEqual(visibleChildrenValue, [firstWindow])
+        XCTAssertEqual(buildCount, 1, "Expected a single hierarchy build for repeated AX queries with no invalidation")
+    }
+
+    func testChangedStateTokenInvalidatesCachedHierarchySnapshot() {
+        let window = makeWindow()
+        let otherWindow = makeWindow()
+        defer {
+            window.orderOut(nil)
+            otherWindow.orderOut(nil)
+        }
+
+        let cache = CmuxApplicationAccessibilityHierarchyCache()
+        let initialState = CmuxApplicationAccessibilityHierarchyCache.StateToken(
+            windows: [window],
+            mainWindow: window,
+            focusedWindow: window
+        )
+        let updatedState = CmuxApplicationAccessibilityHierarchyCache.StateToken(
+            windows: [window, otherWindow],
+            mainWindow: otherWindow,
+            focusedWindow: otherWindow
+        )
+        var buildCount = 0
+
+        _ = cache.value(for: .windows, stateToken: initialState) {
+            buildCount += 1
+            return .init(
+                windows: [window],
+                visibleChildren: [window],
+                mainWindow: window,
+                focusedWindow: window
+            )
+        }
+        let updatedWindowsValue = cache.value(for: .windows, stateToken: updatedState) {
+            buildCount += 1
+            return .init(
+                windows: [window, otherWindow],
+                visibleChildren: [window, otherWindow],
+                mainWindow: otherWindow,
+                focusedWindow: otherWindow
+            )
+        }
+        let updatedMainValue = cache.value(for: .mainWindow, stateToken: updatedState) {
+            XCTFail("Expected updated state to stay cached after rebuild")
+            return .init(
+                windows: [],
+                visibleChildren: [],
+                mainWindow: nil,
+                focusedWindow: nil
+            )
+        }
+
+        assertWindowsEqual(updatedWindowsValue, [window, otherWindow])
+        XCTAssertTrue((updatedMainValue as? NSWindow) === otherWindow)
+        XCTAssertEqual(buildCount, 2, "Expected the cache to rebuild once after the hierarchy token changes")
+    }
+}
 #endif
