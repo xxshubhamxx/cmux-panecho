@@ -906,17 +906,21 @@ private struct SectionPopoverView: View {
     /// error/loading bookkeeping lives in one place.
     @MainActor
     private func applyOutcome(_ outcome: SessionIndexStore.SearchOutcome, append: Bool) {
+        // `append` is only reached from the paged path (typed query or
+        // agent scope). In both cases `offset = loaded.count` is
+        // monotonic against the store's ordering, so raw-append is
+        // correct. The empty-query directory case uses the snapshot
+        // path and never reaches here.
+        //
+        // Earlier revisions of this method dedup-filtered outcome.entries
+        // on entry.id; with `hasMore = outcome.entries.count >=
+        // pageSize` and `offset = loaded.count`, filtering caused
+        // loaded.count to advance more slowly than the raw page size,
+        // which kept hasMore perpetually true and re-requested the
+        // same window. Removing the dedup makes the cursor match the
+        // page boundaries the store actually returns.
         if append {
-            // Dedupe on entry.id — the empty-query fast path seeded `loaded`
-            // from `section.entries` (top-N from the initial scan), but
-            // `loadMore` then pages the store's search API starting at
-            // `offset = loaded.count`. The two sources don't share a
-            // canonical ordering, so an unfiltered append can produce
-            // duplicate IDs at depth (observed dupes=7/30 at depth 271).
-            // SwiftUI ForEach with duplicate IDs renders zero-height
-            // placeholders that manifest as "gaps" in the popover.
-            let existingIDs = Set(loaded.map(\.id))
-            loaded.append(contentsOf: outcome.entries.filter { !existingIDs.contains($0.id) })
+            loaded.append(contentsOf: outcome.entries)
         } else {
             loaded = outcome.entries
         }
