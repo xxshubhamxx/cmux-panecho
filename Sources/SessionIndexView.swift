@@ -1145,6 +1145,16 @@ extension SessionSearchPopoverController: NSTableViewDataSource, NSTableViewDele
         loaded.count
     }
 
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        Self.rowHeight
+    }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        // Use a transparent row view so NSTableView's default selection/
+        // separator drawing doesn't bleed through the clear-background popover.
+        PlainSessionRowView()
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("SessionRow")
         let cell = (tableView.makeView(withIdentifier: id, owner: self) as? SessionPopoverRowView)
@@ -1175,8 +1185,23 @@ extension SessionSearchPopoverController: NSTableViewDataSource, NSTableViewDele
     }
 }
 
-/// Row cell for the popover's NSTableView. Handles its own hover background
-/// and lazily reused when the table scrolls.
+/// Transparent row view for the popover's NSTableView. Skips the default
+/// selection/separator drawing so the popover's dark material background
+/// shows cleanly and nothing paints behind the cell's manual layout.
+private final class PlainSessionRowView: NSTableRowView {
+    override var isEmphasized: Bool {
+        get { false }
+        set { /* no-op */ }
+    }
+    override func drawBackground(in dirtyRect: NSRect) { /* no-op */ }
+    override func drawSelection(in dirtyRect: NSRect) { /* no-op */ }
+    override func drawSeparator(in dirtyRect: NSRect) { /* no-op */ }
+}
+
+/// Row cell for the popover's NSTableView. Manual layout (not autolayout) so
+/// the cell is bulletproof against NSTableView's frame-driven sizing — row
+/// views get reused as the table scrolls, and autolayout in a row cell kept
+/// producing overlapping text on reuse.
 private final class SessionPopoverRowView: NSView {
     private let hoverBackground = NSView()
     private let iconView = NSImageView()
@@ -1184,9 +1209,12 @@ private final class SessionPopoverRowView: NSView {
     private let dateField = NSTextField(labelWithString: "")
     private var trackingArea: NSTrackingArea?
 
+    override var isFlipped: Bool { true }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        layer?.masksToBounds = true
 
         hoverBackground.wantsLayer = true
         hoverBackground.layer?.backgroundColor = NSColor.clear.cgColor
@@ -1201,37 +1229,54 @@ private final class SessionPopoverRowView: NSView {
         titleField.lineBreakMode = .byTruncatingTail
         titleField.maximumNumberOfLines = 1
         titleField.cell?.usesSingleLineMode = true
+        titleField.isEditable = false
+        titleField.isSelectable = false
+        titleField.isBordered = false
+        titleField.drawsBackground = false
         addSubview(titleField)
 
         dateField.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         dateField.textColor = NSColor.secondaryLabelColor.withAlphaComponent(0.7)
+        dateField.isEditable = false
+        dateField.isSelectable = false
+        dateField.isBordered = false
+        dateField.drawsBackground = false
         addSubview(dateField)
-
-        for subview in [hoverBackground, iconView, titleField, dateField] {
-            subview.translatesAutoresizingMaskIntoConstraints = false
-        }
-
-        NSLayoutConstraint.activate([
-            hoverBackground.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            hoverBackground.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            hoverBackground.topAnchor.constraint(equalTo: topAnchor, constant: 1),
-            hoverBackground.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1),
-
-            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 12),
-            iconView.heightAnchor.constraint(equalToConstant: 12),
-
-            titleField.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 6),
-            titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            dateField.leadingAnchor.constraint(greaterThanOrEqualTo: titleField.trailingAnchor, constant: 8),
-            dateField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            dateField.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        let w = bounds.width
+        let h = bounds.height
+
+        hoverBackground.frame = NSRect(x: 4, y: 1, width: max(0, w - 8), height: max(0, h - 2))
+
+        let iconSize: CGFloat = 12
+        let iconX: CGFloat = 12
+        iconView.frame = NSRect(x: iconX, y: (h - iconSize) / 2, width: iconSize, height: iconSize)
+
+        let dateSize = dateField.intrinsicContentSize
+        let datePaddingRight: CGFloat = 12
+        let dateX = max(0, w - datePaddingRight - dateSize.width)
+        dateField.frame = NSRect(
+            x: dateX,
+            y: (h - dateSize.height) / 2,
+            width: dateSize.width,
+            height: dateSize.height
+        )
+
+        let titleX = iconX + iconSize + 6
+        let titleWidth = max(0, dateX - 8 - titleX)
+        let titleHeight = titleField.intrinsicContentSize.height
+        titleField.frame = NSRect(
+            x: titleX,
+            y: (h - titleHeight) / 2,
+            width: titleWidth,
+            height: titleHeight
+        )
+    }
 
     func configure(with entry: SessionEntry) {
         iconView.image = NSImage(named: entry.agent.assetName)
@@ -1240,6 +1285,7 @@ private final class SessionPopoverRowView: NSView {
             for: entry.modified, relativeTo: Date()
         )
         toolTip = entry.cwdLabel ?? entry.displayTitle
+        needsLayout = true
     }
 
     override func updateTrackingAreas() {
