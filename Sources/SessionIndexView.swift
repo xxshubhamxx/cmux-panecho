@@ -763,9 +763,14 @@ private final class SessionSearchPopoverController: NSViewController, NSMenuDele
     private var loadGeneration: Int = 0
     private var currentTask: Task<Void, Never>?
     private var debounceWorkItem: DispatchWorkItem?
+    /// The scroll view's dynamic height. Updated each time the result list
+    /// changes so the popover shrinks to fit short lists and caps at
+    /// `maxScrollHeight` for long ones.
+    private var scrollHeightConstraint: NSLayoutConstraint!
 
     private static let pageSize = 30
     private static let rowHeight: CGFloat = 28
+    private static let maxScrollHeight: CGFloat = 420
 
     init(section: IndexSection, store: SessionIndexStore) {
         self.section = section
@@ -936,10 +941,18 @@ private final class SessionSearchPopoverController: NSViewController, NSMenuDele
 
             scrollView.leadingAnchor.constraint(equalTo: vstack.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: vstack.trailingAnchor),
-            scrollView.heightAnchor.constraint(equalToConstant: 420),
 
             view.widthAnchor.constraint(equalToConstant: 360),
         ])
+
+        // Mutable height: starts tall enough for one row so the initial
+        // `fittingSize` is sane even before the first reload. The real
+        // value is recomputed in `updatePopoverSize()` after every content
+        // state change.
+        scrollHeightConstraint = scrollView.heightAnchor.constraint(
+            equalToConstant: Self.rowHeight
+        )
+        scrollHeightConstraint.isActive = true
     }
 
     // MARK: Search / pagination
@@ -1026,6 +1039,20 @@ private final class SessionSearchPopoverController: NSViewController, NSMenuDele
         // Show "No matches" only once a fetch finished and returned nothing.
         emptyLabel.isHidden = isLoading || !loaded.isEmpty
         tableView.reloadData()
+        updatePopoverSize()
+    }
+
+    /// Single owner of popover vertical size. NSScrollView will not propagate
+    /// its document view's content height upward, so the controller has to
+    /// drive it — derive the desired scroll height from the row count,
+    /// clamp to `maxScrollHeight`, then publish via `preferredContentSize`
+    /// so NSPopover animates to the new size.
+    private func updatePopoverSize() {
+        let rows = max(1, loaded.count)
+        let desired = CGFloat(rows) * Self.rowHeight
+        scrollHeightConstraint.constant = min(desired, Self.maxScrollHeight)
+        view.layoutSubtreeIfNeeded()
+        preferredContentSize = view.fittingSize
     }
 
     private var sectionSearchScope: SessionIndexStore.SearchScope {
