@@ -730,11 +730,12 @@ private struct SectionPopoverView: View {
             }
             .frame(height: 420)
         }
-        // Fixed height pins the NSHostingController's preferred size so the
-        // NSPopover can't grow unboundedly when sizingOptions reports the
-        // LazyVStack's full intrinsic content height. Short lists scroll
-        // within 420; long lists scroll within 420; popover stays stable.
-        .frame(width: 360, height: 500)
+        // ScrollView is pinned at fixed 420; the outer VStack's natural
+        // height (chrome + 420) then drives NSHostingController's
+        // preferred content size via sizingOptions. Do NOT pin an outer
+        // fixed height — it made SwiftUI center-distribute slack space
+        // and squashed the top header padding.
+        .frame(width: 360)
         .background(
             EscapeKeyCatcher { onDismiss() }
         )
