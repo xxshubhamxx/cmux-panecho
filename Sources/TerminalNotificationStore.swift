@@ -686,6 +686,25 @@ struct TerminalNotificationWorkspaceSnapshot: Equatable, Sendable {
         focusedReadIndicatorSurfaceId: nil
     )
 
+    static func empty(
+        forTabId tabId: UUID,
+        focusedReadIndicatorSurfaceId: UUID? = nil
+    ) -> TerminalNotificationWorkspaceSnapshot {
+        var visibleSurfaceIds = Set<UUID>()
+        if let focusedReadIndicatorSurfaceId {
+            visibleSurfaceIds.insert(focusedReadIndicatorSurfaceId)
+        }
+        return TerminalNotificationWorkspaceSnapshot(
+            tabId: tabId,
+            unreadCount: 0,
+            hasRead: false,
+            unreadSurfaceIds: [],
+            visibleSurfaceIds: visibleSurfaceIds,
+            latestNotification: nil,
+            focusedReadIndicatorSurfaceId: focusedReadIndicatorSurfaceId
+        )
+    }
+
     var hasUnreadNotifications: Bool {
         unreadCount > 0
     }
@@ -762,7 +781,9 @@ final class TerminalNotificationStore: ObservableObject {
     private struct NotificationIndexes {
         var unreadCount = 0
         var unreadCountByTabId: [UUID: Int] = [:]
+        var unreadSurfaceIdsByTabId: [UUID: Set<UUID>] = [:]
         var unreadByTabSurface = Set<TabSurfaceKey>()
+        var hasReadByTabId = Set<UUID>()
         var latestUnreadByTabId: [UUID: TerminalNotification] = [:]
         var latestByTabId: [UUID: TerminalNotification] = [:]
     }
@@ -987,40 +1008,30 @@ final class TerminalNotificationStore: ObservableObject {
     }
 
     func workspaceSnapshot(forTabId tabId: UUID) -> TerminalNotificationWorkspaceSnapshot {
-        Self.workspaceSnapshot(
+        workspaceSnapshot(
             forTabId: tabId,
-            notifications: notifications,
             focusedReadIndicatorByTabId: focusedReadIndicatorByTabId
         )
     }
 
-    private static func workspaceSnapshot(
+    private func workspaceSnapshot(
         forTabId tabId: UUID,
-        notifications: [TerminalNotification],
         focusedReadIndicatorByTabId: [UUID: UUID]
     ) -> TerminalNotificationWorkspaceSnapshot {
-        var unreadCount = 0
-        var hasRead = false
-        var unreadSurfaceIds = Set<UUID>()
-        var visibleSurfaceIds = Set<UUID>()
         let focusedReadIndicatorSurfaceId = focusedReadIndicatorByTabId[tabId]
-        var latestNotification: TerminalNotification?
+        let unreadCount = indexes.unreadCountByTabId[tabId] ?? 0
+        let hasRead = indexes.hasReadByTabId.contains(tabId)
+        let unreadSurfaceIds = indexes.unreadSurfaceIdsByTabId[tabId] ?? []
+        let latestNotification = indexes.latestByTabId[tabId]
 
-        for notification in notifications where notification.tabId == tabId {
-            if latestNotification == nil {
-                latestNotification = notification
-            }
-            if notification.isRead {
-                hasRead = true
-            } else if let surfaceId = notification.surfaceId {
-                unreadCount += 1
-                unreadSurfaceIds.insert(surfaceId)
-                visibleSurfaceIds.insert(surfaceId)
-            } else {
-                unreadCount += 1
-            }
+        guard unreadCount > 0 || hasRead || latestNotification != nil else {
+            return .empty(
+                forTabId: tabId,
+                focusedReadIndicatorSurfaceId: focusedReadIndicatorSurfaceId
+            )
         }
 
+        var visibleSurfaceIds = unreadSurfaceIds
         if let surfaceId = focusedReadIndicatorSurfaceId {
             visibleSurfaceIds.insert(surfaceId)
         }
@@ -1042,10 +1053,12 @@ final class TerminalNotificationStore: ObservableObject {
 
     func workspaceSnapshotPublisher(forTabId tabId: UUID) -> AnyPublisher<TerminalNotificationWorkspaceSnapshot, Never> {
         Publishers.CombineLatest($notifications, $focusedReadIndicatorByTabId)
-            .map { notifications, focusedReadIndicatorByTabId in
-                Self.workspaceSnapshot(
+            .map { [weak self] _, focusedReadIndicatorByTabId in
+                guard let self else {
+                    return .empty(forTabId: tabId)
+                }
+                return self.workspaceSnapshot(
                     forTabId: tabId,
-                    notifications: notifications,
                     focusedReadIndicatorByTabId: focusedReadIndicatorByTabId
                 )
             }
@@ -1494,12 +1507,18 @@ final class TerminalNotificationStore: ObservableObject {
             if indexes.latestByTabId[notification.tabId] == nil {
                 indexes.latestByTabId[notification.tabId] = notification
             }
-            guard !notification.isRead else { continue }
+            if notification.isRead {
+                indexes.hasReadByTabId.insert(notification.tabId)
+                continue
+            }
             indexes.unreadCount += 1
             indexes.unreadCountByTabId[notification.tabId, default: 0] += 1
             indexes.unreadByTabSurface.insert(
                 TabSurfaceKey(tabId: notification.tabId, surfaceId: notification.surfaceId)
             )
+            if let surfaceId = notification.surfaceId {
+                indexes.unreadSurfaceIdsByTabId[notification.tabId, default: []].insert(surfaceId)
+            }
             if indexes.latestUnreadByTabId[notification.tabId] == nil {
                 indexes.latestUnreadByTabId[notification.tabId] = notification
             }
