@@ -1547,6 +1547,53 @@ final class CLINotifyProcessIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testReadScreenArgumentErrorDoesNotAbortWhenStderrPipeIsClosed() throws {
+        let cliPath = try bundledCLIPath()
+        let process = Process()
+        let stdoutPipe = Pipe()
+        var stderrPipeFDs = [Int32](repeating: 0, count: 2)
+        XCTAssertEqual(pipe(&stderrPipeFDs), 0)
+        let stderrReadFD = stderrPipeFDs[0]
+        let stderrWriteFD = stderrPipeFDs[1]
+        XCTAssertEqual(Darwin.close(stderrReadFD), 0)
+
+        let stderrHandle = FileHandle(fileDescriptor: stderrWriteFD, closeOnDealloc: true)
+        defer { try? stderrHandle.close() }
+
+        process.executableURL = URL(fileURLWithPath: cliPath)
+        process.arguments = ["read-screen", "--lines", "0"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrHandle
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["CMUX_CLI_SENTRY_DISABLED"] = "1"
+        environment["CMUX_CLAUDE_HOOK_SENTRY_DISABLED"] = "1"
+        process.environment = environment
+
+        try process.run()
+
+        let exited = expectation(description: "cli exited after closed stderr pipe")
+        DispatchQueue.global(qos: .userInitiated).async {
+            process.waitUntilExit()
+            exited.fulfill()
+        }
+        wait(for: [exited], timeout: 5)
+
+        let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertEqual(
+            process.terminationReason,
+            .exit,
+            "Expected closed stderr pipe to exit normally; stdout=\(stdout)"
+        )
+        XCTAssertEqual(
+            process.terminationStatus,
+            0,
+            "Expected closed stderr pipe to be treated as a clean exit; stdout=\(stdout)"
+        )
+    }
+
+    @MainActor
     func testNotifyFallsBackFromStaleCallerWorkspaceAndSurfaceIDs() throws {
         let cliPath = try bundledCLIPath()
         let socketPath = makeSocketPath("notify")
