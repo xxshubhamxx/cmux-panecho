@@ -5278,11 +5278,12 @@ class TabManager: ObservableObject {
                 continue
             }
 
+            // The assignment's didSet clears cached sidebar metadata when
+            // `disabled` flips to true on a local workspace, so we only need
+            // to drop in-flight probes and (when re-enabling) schedule a
+            // refresh.
             workspace.gitMetadataWatcherDisabled = disabled
             clearWorkspaceGitProbes(workspaceId: workspaceId)
-            if disabled {
-                clearWorkspaceSidebarGitMetadata(workspaceId: workspaceId)
-            }
 
             if !disabled {
                 scheduleWorkspaceGitMetadataRefreshForAllPanelsIfPossible(

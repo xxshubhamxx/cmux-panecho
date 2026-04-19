@@ -1089,6 +1089,10 @@ final class TabManagerPullRequestProbeTests: XCTestCase {
         XCTAssertTrue(workspace.panelGitBranches.isEmpty, "local-origin git branches should be cleared on promotion")
         XCTAssertTrue(workspace.panelPullRequests.isEmpty, "local-origin PRs should be cleared on promotion")
 
+        // Reset the flag so the later `= true` is an actual false→true
+        // transition that fires didSet on the now-remote workspace.
+        workspace.gitMetadataWatcherDisabled = false
+
         // Seed git state the way the remote daemon would push it down after
         // the promotion completes.
         workspace.updatePanelGitBranch(panelId: panelId, branch: "feature/remote-kept", isDirty: true)

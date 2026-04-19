@@ -8185,7 +8185,7 @@ final class Workspace: Identifiable, ObservableObject {
         // survive even if the new remote is unsupported/offline, and because
         // session snapshots now include git metadata for remote workspaces
         // they would get persisted and restored as stale remote state.
-        if previousRemoteConfiguration == nil || previousRemoteConfiguration != configuration {
+        if previousRemoteConfiguration != configuration {
             clearCachedSidebarGitMetadata()
         }
         remoteConfiguration = configuration
