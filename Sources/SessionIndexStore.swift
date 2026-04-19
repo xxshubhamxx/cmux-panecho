@@ -458,6 +458,7 @@ final class SessionIndexStore: ObservableObject {
     func reload() {
         loadTask?.cancel()
         isLoading = true
+        directorySnapshotGeneration += 1
         invalidateDirectorySnapshots()
         loadTask = Task.detached(priority: .userInitiated) { [weak self] in
             let scanned = await Self.scanAll()
@@ -475,6 +476,13 @@ final class SessionIndexStore: ObservableObject {
 
     private var directorySnapshotCache: [String: DirectorySnapshot] = [:]
     private var directorySnapshotLRU: [String] = []
+    /// Bumped on every `reload()`. Snapshot builds capture this at start;
+    /// if it changes before the build completes (reload raced with an
+    /// in-flight build), the build's result is discarded instead of
+    /// being written back into the cache — otherwise the stale
+    /// pre-reload result would repopulate the cache after invalidation
+    /// and be reused on the next popover open.
+    private var directorySnapshotGeneration: Int = 0
     private static let directorySnapshotCacheCapacity = 16
 
     /// Return a cached or freshly-built merged snapshot for a cwd-scoped
@@ -488,6 +496,7 @@ final class SessionIndexStore: ObservableObject {
             return cached
         }
 
+        let generation = directorySnapshotGeneration
         let bag = ErrorBag()
         // The per-agent loaders interpret `cwdFilter == nil` as "no filter,
         // return all entries". When `cwd` is nil here we specifically mean
@@ -520,7 +529,12 @@ final class SessionIndexStore: ObservableObject {
         }
         let sorted = merged.sorted { $0.modified > $1.modified }
         let snapshot = DirectorySnapshot(cwd: key, entries: sorted, errors: bag.snapshot())
-        storeDirectorySnapshot(key: key, snapshot: snapshot)
+        // Only cache this result if no `reload()` raced in while the
+        // build was running. Otherwise the caller gets a fresh snapshot
+        // but the cache stays invalidated; the next open will rebuild.
+        if generation == directorySnapshotGeneration {
+            storeDirectorySnapshot(key: key, snapshot: snapshot)
+        }
         return snapshot
     }
 

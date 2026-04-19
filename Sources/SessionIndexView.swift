@@ -793,6 +793,14 @@ private struct SectionPopoverView: View {
                 loaded = section.entries
                 hasMore = !section.entries.isEmpty
 
+                // Focus the search field BEFORE awaiting the snapshot so
+                // a cold-cache deep-directory open still accepts typing
+                // immediately. Snapshot load is async; typing flips the
+                // task id and cancels the in-flight build anyway.
+                if !searchFocused {
+                    searchFocused = true
+                }
+
                 // Build-or-return the full directory snapshot. For
                 // directory scope scrolling this replaces per-page store
                 // fetches with a single merged array + in-memory slice.
@@ -820,11 +828,6 @@ private struct SectionPopoverView: View {
                 } else {
                     fullSnapshot = nil
                     isLoading = false
-                }
-
-                if !searchFocused {
-                    await Task.yield()
-                    searchFocused = true
                 }
                 return
             }
