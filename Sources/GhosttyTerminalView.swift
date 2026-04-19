@@ -4107,6 +4107,8 @@ final class TerminalSurface: Identifiable, ObservableObject {
 #if DEBUG
     private static let surfaceLogPath = "/tmp/cmux-ghostty-surface.log"
     private static let sizeLogPath = "/tmp/cmux-ghostty-size.log"
+    private static let forceRefreshCountLock = NSLock()
+    private static var forceRefreshCounts: [UUID: Int] = [:]
 
     func debugCurrentPixelSize() -> (width: UInt32, height: UInt32) {
         (lastPixelWidth, lastPixelHeight)
@@ -4114,6 +4116,25 @@ final class TerminalSurface: Identifiable, ObservableObject {
 
     func debugDesiredFocusState() -> Bool {
         desiredFocusState
+    }
+
+    func debugForceRefreshCount() -> Int {
+        Self.forceRefreshCountLock.lock()
+        defer { Self.forceRefreshCountLock.unlock() }
+        return Self.forceRefreshCounts[id, default: 0]
+    }
+
+    @MainActor
+    func resetDebugForceRefreshCount() {
+        Self.forceRefreshCountLock.lock()
+        Self.forceRefreshCounts[id] = 0
+        Self.forceRefreshCountLock.unlock()
+    }
+
+    private func recordDebugForceRefresh() {
+        Self.forceRefreshCountLock.lock()
+        Self.forceRefreshCounts[id, default: 0] += 1
+        Self.forceRefreshCountLock.unlock()
     }
 
     private static func surfaceLog(_ message: String) {
@@ -4677,6 +4698,9 @@ final class TerminalSurface: Identifiable, ObservableObject {
               view.bounds.height > 0 else {
             return
         }
+#if DEBUG
+        recordDebugForceRefresh()
+#endif
         guard let currentSurface = self.surface else { return }
 
         // Re-read self.surface before each ghostty call to guard against the surface
