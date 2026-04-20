@@ -10230,6 +10230,11 @@ private final class SidebarTabItemSettingsStore: ObservableObject {
 final class SidebarDragState {
     var draggedTabId: UUID?
     var dropIndicator: SidebarDropIndicator?
+    /// Single source of truth for "which sidebar row is hovered." Moving this
+    /// off per-row `@State` avoids stuck-hover bugs under `LazyVStack`, where a
+    /// row's `.onHover(false)` can fail to fire if the row is recycled mid-
+    /// interaction and leaves its local `@State isHovering = true` dangling.
+    var hoveredTabId: UUID?
 
     init() {}
 }
@@ -12896,8 +12901,11 @@ private struct TabItemView: View, Equatable {
     let settings: SidebarTabItemSettingsSnapshot
     @State private var workspaceSnapshotStorage: SidebarWorkspaceSnapshotBuilder.Snapshot?
     @StateObject private var contextMenuState = SidebarTabItemContextMenuState()
-    @State private var isHovering = false
     @State private var rowHeight: CGFloat = 1
+
+    private var isHovering: Bool {
+        dragState.hoveredTabId == tab.id
+    }
 
     var isMultiSelected: Bool {
         selectedTabIds.contains(tab.id)
@@ -13504,7 +13512,11 @@ private struct TabItemView: View, Equatable {
         }
         .onHover { hovering in
             guard !contextMenuState.isVisible else { return }
-            isHovering = hovering
+            if hovering {
+                dragState.hoveredTabId = tab.id
+            } else if dragState.hoveredTabId == tab.id {
+                dragState.hoveredTabId = nil
+            }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(accessibilityTitle))
@@ -13524,8 +13536,8 @@ private struct TabItemView: View, Equatable {
                 }
                 .onDisappear {
                     contextMenuState.isVisible = false
-                    if isHovering {
-                        isHovering = false
+                    if dragState.hoveredTabId == tab.id {
+                        dragState.hoveredTabId = nil
                     }
                     flushDeferredWorkspaceObservationInvalidation()
                 }
