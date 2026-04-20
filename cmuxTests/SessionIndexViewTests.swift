@@ -19,8 +19,8 @@ final class SessionIndexViewTests: XCTestCase {
             .sink { emittedValues.append($0) }
         defer { cancellable.cancel() }
 
-        store.currentDirectory = "/foo"
-        store.currentDirectory = "/foo"
+        store.setCurrentDirectoryIfChanged("/foo")
+        store.setCurrentDirectoryIfChanged("/foo")
 
         XCTAssertEqual(emittedValues, ["/foo"])
     }
