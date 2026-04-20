@@ -42,8 +42,9 @@ private func withCLISIGPIPEDisposition<T>(
     let installed = sigaction(SIGPIPE, &action, nil) == 0
 
     defer {
-        guard installed else { return }
-        _ = sigaction(SIGPIPE, &previousAction, nil)
+        if installed {
+            _ = sigaction(SIGPIPE, &previousAction, nil)
+        }
     }
 
     return try body()
@@ -1696,18 +1697,6 @@ struct CMUXCLI {
     let args: [String]
 
     private static let debugLastSocketHintPath = "/tmp/cmux-last-socket-path"
-    private static let sigpipeProbePythonScript = """
-    import signal
-    import sys
-
-    handler = signal.getsignal(signal.SIGPIPE)
-    if handler == signal.SIG_IGN:
-        sys.stdout.write("ignored\\n")
-    elif handler == signal.SIG_DFL:
-        sys.stdout.write("default\\n")
-    else:
-        sys.stdout.write("custom\\n")
-    """
 
     private static func normalizedEnvValue(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1723,33 +1712,67 @@ struct CMUXCLI {
         return (st.st_mode & S_IFMT) == S_IFSOCK
     }
 
-    private func sigpipeProbeExecutablePath() throws -> String {
-        let pythonPath = "/usr/bin/python3"
-        guard FileManager.default.isExecutableFile(atPath: pythonPath) else {
-            throw CLIError(message: "SIGPIPE probe requires /usr/bin/python3")
+    private static func currentSIGPIPEDispositionName() -> String {
+        var current = sigaction()
+        guard sigaction(SIGPIPE, nil, &current) == 0 else {
+            return "error"
         }
-        return pythonPath
+        if (Int32(current.sa_flags) & SA_SIGINFO) != 0 {
+            return "custom"
+        }
+        let handlerBits = unsafeBitCast(current.__sigaction_u.__sa_handler, to: UInt.self)
+        let sigIgnBits = unsafeBitCast(SIG_IGN, to: UInt.self)
+        let sigDflBits = unsafeBitCast(SIG_DFL, to: UInt.self)
+        if handlerBits == sigIgnBits {
+            return "ignored"
+        }
+        if handlerBits == sigDflBits {
+            return "default"
+        }
+        return "custom"
+    }
+
+    private func sigpipeProbeExecutablePath() throws -> String {
+        let candidate: String? = {
+            if let explicit = ProcessInfo.processInfo.environment["CMUX_CLI_PATH"],
+               !explicit.isEmpty {
+                return explicit
+            }
+            return CommandLine.arguments.first
+        }()
+        guard let path = candidate,
+              FileManager.default.isExecutableFile(atPath: path) else {
+            throw CLIError(message: "SIGPIPE probe could not resolve cmux executable path")
+        }
+        return path
+    }
+
+    private func runSIGPIPEInspect() {
+        cliWriteStdout(Self.currentSIGPIPEDispositionName() + "\n")
     }
 
     private func runSIGPIPEProbe(commandArgs: [String]) throws {
         let mode = commandArgs.first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "spawn"
-        let pythonPath = try sigpipeProbeExecutablePath()
+        let cliPath = try sigpipeProbeExecutablePath()
 
         switch mode {
         case "spawn":
             let process = Process()
             let stdout = Pipe()
             let stderr = Pipe()
-            process.executableURL = URL(fileURLWithPath: pythonPath)
-            process.arguments = ["-c", Self.sigpipeProbePythonScript]
+            process.executableURL = URL(fileURLWithPath: cliPath)
+            process.arguments = ["__sigpipe-inspect"]
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = stdout
             process.standardError = stderr
             try cliRunProcess(process)
-            process.waitUntilExit()
 
+            // Drain pipes before waiting so a child that writes >PIPE_BUF bytes
+            // can't block on a full kernel buffer while we wait for it to exit.
             let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            process.waitUntilExit()
+
             guard process.terminationStatus == 0 else {
                 throw CLIError(
                     message: "SIGPIPE spawn probe failed (\(process.terminationStatus)): \(stderrText.trimmingCharacters(in: .whitespacesAndNewlines))"
@@ -1758,16 +1781,18 @@ struct CMUXCLI {
             cliWriteStdout(stdoutText)
 
         case "exec":
-            var argv = ([pythonPath, "-c", Self.sigpipeProbePythonScript]).map { strdup($0) }
+            let arg0 = strdup(cliPath)
+            let arg1 = strdup("__sigpipe-inspect")
+            var argv: [UnsafeMutablePointer<CChar>?] = [arg0, arg1, nil]
             defer {
-                for item in argv {
-                    free(item)
-                }
+                free(arg0)
+                free(arg1)
             }
-            argv.append(nil)
 
             let code = cliExecFailureErrno {
-                execv(pythonPath, &argv)
+                _ = argv.withUnsafeMutableBufferPointer { buffer in
+                    execv(cliPath, buffer.baseAddress)
+                }
             }
             throw CLIError(message: "SIGPIPE exec probe failed: \(String(cString: strerror(code)))")
 
@@ -1914,6 +1939,11 @@ struct CMUXCLI {
 
         if command == "__sigpipe-probe" {
             try runSIGPIPEProbe(commandArgs: commandArgs)
+            return
+        }
+
+        if command == "__sigpipe-inspect" {
+            runSIGPIPEInspect()
             return
         }
 
@@ -2149,60 +2179,60 @@ struct CMUXCLI {
             case "status":
                 let response = try client.sendV2(method: "auth.status")
                 if jsonOutput {
-                    print(jsonString(response))
+                    cliPrint(jsonString(response))
                     break
                 }
                 let signedIn = (response["signed_in"] as? Bool) ?? false
                 if !signedIn {
-                    print("Not signed in.")
-                    print("Run: cmux auth login")
+                    cliPrint("Not signed in.")
+                    cliPrint("Run: cmux auth login")
                     break
                 }
                 let user = response["user"] as? [String: Any]
                 let email = user?["email"] as? String
                 let display = user?["display_name"] as? String
                 let userID = user?["id"] as? String
-                print("Signed in.")
-                if let email { print("  email:    \(email)") }
-                if let display { print("  name:     \(display)") }
-                if let userID { print("  user_id:  \(userID)") }
+                cliPrint("Signed in.")
+                if let email { cliPrint("  email:    \(email)") }
+                if let display { cliPrint("  name:     \(display)") }
+                if let userID { cliPrint("  user_id:  \(userID)") }
                 if let teamID = response["selected_team_id"] as? String {
-                    print("  team_id:  \(teamID)")
+                    cliPrint("  team_id:  \(teamID)")
                 }
 
             case "login":
                 let statusBefore = try client.sendV2(method: "auth.status")
                 if (statusBefore["signed_in"] as? Bool) == true {
                     let email = (statusBefore["user"] as? [String: Any])?["email"] as? String
-                    print("Already signed in\(email.map { " as \($0)" } ?? ""). Use `cmux auth logout` to sign out first.")
+                    cliPrint("Already signed in\(email.map { " as \($0)" } ?? ""). Use `cmux auth logout` to sign out first.")
                     break
                 }
-                print("Opening sign-in popup on the cmux mac app.")
+                cliPrint("Opening sign-in popup on the cmux mac app.")
                 // auth.begin_sign_in blocks on the server side until the
                 // popup completes (or 5min timeout). The response is the
                 // callback — no polling.
                 let result = try client.sendV2(method: "auth.begin_sign_in")
                 if (result["signed_in"] as? Bool) == true {
                     let email = (result["user"] as? [String: Any])?["email"] as? String
-                    print("Signed in\(email.map { " as \($0)" } ?? "").")
+                    cliPrint("Signed in\(email.map { " as \($0)" } ?? "").")
                 } else if (result["timed_out"] as? Bool) == true {
-                    print("Timed out waiting for sign-in. Run `cmux auth status` once you've finished in the popup.")
+                    cliPrint("Timed out waiting for sign-in. Run `cmux auth status` once you've finished in the popup.")
                 } else {
-                    print("Sign-in did not complete. Run `cmux auth status` to check.")
+                    cliPrint("Sign-in did not complete. Run `cmux auth status` to check.")
                 }
 
             case "logout":
                 let statusBefore = try client.sendV2(method: "auth.status")
                 if (statusBefore["signed_in"] as? Bool) != true {
-                    print("Already signed out.")
+                    cliPrint("Already signed out.")
                     break
                 }
                 // auth.sign_out awaits the token clear before replying.
                 let result = try client.sendV2(method: "auth.sign_out")
                 if (result["signed_in"] as? Bool) != true {
-                    print("Signed out.")
+                    cliPrint("Signed out.")
                 } else {
-                    print("Sign-out requested but state hasn't cleared yet. Run `cmux auth status` to confirm.")
+                    cliPrint("Sign-out requested but state hasn't cleared yet. Run `cmux auth status` to confirm.")
                 }
 
             default:
