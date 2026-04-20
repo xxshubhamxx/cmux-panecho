@@ -2901,6 +2901,54 @@ final class ZshShellIntegrationHandoffTests: XCTestCase {
         XCTAssertTrue(output.contains("133;A;redraw=last;cl=line"), output)
     }
 
+    func testCmuxTakesOverGhosttyPromptMarkersBeforeResizeRedraws() throws {
+        let output = try runInteractiveZsh(
+            cmuxLoadGhosttyIntegration: true,
+            cmuxLoadShellIntegration: true,
+            command: """
+            (( $+functions[_ghostty_deferred_init] )) && _ghostty_deferred_init >/dev/null 2>&1
+            (( $+functions[_cmux_take_over_ghostty_prompt_hooks] )) && _cmux_take_over_ghostty_prompt_hooks >/dev/null 2>&1
+            typeset -i ps1HasPromptMark=0 ps1HasInputMark=0 ps2HasPromptMark=0 ps2HasInputMark=0
+            [[ $PS1 == *$'%{\\e]133;A'* || $PS1 == *$'%{\\e]133;P'* ]] && ps1HasPromptMark=1
+            [[ $PS1 == *$'%{\\e]133;B'* ]] && ps1HasInputMark=1
+            [[ $PS2 == *$'%{\\e]133;A'* || $PS2 == *$'%{\\e]133;P'* ]] && ps2HasPromptMark=1
+            [[ $PS2 == *$'%{\\e]133;B'* ]] && ps2HasInputMark=1
+            print -r -- "TAKEOVER=${_CMUX_GHOSTTY_PROMPT_TAKEOVER:-0} " \
+                "PRECMD=${+functions[_ghostty_precmd]} PREEXEC=${+functions[_ghostty_preexec]} " \
+                "PRECMDS=${(j:,:)precmd_functions} PREEXECS=${(j:,:)preexec_functions} " \
+                "PS1_PROMPT=${ps1HasPromptMark} PS1_INPUT=${ps1HasInputMark} " \
+                "PS2_PROMPT=${ps2HasPromptMark} PS2_INPUT=${ps2HasInputMark}"
+            """
+        )
+
+        XCTAssertTrue(output.contains("TAKEOVER=1"), output)
+        XCTAssertTrue(output.contains("PRECMD=1"), output)
+        XCTAssertTrue(output.contains("PREEXEC=1"), output)
+        XCTAssertFalse(output.contains("_ghostty_precmd"), output)
+        XCTAssertFalse(output.contains("_ghostty_preexec"), output)
+        XCTAssertTrue(output.contains("PS1_PROMPT=0"), output)
+        XCTAssertTrue(output.contains("PS1_INPUT=0"), output)
+        XCTAssertTrue(output.contains("PS2_PROMPT=0"), output)
+        XCTAssertTrue(output.contains("PS2_INPUT=0"), output)
+    }
+
+    func testCmuxPromptTakeoverEmitsResizeSafeFreshPromptMarker() throws {
+        let output = try runInteractiveZsh(
+            cmuxLoadGhosttyIntegration: true,
+            cmuxLoadShellIntegration: true,
+            command: """
+            (( $+functions[_ghostty_deferred_init] )) && _ghostty_deferred_init >/dev/null 2>&1
+            (( $+functions[_cmux_take_over_ghostty_prompt_hooks] )) && _cmux_take_over_ghostty_prompt_hooks >/dev/null 2>&1
+            _ghostty_fd=1
+            _ghostty_state=1
+            _cmux_ghostty_precmd 7
+            """
+        )
+
+        XCTAssertTrue(output.contains("\u{001B}]133;D;7\u{0007}"), output)
+        XCTAssertTrue(output.contains("\u{001B}]133;A;redraw=last;cl=line\u{0007}"), output)
+    }
+
     func testShellIntegrationWinchGuardDoesNotPrintSpacerLineOnResize() throws {
         let output = try runInteractiveZsh(
             cmuxLoadGhosttyIntegration: false,
