@@ -13511,6 +13511,14 @@ private struct TabItemView: View, Equatable {
         .onAppear {
             refreshWorkspaceSnapshot(force: true)
         }
+        .onDisappear {
+            // Row was recycled by LazyVStack while this tab was the hovered
+            // one; drop the stale hover so the close button doesn't appear
+            // glued to this tab when it scrolls back into view.
+            if dragState.hoveredTabId == tab.id {
+                dragState.hoveredTabId = nil
+            }
+        }
         .onReceive(
             tab.sidebarImmediateObservationPublisher
                 .receive(on: RunLoop.main)
