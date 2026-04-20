@@ -1888,14 +1888,17 @@ private final class SelectedWorkspaceDirectoryObserver: ObservableObject {
         guard self.tabManager !== tabManager || cancellable == nil else { return }
         self.tabManager = tabManager
         cancellable = tabManager.$selectedTabId
-            .compactMap { [weak tabManager] tabId -> Workspace? in
+            .map { [weak tabManager] tabId -> Workspace? in
                 guard let tabId, let tabManager else { return nil }
                 return tabManager.tabs.first(where: { $0.id == tabId })
             }
-            .removeDuplicates(by: { $0.id == $1.id })
-            .map { workspace -> AnyPublisher<(UUID, String), Never> in
-                workspace.$currentDirectory
-                    .map { (workspace.id, $0) }
+            .removeDuplicates(by: { $0?.id == $1?.id })
+            .map { workspace -> AnyPublisher<(UUID?, String?), Never> in
+                guard let workspace else {
+                    return Just<(UUID?, String?)>((nil, nil)).eraseToAnyPublisher()
+                }
+                return workspace.$currentDirectory
+                    .map { (Optional(workspace.id), Optional($0)) }
                     .eraseToAnyPublisher()
             }
             .switchToLatest()
@@ -1904,9 +1907,7 @@ private final class SelectedWorkspaceDirectoryObserver: ObservableObject {
             }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.directoryChangeGeneration &+= 1
-                }
+                self?.directoryChangeGeneration &+= 1
             }
     }
 }
