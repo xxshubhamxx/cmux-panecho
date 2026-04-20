@@ -3116,7 +3116,7 @@ class TabManager: ObservableObject {
     }
 
     private final class CommandRunState: @unchecked Sendable {
-        private typealias Continuation = CheckedContinuation<CommandResult?, Never>
+        fileprivate typealias Continuation = CheckedContinuation<CommandResult?, Never>
 
         private let lock = NSLock()
         private var continuation: Continuation?
@@ -3127,7 +3127,7 @@ class TabManager: ObservableObject {
         private var didResume = false
         private var timeoutWorkItem: DispatchWorkItem?
 
-        init(continuation: Continuation) {
+        fileprivate init(continuation: Continuation) {
             self.continuation = continuation
         }
 
