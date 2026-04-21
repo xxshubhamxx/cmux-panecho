@@ -358,12 +358,16 @@ final class CmuxWebView: WKWebView {
     /// BrowserPanelView updates this as pane focus state changes.
     var allowsFirstResponderAcquisition: Bool = true
     private var pointerFocusAllowanceDepth: Int = 0
+    private var programmaticFocusAllowanceDepth: Int = 0
     private var pasteAsPlainTextTargetAvailable = false
     private var lastPasteAsPlainTextPerformKeyEventTimestamp: TimeInterval?
     var allowsFirstResponderAcquisitionEffective: Bool {
-        allowsFirstResponderAcquisition || pointerFocusAllowanceDepth > 0
+        allowsFirstResponderAcquisition ||
+            pointerFocusAllowanceDepth > 0 ||
+            programmaticFocusAllowanceDepth > 0
     }
     var debugPointerFocusAllowanceDepth: Int { pointerFocusAllowanceDepth }
+    var debugProgrammaticFocusAllowanceDepth: Int { programmaticFocusAllowanceDepth }
 
     override init(frame: NSRect, configuration: WKWebViewConfiguration) {
         super.init(frame: frame, configuration: configuration)
@@ -418,7 +422,9 @@ final class CmuxWebView: WKWebView {
             dlog(
                 "browser.focus.blockedBecome web=\(ObjectIdentifier(self)) " +
                 "policy=\(allowsFirstResponderAcquisition ? 1 : 0) " +
-                "pointerDepth=\(pointerFocusAllowanceDepth) eventType=\(eventType)"
+                "pointerDepth=\(pointerFocusAllowanceDepth) " +
+                "programmaticDepth=\(programmaticFocusAllowanceDepth) " +
+                "eventType=\(eventType)"
             )
 #endif
             return false
@@ -432,7 +438,9 @@ final class CmuxWebView: WKWebView {
         dlog(
             "browser.focus.become web=\(ObjectIdentifier(self)) result=\(result ? 1 : 0) " +
             "policy=\(allowsFirstResponderAcquisition ? 1 : 0) " +
-            "pointerDepth=\(pointerFocusAllowanceDepth) eventType=\(eventType)"
+            "pointerDepth=\(pointerFocusAllowanceDepth) " +
+            "programmaticDepth=\(programmaticFocusAllowanceDepth) " +
+            "eventType=\(eventType)"
         )
 #endif
         return result
@@ -454,6 +462,28 @@ final class CmuxWebView: WKWebView {
             dlog(
                 "browser.focus.pointerAllowance.exit web=\(ObjectIdentifier(self)) " +
                 "depth=\(pointerFocusAllowanceDepth)"
+            )
+#endif
+        }
+        return body()
+    }
+
+    /// Temporarily permits explicit app-owned focus transitions into this webview
+    /// without allowing background page autofocus to bypass pane focus policy.
+    func withProgrammaticFocusAllowance<T>(_ body: () -> T) -> T {
+        programmaticFocusAllowanceDepth += 1
+#if DEBUG
+        dlog(
+            "browser.focus.programmaticAllowance.enter web=\(ObjectIdentifier(self)) " +
+            "depth=\(programmaticFocusAllowanceDepth)"
+        )
+#endif
+        defer {
+            programmaticFocusAllowanceDepth = max(0, programmaticFocusAllowanceDepth - 1)
+#if DEBUG
+            dlog(
+                "browser.focus.programmaticAllowance.exit web=\(ObjectIdentifier(self)) " +
+                "depth=\(programmaticFocusAllowanceDepth)"
             )
 #endif
         }

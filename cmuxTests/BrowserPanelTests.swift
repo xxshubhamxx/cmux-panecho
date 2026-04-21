@@ -232,6 +232,31 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         XCTAssertTrue(panel.canApplyFindFieldFocusRequest(secondRequest))
     }
 
+    func testPassiveWebViewObservationDoesNotOverridePendingFindIntent() throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+
+        panel.startFind()
+        let requestId = try XCTUnwrap(panel.pendingFindFieldFocusRequestId)
+
+        panel.noteWebViewFocused(source: .passiveObservation)
+
+        XCTAssertEqual(panel.pendingFindFieldFocusRequestId, requestId)
+        XCTAssertEqual(panel.preferredFocusIntentForActivation(), .browser(.findField))
+    }
+
+    func testPassiveWebViewObservationDoesNotOverrideActiveFindIntent() throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+
+        panel.startFind()
+        let requestId = try XCTUnwrap(panel.pendingFindFieldFocusRequestId)
+        panel.noteFindFieldFocused(requestId: requestId)
+
+        panel.noteWebViewFocused(source: .passiveObservation)
+
+        XCTAssertNil(panel.pendingFindFieldFocusRequestId)
+        XCTAssertEqual(panel.preferredFocusIntentForActivation(), .browser(.findField))
+    }
+
     func testWebViewFocusCanOverrideFindIntentWhileFindBarStaysVisible() throws {
         let panel = BrowserPanel(workspaceId: UUID())
 
@@ -240,7 +265,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         panel.noteFindFieldFocused(requestId: requestId)
         XCTAssertEqual(panel.preferredFocusIntentForActivation(), .browser(.findField))
 
-        panel.noteWebViewFocused()
+        panel.noteWebViewFocused(source: .explicit)
 
         XCTAssertNotNil(panel.searchState)
         XCTAssertEqual(panel.preferredFocusIntentForActivation(), .browser(.webView))
@@ -258,6 +283,177 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         XCTAssertNil(panel.searchState)
         XCTAssertEqual(panel.preferredFocusIntentForActivation(), .browser(.webView))
         XCTAssertNil(panel.pendingFindFieldFocusRequestId)
+    }
+
+    func testHideFindDefersDismissRestoreUntilOverlayDisappears() throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+
+        panel.startFind()
+        let requestId = try XCTUnwrap(panel.pendingFindFieldFocusRequestId)
+        panel.noteFindFieldFocused(requestId: requestId)
+
+        panel.hideFind(reason: "test")
+
+        XCTAssertNil(panel.searchState)
+        XCTAssertEqual(panel.preferredFocusIntentForActivation(), .browser(.webView))
+
+        panel.completePendingFindDismissIfNeeded(source: "test")
+        let pendingRestoreRequest = try XCTUnwrap(panel.pendingWebContentRestoreRequestId)
+        XCTAssertEqual(panel.preferredFocusIntentForActivation(), .browser(.webView))
+
+        panel.startFind()
+
+        XCTAssertNotEqual(panel.pendingFindFieldFocusRequestId, pendingRestoreRequest)
+        XCTAssertNil(panel.pendingWebContentRestoreRequestId)
+    }
+
+    func testFindDismissOverlayDisappearStartsPendingWebContentRestore() throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+
+        panel.startFind()
+        let requestId = try XCTUnwrap(panel.pendingFindFieldFocusRequestId)
+        panel.noteFindFieldFocused(requestId: requestId)
+        panel.hideFind(reason: "test")
+
+        XCTAssertNil(panel.pendingWebContentRestoreRequestId)
+
+        panel.completePendingFindDismissIfNeeded(source: "test")
+
+        XCTAssertNotNil(panel.pendingWebContentRestoreRequestId)
+        XCTAssertNil(panel.searchState)
+        XCTAssertEqual(panel.preferredFocusIntentForActivation(), .browser(.webView))
+    }
+
+    func testPendingFindDismissRestoreWaitsForPaneFocusBeforeTakingWebViewFocus() throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let contentView = try XCTUnwrap(window.contentView)
+        panel.webView.frame = contentView.bounds
+        panel.webView.autoresizingMask = [.width, .height]
+        contentView.addSubview(panel.webView)
+
+        let findField = NSTextField(frame: NSRect(x: 20, y: 20, width: 180, height: 24))
+        setBrowserSearchOverlayPanelId(panel.id, on: findField)
+        contentView.addSubview(findField)
+
+        window.makeKeyAndOrderFront(nil)
+        contentView.layoutSubtreeIfNeeded()
+        XCTAssertTrue(window.makeFirstResponder(findField))
+
+        panel.startFind()
+        let requestId = try XCTUnwrap(panel.pendingFindFieldFocusRequestId)
+        panel.noteFindFieldFocused(requestId: requestId)
+        panel.hideFind(reason: "test")
+        panel.completePendingFindDismissIfNeeded(source: "test")
+
+        XCTAssertNotNil(panel.pendingWebContentRestoreRequestId)
+        XCTAssertEqual(browserSearchOverlayPanelId(for: window.firstResponder), panel.id)
+
+        panel.notePanelFocusChanged(true)
+
+        XCTAssertNotNil(panel.pendingWebContentRestoreRequestId)
+        XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
+    }
+
+    @MainActor
+    func testExplicitWebViewFocusYieldsOwnedBrowserFindFieldResponder() throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let contentView = try XCTUnwrap(window.contentView)
+        panel.webView.frame = contentView.bounds
+        panel.webView.autoresizingMask = [.width, .height]
+        contentView.addSubview(panel.webView)
+
+        let findField = NSTextField(frame: NSRect(x: 20, y: 20, width: 180, height: 24))
+        setBrowserSearchOverlayPanelId(panel.id, on: findField)
+        contentView.addSubview(findField)
+
+        window.makeKeyAndOrderFront(nil)
+        contentView.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(window.makeFirstResponder(findField))
+        XCTAssertEqual(browserSearchOverlayPanelId(for: window.firstResponder), panel.id)
+
+        XCTAssertTrue(panel.requestExplicitWebViewFocus())
+        XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
+    }
+
+    @MainActor
+    func testExplicitWebViewFocusBypassesStaleFalseResponderPolicy() throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let contentView = try XCTUnwrap(window.contentView)
+        panel.webView.frame = contentView.bounds
+        panel.webView.autoresizingMask = [.width, .height]
+        contentView.addSubview(panel.webView)
+
+        window.makeKeyAndOrderFront(nil)
+        contentView.layoutSubtreeIfNeeded()
+
+        let cmuxWebView = try XCTUnwrap(panel.webView as? CmuxWebView)
+        cmuxWebView.allowsFirstResponderAcquisition = false
+
+        XCTAssertFalse(window.makeFirstResponder(panel.webView))
+        XCTAssertTrue(panel.requestExplicitWebViewFocus())
+        XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
+    }
+
+    @MainActor
+    func testFindDismissRestoreBypassesStaleFalseResponderPolicy() throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+
+        let contentView = try XCTUnwrap(window.contentView)
+        panel.webView.frame = contentView.bounds
+        panel.webView.autoresizingMask = [.width, .height]
+        contentView.addSubview(panel.webView)
+
+        let findField = NSTextField(frame: NSRect(x: 20, y: 20, width: 180, height: 24))
+        setBrowserSearchOverlayPanelId(panel.id, on: findField)
+        contentView.addSubview(findField)
+
+        window.makeKeyAndOrderFront(nil)
+        contentView.layoutSubtreeIfNeeded()
+        XCTAssertTrue(window.makeFirstResponder(findField))
+
+        let cmuxWebView = try XCTUnwrap(panel.webView as? CmuxWebView)
+        cmuxWebView.allowsFirstResponderAcquisition = false
+
+        panel.startFind()
+        let requestId = try XCTUnwrap(panel.pendingFindFieldFocusRequestId)
+        panel.noteFindFieldFocused(requestId: requestId)
+        panel.notePanelFocusChanged(true)
+        panel.hideFind(reason: "test")
+        panel.completePendingFindDismissIfNeeded(source: "test")
+
+        XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
 }
 

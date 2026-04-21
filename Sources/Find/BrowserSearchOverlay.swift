@@ -42,6 +42,7 @@ struct BrowserSearchOverlay: View {
     let onPrevious: () -> Void
     let onClose: () -> Void
     let onFieldDidFocus: (UUID?) -> Void
+    let onDisappear: () -> Void
     @State private var corner: Corner = .topRight
     @State private var dragOffset: CGSize = .zero
     @State private var barSize: CGSize = .zero
@@ -145,6 +146,7 @@ struct BrowserSearchOverlay: View {
                     }
             )
         }
+        .onDisappear(perform: onDisappear)
     }
 
     private var clipShape: some Shape {

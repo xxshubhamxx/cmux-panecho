@@ -694,6 +694,9 @@ struct BrowserPanelView: View {
                 onClose: { panel.hideFind(reason: "overlay") },
                 onFieldDidFocus: { requestId in
                     panel.noteFindFieldFocused(requestId: requestId)
+                },
+                onDisappear: {
+                    panel.completePendingFindDismissIfNeeded(source: "overlayDisappear")
                 }
             )
         }
@@ -757,7 +760,8 @@ struct BrowserPanelView: View {
                     onNext: configuration.onNext,
                     onPrevious: configuration.onPrevious,
                     onClose: configuration.onClose,
-                    onFieldDidFocus: configuration.onFieldDidFocus
+                    onFieldDidFocus: configuration.onFieldDidFocus,
+                    onDisappear: configuration.onDisappear
                 )
             }
         }
@@ -824,6 +828,7 @@ struct BrowserPanelView: View {
         }
         panel.refreshAppearanceDrivenColors()
         panel.setBrowserThemeMode(browserThemeMode)
+        panel.notePanelFocusChanged(isFocused)
         applyPendingAddressBarFocusRequestIfNeeded()
         syncURLFromPanel()
         // If the browser surface is focused but has no URL loaded yet, auto-focus the omnibar.
@@ -852,6 +857,7 @@ struct BrowserPanelView: View {
 #endif
             setAddressBarFocused(false, reason: "webView.clickIntent")
         }
+        panel.noteWebViewFocused()
         if !isFocused {
             onRequestPanelFocus()
         }
@@ -920,7 +926,7 @@ struct BrowserPanelView: View {
             "panel=\(panel.id.uuidString.prefix(5)) web=\(browserPanelViewObjectID(panel.webView)) " +
             "next=\(visibleInUI ? 1 : 0) focused=\(isFocused ? 1 : 0) " +
             "window=\(panel.webView.window?.windowNumber ?? -1)"
-        dlog(line)
+        browserFindDebugLog(line)
 #endif
         if visibleInUI {
             panel.cancelPendingDeveloperToolsVisibilityLossCheck()
@@ -945,8 +951,13 @@ struct BrowserPanelView: View {
             event: "panelFocus.onChange",
             detail: "next=\(focused ? 1 : 0)"
         )
+        panel.debugLogWebContentFocusSnapshot(
+            event: focused ? "panelFocus.focus" : "panelFocus.blur",
+            detail: "next=\(focused ? 1 : 0)"
+        )
 #endif
         // Ensure this view doesn't retain focus while hidden (WorkspaceSplit keepAllAlive).
+        panel.notePanelFocusChanged(focused)
         if focused {
             applyPendingAddressBarFocusRequestIfNeeded()
             autoFocusOmnibarIfBlank()
@@ -1568,7 +1579,7 @@ struct BrowserPanelView: View {
         let next = isPanelFocused && !panel.shouldSuppressWebViewFocus()
         if cmuxWebView.allowsFirstResponderAcquisition != next {
 #if DEBUG
-            dlog(
+            browserFindDebugLog(
                 "browser.focus.policy.resync panel=\(panel.id.uuidString.prefix(5)) " +
                 "web=\(ObjectIdentifier(cmuxWebView)) old=\(cmuxWebView.allowsFirstResponderAcquisition ? 1 : 0) " +
                 "new=\(next ? 1 : 0) reason=\(reason) " +
@@ -2451,7 +2462,7 @@ struct BrowserPanelView: View {
                 }
                 syncWebViewResponderPolicyWithViewState(reason: "effects.blurToWebView.handoff")
                 panel.clearWebViewFocusSuppression()
-                panel.transitionToWebContentFocus(reason: "addressBarExit") { restored in
+                panel.transitionToWebContentFocus(reason: "addressBarExit", completion: { restored in
                     guard shouldApplyAddressBarExitFallback(in: window) else {
 #if DEBUG
                         dlog(
@@ -2463,7 +2474,7 @@ struct BrowserPanelView: View {
                         return
                     }
                     NotificationCenter.default.post(name: .browserDidExitAddressBar, object: panel.id)
-                }
+                })
             }
         }
     }
@@ -6875,7 +6886,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             return
         }
         if isPanelFocused && responderChainContains(window.firstResponder, target: webView) {
-            panel.noteWebViewFocused()
+            panel.noteWebViewFocused(source: .passiveObservation)
         }
         if shouldFocusWebView {
             if panel.shouldSuppressWebViewFocus() {

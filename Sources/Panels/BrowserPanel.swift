@@ -13,6 +13,29 @@ import CommonCrypto
 import Security
 #endif
 
+#if DEBUG
+private let cmuxBrowserFindDebugLogPath = "/tmp/cmux-find-issue-2289-appkit-split-host.log"
+private let cmuxBrowserFindDebugLogLock = NSLock()
+
+func browserFindDebugLog(_ message: String) {
+    let ts = ISO8601DateFormatter().string(from: Date())
+    let line = "[\(ts)] \(message)\n"
+    cmuxBrowserFindDebugLogLock.lock()
+    defer { cmuxBrowserFindDebugLogLock.unlock() }
+    if let handle = FileHandle(forWritingAtPath: cmuxBrowserFindDebugLogPath) {
+        handle.seekToEndOfFile()
+        handle.write(Data(line.utf8))
+        handle.closeFile()
+    } else {
+        FileManager.default.createFile(atPath: cmuxBrowserFindDebugLogPath, contents: Data(line.utf8))
+    }
+}
+#else
+func browserFindDebugLog(_ message: String) {
+    _ = message
+}
+#endif
+
 fileprivate func dedupedCanonicalURLs(_ urls: [URL]) -> [URL] {
     var seen = Set<String>()
     var result: [URL] = []
@@ -2039,6 +2062,53 @@ final class BrowserPanel: Panel, ObservableObject {
       }
     })();
     """
+    private static let findDismissFocusCaptureScript = """
+    (() => {
+      try {
+        const syncState = (state) => {
+          window.__cmuxFindDismissFocusState = state;
+          try {
+            if (window.top && window.top !== window) {
+              window.top.postMessage({ cmuxFindDismissFocusState: state }, "*");
+            } else if (window.top) {
+              window.top.__cmuxFindDismissFocusState = state;
+            }
+          } catch (_) {}
+        };
+
+        const active = document.activeElement;
+        if (!active) {
+          return "ignored:none";
+        }
+
+        const tag = (active.tagName || "").toLowerCase();
+        const type = (active.type || "").toLowerCase();
+        const isEditable =
+          !!active.isContentEditable ||
+          tag === "textarea" ||
+          (tag === "input" && type !== "hidden");
+        if (!isEditable) {
+          return "ignored:noneditable";
+        }
+
+        let id = active.getAttribute("data-cmux-addressbar-focus-id");
+        if (!id) {
+          id = "cmux-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+          active.setAttribute("data-cmux-addressbar-focus-id", id);
+        }
+
+        const state = { id, selectionStart: null, selectionEnd: null };
+        if (typeof active.selectionStart === "number" && typeof active.selectionEnd === "number") {
+          state.selectionStart = active.selectionStart;
+          state.selectionEnd = active.selectionEnd;
+        }
+        syncState(state);
+        return "captured:" + id;
+      } catch (_) {
+        return "error";
+      }
+    })();
+    """
     private static let addressBarFocusRestoreScript = """
     (() => {
       try {
@@ -2060,6 +2130,92 @@ final class BrowserPanel: Panel, ObservableObject {
               window.top.postMessage({ cmuxAddressBarFocusState: null }, "*");
             } else if (window.top) {
               window.top.__cmuxAddressBarFocusState = null;
+            }
+          } catch (_) {}
+        };
+
+        const state = readState();
+        if (!state || typeof state.id !== "string" || !state.id) {
+          return "no_state";
+        }
+
+        const selector = '[data-cmux-addressbar-focus-id="' + state.id + '"]';
+        const findTarget = (doc) => {
+          if (!doc) return null;
+          const direct = doc.querySelector(selector);
+          if (direct && direct.isConnected) return direct;
+          const frames = doc.querySelectorAll("iframe,frame");
+          for (let i = 0; i < frames.length; i += 1) {
+            const frame = frames[i];
+            try {
+              const childDoc = frame.contentDocument;
+              if (!childDoc) continue;
+              const nested = findTarget(childDoc);
+              if (nested) return nested;
+            } catch (_) {}
+          }
+          return null;
+        };
+
+        const target = findTarget(document);
+        if (!target) {
+          clearState();
+          return "missing_target";
+        }
+
+        try {
+          target.focus({ preventScroll: true });
+        } catch (_) {
+          try { target.focus(); } catch (_) {}
+        }
+
+        let focused = false;
+        try {
+          focused =
+            target === target.ownerDocument.activeElement ||
+            (typeof target.matches === "function" && target.matches(":focus"));
+        } catch (_) {}
+        if (!focused) {
+          return "not_focused";
+        }
+
+        if (
+          typeof state.selectionStart === "number" &&
+          typeof state.selectionEnd === "number" &&
+          typeof target.setSelectionRange === "function"
+        ) {
+          try {
+            target.setSelectionRange(state.selectionStart, state.selectionEnd);
+          } catch (_) {}
+        }
+        clearState();
+        return "restored";
+      } catch (_) {
+        return "error";
+      }
+    })();
+    """
+    private static let findDismissFocusRestoreScript = """
+    (() => {
+      try {
+        const readState = () => {
+          let state = window.__cmuxFindDismissFocusState;
+          try {
+            if ((!state || typeof state.id !== "string" || !state.id) &&
+                window.top && window.top.__cmuxFindDismissFocusState) {
+              state = window.top.__cmuxFindDismissFocusState;
+            }
+          } catch (_) {}
+          return state;
+        };
+
+        const clearState = () => {
+          window.__cmuxFindDismissFocusState = null;
+          try {
+            if (window.top && window.top !== window) {
+              window.top.postMessage({ cmuxFindDismissFocusState: null }, "*");
+            } else if (window.top) {
+              window.top.__cmuxFindDismissFocusState = null;
             }
           } catch (_) {}
         };
@@ -2216,8 +2372,42 @@ final class BrowserPanel: Panel, ObservableObject {
         }
     }
 
+    enum BrowserWebViewFocusSource {
+        case explicit
+        case passiveObservation
+    }
+
+    private enum PendingWebContentRestoreSource: Equatable {
+        case tracked
+        case findDismiss
+    }
+
+    private struct PendingWebContentRestore: Equatable {
+        let requestId: UUID
+        let reason: String
+        let source: PendingWebContentRestoreSource
+    }
+
+    private enum BrowserWebContentRestorePhase: Equatable {
+        case idle
+        case waitingForFindOverlayDismiss(reason: String)
+        case waitingForWebViewFocus(PendingWebContentRestore)
+        case restoring(PendingWebContentRestore)
+
+        var requestId: UUID? {
+            switch self {
+            case .waitingForWebViewFocus(let request), .restoring(let request):
+                return request.requestId
+            case .idle, .waitingForFindOverlayDismiss:
+                return nil
+            }
+        }
+    }
+
     /// Semantic in-panel focus target owned by BrowserPanel, not by overlay-local state.
     @Published private var subfocusState: BrowserSubfocusState = .webView
+    private var webContentRestorePhase: BrowserWebContentRestorePhase = .idle
+    private var isPaneFocusedForBrowserRestore = false
 
     var pendingAddressBarFocusRequestId: UUID? {
         subfocusState.pendingAddressBarFocusRequestId
@@ -2229,6 +2419,10 @@ final class BrowserPanel: Panel, ObservableObject {
 
     var preferredFocusIntent: BrowserPanelFocusIntent {
         subfocusState.intent
+    }
+
+    var pendingWebContentRestoreRequestId: UUID? {
+        webContentRestorePhase.requestId
     }
 
     /// Find-in-page state. Non-nil when the find bar is visible.
@@ -3397,7 +3591,7 @@ final class BrowserPanel: Panel, ObservableObject {
             noteWebViewFocused()
             return
         }
-        if window.makeFirstResponder(webView) {
+        if acquireWebViewFirstResponder(in: window) {
             noteWebViewFocused()
         }
     }
@@ -3419,7 +3613,9 @@ final class BrowserPanel: Panel, ObservableObject {
             return true
         }
 
-        guard window.makeFirstResponder(webView) else { return false }
+        yieldOwnedBrowserTextResponderIfNeeded(in: window)
+
+        guard acquireWebViewFirstResponder(in: window) else { return false }
         // Prevent omnibar auto-focus from immediately stealing first responder back.
         suppressOmnibarAutofocus(for: 1.5)
         noteWebViewFocused()
@@ -3428,13 +3624,40 @@ final class BrowserPanel: Panel, ObservableObject {
             guard let self, let window, let webView else { return }
             guard webView.window === window else { return }
             if !Self.responderChainContains(window.firstResponder, target: webView),
-               window.makeFirstResponder(webView) {
+               self.acquireWebViewFirstResponder(webView, in: window) {
                 self.suppressOmnibarAutofocus(for: 1.5)
                 self.noteWebViewFocused()
             }
         }
 
         return true
+    }
+
+    @discardableResult
+    private func acquireWebViewFirstResponder(in window: NSWindow) -> Bool {
+        acquireWebViewFirstResponder(webView, in: window)
+    }
+
+    @discardableResult
+    private func acquireWebViewFirstResponder(_ targetWebView: WKWebView, in window: NSWindow) -> Bool {
+        if let cmuxWebView = targetWebView as? CmuxWebView {
+            return cmuxWebView.withProgrammaticFocusAllowance {
+                window.makeFirstResponder(targetWebView)
+            }
+        }
+        return window.makeFirstResponder(targetWebView)
+    }
+
+    private func yieldOwnedBrowserTextResponderIfNeeded(in window: NSWindow) {
+        if yieldFocusIntent(.browser(.findField), in: window) {
+            return
+        }
+        if yieldFocusIntent(.browser(.addressBar), in: window) {
+            return
+        }
+        if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor {
+            _ = window.makeFirstResponder(nil)
+        }
     }
 
     func unfocus() {
@@ -4992,11 +5215,16 @@ extension BrowserPanel {
     func startFind() {
         let created = searchState == nil
         if created {
+            captureFindDismissFocusSnapshotIfNeeded()
             searchState = BrowserSearchState()
         }
+        clearPendingWebContentRestore()
         clearAddressBarSubfocus()
         NotificationCenter.default.post(name: .browserDidBlurAddressBar, object: id)
         _ = requestFindFieldFocus(reason: "startFind")
+#if DEBUG
+        debugLogWebContentFocusSnapshot(event: "startFind", detail: "created=\(created ? 1 : 0)")
+#endif
     }
 
     func findNext() {
@@ -5017,13 +5245,37 @@ extension BrowserPanel {
 
     func hideFind(reason: String = "api") {
         let shouldRestorePageFocus = searchState != nil && preferredFocusIntent == .findField
+#if DEBUG
+        debugLogWebContentFocusSnapshot(
+            event: "hideFind",
+            detail: "reason=\(reason) shouldRestore=\(shouldRestorePageFocus ? 1 : 0)"
+        )
+#endif
         guard shouldRestorePageFocus else {
+            clearPendingWebContentRestore()
             searchState = nil
             return
         }
-        transitionToWebContentFocus(reason: "findDismiss.\(reason)") { [weak self] in
-            self?.searchState = nil
+        webContentRestorePhase = .waitingForFindOverlayDismiss(reason: "findDismiss.\(reason)")
+        updateSubfocusState(.webView)
+        searchState = nil
+    }
+
+    func completePendingFindDismissIfNeeded(source: String) {
+        guard case .waitingForFindOverlayDismiss(let pendingFindDismissRestoreReason) = webContentRestorePhase else {
+            return
         }
+#if DEBUG
+        browserFindDebugLog(
+            "browser.focus.findDismiss.overlay panel=\(id.uuidString.prefix(5)) " +
+            "source=\(source) reason=\(pendingFindDismissRestoreReason)"
+        )
+#endif
+        _ = beginPendingWebContentRestore(
+            reason: pendingFindDismissRestoreReason,
+            source: .findDismiss
+        )
+        drivePendingWebContentRestoreIfPossible(trigger: "findOverlayDisappear")
     }
 
     private func restoreFindStateAfterNavigation(replaySearch: Bool) {
@@ -5162,6 +5414,7 @@ extension BrowserPanel {
 
     @discardableResult
     func requestAddressBarFocus() -> UUID {
+        clearPendingWebContentRestore()
         clearFindFieldSubfocus()
         beginSuppressWebViewFocusForAddressBar()
         if let pendingAddressBarFocusRequestId {
@@ -5184,8 +5437,23 @@ extension BrowserPanel {
         return requestId
     }
 
-    func noteWebViewFocused() {
+    func noteWebViewFocused(source: BrowserWebViewFocusSource = .explicit) {
+        if source == .passiveObservation {
+            switch subfocusState {
+            case .webView:
+                break
+            case .addressBar, .findField:
+                return
+            }
+        }
         updateSubfocusState(.webView)
+        applyPendingWebContentRestoreIfNeeded(source: source)
+    }
+
+    func notePanelFocusChanged(_ focused: Bool) {
+        isPaneFocusedForBrowserRestore = focused
+        guard focused else { return }
+        drivePendingWebContentRestoreIfPossible(trigger: "paneFocused")
     }
 
     func noteAddressBarFocused() {
@@ -5384,6 +5652,7 @@ extension BrowserPanel {
     @discardableResult
     func transitionToWebContentFocus(
         reason: String,
+        restoreFromFindDismissSnapshot: Bool = false,
         beforeRestore: (() -> Void)? = nil,
         completion: ((Bool) -> Void)? = nil
     ) -> Bool {
@@ -5395,13 +5664,52 @@ extension BrowserPanel {
             return false
         }
 
-        let focusedWebView = window.makeFirstResponder(webView)
+        let yieldedFindFieldResponder: Bool
+        if restoreFromFindDismissSnapshot {
+            let yieldedOwnedFindField = yieldFocusIntent(.browser(.findField), in: window)
+            let yieldedFieldEditorFallback: Bool
+            if yieldedOwnedFindField {
+                yieldedFieldEditorFallback = false
+            } else if let editor = window.firstResponder as? NSTextView,
+                      editor.isFieldEditor {
+                yieldedFieldEditorFallback = window.makeFirstResponder(nil)
+            } else {
+                yieldedFieldEditorFallback = false
+            }
+            yieldedFindFieldResponder = yieldedOwnedFindField || yieldedFieldEditorFallback
+        } else {
+            yieldedFindFieldResponder = false
+        }
+
+        let focusedWebView = acquireWebViewFirstResponder(in: window)
         if focusedWebView {
             noteWebViewFocused()
         }
+#if DEBUG
+        debugLogWebContentFocusSnapshot(
+            event: "webContent.return.begin",
+            detail: "reason=\(reason) yieldedFind=\(yieldedFindFieldResponder ? 1 : 0) webViewResponder=\(focusedWebView ? 1 : 0)"
+        )
+#endif
 
         beforeRestore?()
-        restoreStoredWebContentFocusIfNeeded { [weak self] restored in
+        let restoreFocus: (@escaping (Bool) -> Void) -> Void =
+            restoreFromFindDismissSnapshot
+            ? { [weak self] completion in
+                guard let self else {
+                    completion(false)
+                    return
+                }
+                self.restoreStoredFindDismissFocusIfNeeded(completion: completion)
+            }
+            : { [weak self] completion in
+                guard let self else {
+                    completion(false)
+                    return
+                }
+                self.restoreStoredWebContentFocusIfNeeded(completion: completion)
+            }
+        restoreFocus { [weak self] restored in
             guard let self else {
                 complete(restored)
                 return
@@ -5414,22 +5722,130 @@ extension BrowserPanel {
             var hasWebViewResponder =
                 Self.responderChainContains(window.firstResponder, target: self.webView)
             if !hasWebViewResponder {
-                hasWebViewResponder = window.makeFirstResponder(self.webView)
+                hasWebViewResponder = self.acquireWebViewFirstResponder(in: window)
             }
             if hasWebViewResponder {
                 self.noteWebViewFocused()
             }
 #if DEBUG
-            dlog(
+            browserFindDebugLog(
                 "browser.focus.webContent.return panel=\(self.id.uuidString.prefix(5)) " +
                 "reason=\(reason) restored=\(restored ? 1 : 0) " +
                 "webViewResponder=\(hasWebViewResponder ? 1 : 0)"
+            )
+            self.debugLogWebContentFocusSnapshot(
+                event: "webContent.return.end",
+                detail: "reason=\(reason) restored=\(restored ? 1 : 0) webViewResponder=\(hasWebViewResponder ? 1 : 0)"
             )
 #endif
             complete(restored)
         }
 
         return focusedWebView
+    }
+
+    @discardableResult
+    private func beginPendingWebContentRestore(
+        reason: String,
+        source: PendingWebContentRestoreSource
+    ) -> PendingWebContentRestore {
+        let request = PendingWebContentRestore(
+            requestId: UUID(),
+            reason: reason,
+            source: source
+        )
+        webContentRestorePhase = .waitingForWebViewFocus(request)
+        updateSubfocusState(.webView)
+#if DEBUG
+        browserFindDebugLog(
+            "browser.focus.webContent.pending panel=\(id.uuidString.prefix(5)) " +
+            "request=\(request.requestId.uuidString.prefix(8)) " +
+            "reason=\(reason) source=\(String(describing: source))"
+        )
+#endif
+        return request
+    }
+
+    private func clearPendingWebContentRestore() {
+        webContentRestorePhase = .idle
+    }
+
+    private func drivePendingWebContentRestoreIfPossible(trigger: String) {
+        let pendingRestore: PendingWebContentRestore
+        switch webContentRestorePhase {
+        case .waitingForWebViewFocus(let request):
+            pendingRestore = request
+        case .idle, .waitingForFindOverlayDismiss, .restoring:
+            return
+        }
+
+        guard isPaneFocusedForBrowserRestore else {
+#if DEBUG
+            browserFindDebugLog(
+                "browser.focus.webContent.pending.skip panel=\(id.uuidString.prefix(5)) " +
+                "request=\(pendingRestore.requestId.uuidString.prefix(8)) " +
+                "reason=\(pendingRestore.reason) source=\(String(describing: pendingRestore.source)) " +
+                "trigger=\(trigger) cause=pane_unfocused"
+            )
+#endif
+            return
+        }
+        guard let window = webView.window, !webView.isHiddenOrHasHiddenAncestor else {
+#if DEBUG
+            browserFindDebugLog(
+                "browser.focus.webContent.pending.skip panel=\(id.uuidString.prefix(5)) " +
+                "request=\(pendingRestore.requestId.uuidString.prefix(8)) " +
+                "reason=\(pendingRestore.reason) source=\(String(describing: pendingRestore.source)) " +
+                "trigger=\(trigger) cause=webview_unavailable " +
+                "hasWindow=\(webView.window == nil ? 0 : 1) hidden=\(webView.isHiddenOrHasHiddenAncestor ? 1 : 0)"
+            )
+#endif
+            return
+        }
+
+        webContentRestorePhase = .restoring(pendingRestore)
+#if DEBUG
+        let hasWebViewResponder = Self.responderChainContains(window.firstResponder, target: webView)
+        let firstResponderDescription = window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        browserFindDebugLog(
+            "browser.focus.webContent.pending.apply panel=\(id.uuidString.prefix(5)) " +
+            "request=\(pendingRestore.requestId.uuidString.prefix(8)) " +
+            "reason=\(pendingRestore.reason) source=\(String(describing: pendingRestore.source)) " +
+            "trigger=\(trigger) webViewResponder=\(hasWebViewResponder ? 1 : 0) " +
+            "fr=\(firstResponderDescription)"
+        )
+#endif
+        let focused = transitionToWebContentFocus(
+            reason: pendingRestore.reason,
+            restoreFromFindDismissSnapshot: pendingRestore.source == .findDismiss,
+            completion: { [weak self] restored in
+                guard let self else { return }
+                if case .restoring(let activeRestore) = self.webContentRestorePhase,
+                   activeRestore.requestId == pendingRestore.requestId {
+                    self.webContentRestorePhase = .idle
+                }
+#if DEBUG
+                browserFindDebugLog(
+                    "browser.focus.webContent.pending.result panel=\(self.id.uuidString.prefix(5)) " +
+                    "reason=\(pendingRestore.reason) restored=\(restored ? 1 : 0)"
+                )
+#endif
+            }
+        )
+#if DEBUG
+        browserFindDebugLog(
+            "browser.focus.webContent.pending.transition panel=\(id.uuidString.prefix(5)) " +
+            "request=\(pendingRestore.requestId.uuidString.prefix(8)) " +
+            "reason=\(pendingRestore.reason) focused=\(focused ? 1 : 0) " +
+            "fr=\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")"
+        )
+#endif
+    }
+
+    private func applyPendingWebContentRestoreIfNeeded(source: BrowserWebViewFocusSource) {
+        drivePendingWebContentRestoreIfPossible(
+            trigger: "webViewFocused.\(String(describing: source))"
+        )
     }
 
     @discardableResult
@@ -5444,15 +5860,39 @@ extension BrowserPanel {
 #if DEBUG
             guard let self else { return }
             if let error {
-                dlog(
+                browserFindDebugLog(
                     "browser.focus.webContent.capture panel=\(self.id.uuidString.prefix(5)) " +
                     "result=error message=\(error.localizedDescription)"
                 )
                 return
             }
             let resultValue = (result as? String) ?? "unknown"
-            dlog(
+            browserFindDebugLog(
                 "browser.focus.webContent.capture panel=\(self.id.uuidString.prefix(5)) " +
+                "result=\(resultValue)"
+            )
+#else
+            _ = self
+            _ = result
+            _ = error
+#endif
+        }
+    }
+
+    private func captureFindDismissFocusSnapshotIfNeeded() {
+        webView.evaluateJavaScript(Self.findDismissFocusCaptureScript) { [weak self] result, error in
+#if DEBUG
+            guard let self else { return }
+            if let error {
+                browserFindDebugLog(
+                    "browser.focus.findDismiss.capture panel=\(self.id.uuidString.prefix(5)) " +
+                    "result=error message=\(error.localizedDescription)"
+                )
+                return
+            }
+            let resultValue = (result as? String) ?? "unknown"
+            browserFindDebugLog(
+                "browser.focus.findDismiss.capture panel=\(self.id.uuidString.prefix(5)) " +
                 "result=\(resultValue)"
             )
 #else
@@ -5483,7 +5923,7 @@ extension BrowserPanel {
     func invalidateWebContentFocusRestoreAttempts() {
         webContentFocusRestoreGeneration &+= 1
 #if DEBUG
-        dlog(
+        browserFindDebugLog(
             "browser.focus.webContent.restore.invalidate panel=\(id.uuidString.prefix(5)) " +
             "generation=\(webContentFocusRestoreGeneration)"
         )
@@ -5491,10 +5931,32 @@ extension BrowserPanel {
     }
 
     func restoreStoredWebContentFocusIfNeeded(completion: @escaping (Bool) -> Void) {
+        restoreStoredTrackedWebContentFocusIfNeeded(
+            script: Self.addressBarFocusRestoreScript,
+            logPrefix: "browser.focus.webContent.restore",
+            completion: completion
+        )
+    }
+
+    private func restoreStoredFindDismissFocusIfNeeded(completion: @escaping (Bool) -> Void) {
+        restoreStoredTrackedWebContentFocusIfNeeded(
+            script: Self.findDismissFocusRestoreScript,
+            logPrefix: "browser.focus.findDismiss.restore",
+            completion: completion
+        )
+    }
+
+    private func restoreStoredTrackedWebContentFocusIfNeeded(
+        script: String,
+        logPrefix: String,
+        completion: @escaping (Bool) -> Void
+    ) {
         webContentFocusRestoreGeneration &+= 1
         let generation = webContentFocusRestoreGeneration
         let delays: [TimeInterval] = [0.0, 0.03, 0.09, 0.2]
         restoreStoredWebContentFocusAttemptIfNeeded(
+            script: script,
+            logPrefix: logPrefix,
             attempt: 0,
             delays: delays,
             generation: generation,
@@ -5503,6 +5965,8 @@ extension BrowserPanel {
     }
 
     private func restoreStoredWebContentFocusAttemptIfNeeded(
+        script: String,
+        logPrefix: String,
         attempt: Int,
         delays: [TimeInterval],
         generation: UInt64,
@@ -5512,7 +5976,7 @@ extension BrowserPanel {
             completion(false)
             return
         }
-        webView.evaluateJavaScript(Self.addressBarFocusRestoreScript) { [weak self] result, error in
+        webView.evaluateJavaScript(script) { [weak self] result, error in
             guard let self else {
                 completion(false)
                 return
@@ -5528,14 +5992,14 @@ extension BrowserPanel {
 
 #if DEBUG
             if let error {
-                dlog(
-                    "browser.focus.webContent.restore panel=\(self.id.uuidString.prefix(5)) " +
+                browserFindDebugLog(
+                    "\(logPrefix) panel=\(self.id.uuidString.prefix(5)) " +
                     "attempt=\(attempt) status=\(status.rawValue) " +
                     "message=\(error.localizedDescription)"
                 )
             } else {
-                dlog(
-                    "browser.focus.webContent.restore panel=\(self.id.uuidString.prefix(5)) " +
+                browserFindDebugLog(
+                    "\(logPrefix) panel=\(self.id.uuidString.prefix(5)) " +
                     "attempt=\(attempt) status=\(status.rawValue)"
                 )
             }
@@ -5558,6 +6022,8 @@ extension BrowserPanel {
                         return
                     }
                     self.restoreStoredWebContentFocusAttemptIfNeeded(
+                        script: script,
+                        logPrefix: logPrefix,
                         attempt: attempt + 1,
                         delays: delays,
                         generation: generation,
@@ -5570,6 +6036,58 @@ extension BrowserPanel {
             completion(false)
         }
     }
+
+#if DEBUG
+    private static let debugWebContentFocusSnapshotScript = """
+    (() => {
+      try {
+        let state = window.__cmuxAddressBarFocusState;
+        let topState = (window.top && window.top.__cmuxAddressBarFocusState) ? window.top.__cmuxAddressBarFocusState : null;
+        const active = document.activeElement;
+        const tag = (active && active.tagName ? active.tagName : "").toLowerCase();
+        const type = (active && active.type ? active.type : "").toLowerCase();
+        const activeId = active && active.getAttribute ? active.getAttribute("data-cmux-addressbar-focus-id") : null;
+        const editable = !!(active && (active.isContentEditable || tag === "textarea" || (tag === "input" && type !== "hidden")));
+        return JSON.stringify({
+          activeTag: tag || null,
+          activeType: type || null,
+          activeId,
+          editable,
+          stateId: state && state.id ? state.id : null,
+          topStateId: topState && topState.id ? topState.id : null
+        });
+      } catch (error) {
+        return "error:" + String(error);
+      }
+    })();
+    """
+
+    func debugLogWebContentFocusSnapshot(event: String, detail: String = "") {
+        let panelId = id.uuidString.prefix(5)
+        let searchActive = searchState != nil ? 1 : 0
+        let preferred = String(describing: preferredFocusIntent)
+        let subfocus = String(reflecting: subfocusState)
+        let window = webView.window
+        let firstResponder = window?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        let prefix =
+            "browser.focus.snapshot event=\(event) panel=\(panelId) " +
+            "pref=\(preferred) subfocus=\(subfocus) search=\(searchActive) " +
+            "win=\(window?.windowNumber ?? -1) fr=\(firstResponder)"
+        let detailSuffix = detail.isEmpty ? "" : " \(detail)"
+
+        webView.evaluateJavaScript(Self.debugWebContentFocusSnapshotScript) { result, error in
+            let snapshot: String
+            if let error {
+                snapshot = "error:\(error.localizedDescription)"
+            } else if let result = result as? String {
+                snapshot = result
+            } else {
+                snapshot = String(describing: result)
+            }
+            browserFindDebugLog("\(prefix)\(detailSuffix) snapshot=\(snapshot)")
+        }
+    }
+#endif
 
     /// Returns the most reliable URL string for omnibar-related matching and UI decisions.
     /// `currentURL` can lag behind navigation changes, so prefer the live WKWebView URL.

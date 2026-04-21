@@ -9258,6 +9258,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
               container.appendChild(secondaryInput);
             }
 
+            const updateTitle = () => {
+              document.title = "cmux-ui-focus-primary:" + String(input.value || "");
+            };
+            if (input.__cmuxUITestTitleListenerInstalled !== true) {
+              input.addEventListener("input", updateTitle, true);
+              input.__cmuxUITestTitleListenerInstalled = true;
+            }
+            updateTitle();
+
             input.focus({ preventScroll: true });
             if (typeof input.setSelectionRange === "function") {
               const end = input.value.length;
@@ -9308,9 +9317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
               readyState: String(document.readyState || "")
             };
           };
-          const ready = () =>
-            window.__cmuxAddressBarFocusTrackerInstalled === true &&
-            String(document.readyState || "") === "complete";
+          const ready = () => String(document.readyState || "") === "complete";
 
           if (ready()) {
             try {
@@ -9402,7 +9409,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                !inputId.isEmpty,
                !secondaryInputId.isEmpty,
                inputId == activeId,
-               trackerInstalled,
                !trackedStateId.isEmpty,
                secondaryCenterX > 0,
                secondaryCenterX < 1,
@@ -14265,6 +14271,7 @@ private extension NSWindow {
                     "web=\(ObjectIdentifier(webView)) " +
                     "policy=\(webView.allowsFirstResponderAcquisition ? 1 : 0) " +
                     "pointerDepth=\(webView.debugPointerFocusAllowanceDepth) " +
+                    "programmaticDepth=\(webView.debugProgrammaticFocusAllowanceDepth) " +
                     "eventType=\(currentEvent.map { String(describing: $0.type) } ?? "nil")"
                 )
 #endif
@@ -14276,6 +14283,7 @@ private extension NSWindow {
                     "web=\(ObjectIdentifier(webView)) " +
                     "policy=\(webView.allowsFirstResponderAcquisition ? 1 : 0) " +
                     "pointerDepth=\(webView.debugPointerFocusAllowanceDepth) " +
+                    "programmaticDepth=\(webView.debugProgrammaticFocusAllowanceDepth) " +
                     "eventType=\(currentEvent.map { String(describing: $0.type) } ?? "nil")"
                 )
 #endif
