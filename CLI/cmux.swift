@@ -2138,8 +2138,8 @@ struct CMUXCLI {
                 let idempotency = try Self.activeVMCreateIdempotency(image: imageOpt, provider: providerOpt)
                 params["idempotency_key"] = idempotency.key
                 let response = try client.sendV2(method: "vm.create", params: params)
-                Self.clearVMCreateIdempotency(idempotency)
                 if jsonOutput {
+                    Self.clearVMCreateIdempotency(idempotency)
                     print(jsonString(response))
                     break
                 }
@@ -2147,9 +2147,19 @@ struct CMUXCLI {
                 let provider = (response["provider"] as? String) ?? "?"
                 let image = (response["image"] as? String) ?? "?"
                 if detach {
+                    Self.clearVMCreateIdempotency(idempotency)
                     print("OK \(id)")
                     print("  provider: \(provider)")
                     print("  image:    \(image)")
+                    break
+                }
+                let resolvedProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if resolvedProvider == "e2b" {
+                    Self.clearVMCreateIdempotency(idempotency)
+                    print("OK \(id)")
+                    print("  provider: \(provider)")
+                    print("  image:    \(image)")
+                    print("  shell:    unavailable for E2B; use `cmux vm exec \(id) -- <cmd>`")
                     break
                 }
                 // Default: create the VM then drop the user into a cmux-managed workspace on
@@ -2164,6 +2174,7 @@ struct CMUXCLI {
                     jsonOutput: jsonOutput,
                     idFormat: idFormat
                 )
+                Self.clearVMCreateIdempotency(idempotency)
 
             case "shell", "attach":
                 guard let vmId = rest.first else {
