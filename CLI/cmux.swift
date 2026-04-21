@@ -1978,7 +1978,7 @@ struct CMUXCLI {
                     print("Already signed in\(email.map { " as \($0)" } ?? ""). Use `cmux auth logout` to sign out first.")
                     break
                 }
-                print("Opening sign-in popup on the cmux mac app.")
+                print("Opening sign-in popup on the cmux web app.")
                 // auth.begin_sign_in blocks on the server side until the
                 // popup completes (or 5min timeout). The response is the
                 // callback — no polling.
@@ -2057,15 +2057,31 @@ struct CMUXCLI {
                     print("  image:    \(image)")
                     break
                 }
-                // Default behavior: create + drop into shell.
+                // Default: create the VM then drop the user into a cmux-managed workspace on
+                // it. Reuses the `cmux ssh` bootstrap (cmuxd-remote upload, reverse socket
+                // forward, `cmux` wrapper on the remote $PATH).
+                let shortId = String(id.prefix(8))
                 print("Created \(id)  [\(provider)]  \(image)")
-                try vmExecInteractiveShell(id: id, client: client)
+                try vmOpenShell(
+                    id: id,
+                    workspaceName: "vm:\(shortId)",
+                    client: client,
+                    jsonOutput: jsonOutput,
+                    idFormat: idFormat
+                )
 
             case "shell", "attach":
                 guard let vmId = rest.first else {
                     throw CLIError(message: "Usage: cmux \(command) shell <id>")
                 }
-                try vmExecInteractiveShell(id: vmId, client: client)
+                let shortId = String(vmId.prefix(8))
+                try vmOpenShell(
+                    id: vmId,
+                    workspaceName: "vm:\(shortId)",
+                    client: client,
+                    jsonOutput: jsonOutput,
+                    idFormat: idFormat
+                )
 
             case "rm", "destroy", "delete":
                 guard let vmId = rest.first else {
@@ -4317,13 +4333,34 @@ struct CMUXCLI {
         jsonOutput: Bool,
         idFormat: CLIIDFormat
     ) throws {
-        let sshStartedAt = Date()
         // Use the socket path from this invocation (supports --socket overrides).
         let localSocketPath = client.socketPath
         let remoteRelayPort = generateRemoteRelayPort()
         let relayID = UUID().uuidString.lowercased()
         let relayToken = try randomHex(byteCount: 32)
         let sshOptions = try parseSSHCommandOptions(commandArgs, localSocketPath: localSocketPath, remoteRelayPort: remoteRelayPort)
+        try runSSHWithOptions(
+            sshOptions,
+            relayID: relayID,
+            relayToken: relayToken,
+            client: client,
+            jsonOutput: jsonOutput,
+            idFormat: idFormat
+        )
+    }
+
+    /// Generic "open a workspace, SSH into the remote, bootstrap cmuxd-remote, forward socket,
+    /// drop the user in a shell" pipeline. The inner loop of `cmux ssh`; also called from
+    /// `cmux vm new`/`shell`/`attach` so cloud VMs reuse the exact same bootstrap.
+    private func runSSHWithOptions(
+        _ sshOptions: SSHCommandOptions,
+        relayID: String,
+        relayToken: String,
+        client: SocketClient,
+        jsonOutput: Bool,
+        idFormat: CLIIDFormat
+    ) throws {
+        let sshStartedAt = Date()
         func logSSHTiming(_ stage: String, extra: String = "") {
             let elapsedMs = Int(Date().timeIntervalSince(sshStartedAt) * 1000)
             let suffix = extra.isEmpty ? "" : " \(extra)"
@@ -4508,7 +4545,7 @@ struct CMUXCLI {
         payload["ssh_env_overrides"] = [
             "GHOSTTY_SHELL_FEATURES": shellFeaturesValue,
         ]
-        payload["remote_relay_port"] = remoteRelayPort
+        payload["remote_relay_port"] = sshOptions.remoteRelayPort
         logSSHTiming("complete", extra: "workspace=\(String(workspaceId.prefix(8)))")
         if jsonOutput {
             print(jsonString(formatIDs(payload, mode: idFormat)))
@@ -5228,11 +5265,15 @@ struct CMUXCLI {
         ].joined(separator: " ")
     }
 
-    /// Drop the current CLI process into an interactive shell on a cloud VM by exec'ing `ssh`.
-    /// Calls `vm.ssh_info` to mint a one-time credential, then replaces this process with
-    /// `ssh <user>:<token>@<host> -p <port>`. Freestyle's gateway parses `<vmId>+<user>:<token>`
-    /// as the SSH username and authenticates the token server-side — no password prompt.
-    private func vmExecInteractiveShell(id: String, client: SocketClient) throws -> Never {
+    /// Open an interactive cmux-managed shell on a cloud VM. Reuses `cmux ssh`'s bootstrap
+    /// (cmuxd-remote upload, socket reverse-forward, shell init that puts `cmux` on the remote
+    /// `$PATH`) by building an `SSHCommandOptions` from `vm.ssh_info` and dispatching to
+    /// `runSSHWithOptions`. No second implementation of the remote bootstrap.
+    ///
+    /// Freestyle's SSH gateway takes the identity token as a colon-suffix on the SSH username
+    /// (`<vmId>+<user>:<token>`). OpenSSH passes the whole username through to the server, so
+    /// no sshpass / password prompt is needed: `destination` = `<user>:<token>@<host>`.
+    private func vmOpenShell(id: String, workspaceName: String?, client: SocketClient, jsonOutput: Bool, idFormat: CLIIDFormat) throws {
         let response = try client.sendV2(method: "vm.ssh_info", params: ["id": id])
         guard let host = response["host"] as? String,
               let port = (response["port"] as? Int),
@@ -5242,47 +5283,46 @@ struct CMUXCLI {
         else {
             throw CLIError(message: "vm.ssh_info returned malformed payload: \(response)")
         }
-
         switch kind {
         case "password":
             guard let token = cred["value"] as? String else {
                 throw CLIError(message: "vm.ssh_info password credential missing `value`")
             }
-            // Build `ssh <username>:<token>@<host> -p <port>` and exec. The colon-delimited
-            // user:token is Freestyle's gateway auth format; stock OpenSSH passes the whole
-            // thing through as the SSH username.
-            let target = "\(username):\(token)@\(host)"
-            var argv: [UnsafeMutablePointer<CChar>?] = [
-                strdup("ssh"),
-                strdup(target),
-                strdup("-p"),
-                strdup(String(port)),
-                // Freestyle gateway uses its own host key; we're OK skipping known_hosts
-                // caching because tokens are per-session anyway. Drop the StrictHostKeyChecking
-                // prompt so the first connection doesn't hang on a y/n.
-                strdup("-o"),
-                strdup("StrictHostKeyChecking=no"),
-                strdup("-o"),
-                strdup("UserKnownHostsFile=/dev/null"),
-                strdup("-o"),
-                strdup("LogLevel=ERROR"),
-                nil,
+            // Freestyle gateway has a fresh host key per session and we re-mint per attach,
+            // so skip the StrictHostKeyChecking y/n prompt and known_hosts caching.
+            let sshOptionStrings = [
+                "StrictHostKeyChecking=no",
+                "UserKnownHostsFile=/dev/null",
+                "LogLevel=ERROR",
             ]
-            defer {
-                for p in argv {
-                    if let p { free(p) }
-                }
-            }
-            execvp("ssh", &argv)
-            throw CLIError(
-                message:
-                    "Failed to exec ssh: \(String(cString: strerror(errno))). Is OpenSSH installed?"
+            let localSocketPath = client.socketPath
+            let remoteRelayPort = generateRemoteRelayPort()
+            let relayID = UUID().uuidString.lowercased()
+            let relayToken = try randomHex(byteCount: 32)
+            let options = SSHCommandOptions(
+                destination: "\(username):\(token)@\(host)",
+                port: port,
+                identityFile: nil,
+                workspaceName: workspaceName,
+                noFocus: false,
+                sshOptions: sshOptionStrings,
+                extraArguments: [],
+                localSocketPath: localSocketPath,
+                remoteRelayPort: remoteRelayPort
+            )
+            try runSSHWithOptions(
+                options,
+                relayID: relayID,
+                relayToken: relayToken,
+                client: client,
+                jsonOutput: jsonOutput,
+                idFormat: idFormat
             )
         case "authorizedKey":
-            // Not yet produced by any driver. Keep this branch for when we switch to key auth.
+            // Keep this branch for when we switch to pubkey auth (requires a Freestyle-gateway
+            // side change).
             throw CLIError(
-                message:
-                    "authorizedKey credentials aren't supported by `cmux vm shell` yet; received from server."
+                message: "authorizedKey credentials aren't supported by `cmux vm shell` yet; received from server."
             )
         default:
             throw CLIError(message: "vm.ssh_info returned unknown credential kind: \(kind)")
@@ -7087,7 +7127,7 @@ struct CMUXCLI {
             Usage: cmux auth <status|login|logout>
 
             status   Print whether the user is signed in (add `cmux --json` for JSON).
-            login    Open the sign-in popup on the cmux mac app and wait for it to finish.
+            login    Open the sign-in popup on the cmux web app and wait for it to finish.
             logout   Clear the current session.
             """
         case "vm", "cloud":

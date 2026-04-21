@@ -2,6 +2,7 @@ import Foundation
 
 enum VMClientError: Error, CustomStringConvertible {
     case notSignedIn
+    case backendUnreachable(url: String, detail: String)
     case httpStatus(Int, String)
     case malformedResponse(String)
 
@@ -9,6 +10,13 @@ enum VMClientError: Error, CustomStringConvertible {
         switch self {
         case .notSignedIn:
             return "Not signed in. Run `cmux auth login` first."
+        case .backendUnreachable(let url, let detail):
+            return """
+                Cannot reach cmux backend at \(url). Is the dev server running?
+                  • In this shell: export CMUX_VM_API_BASE_URL=http://localhost:<port>
+                  • Then relaunch the cmux app so it inherits the env.
+                (underlying: \(detail))
+                """
         case .httpStatus(let code, let body):
             return "HTTP \(code): \(body)"
         case .malformedResponse(let message):
@@ -179,7 +187,21 @@ actor VMClient {
             req.httpBody = try JSONSerialization.data(withJSONObject: jsonBody, options: [])
         }
 
-        let (data, response) = try await session.data(for: req)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: req)
+        } catch let error as URLError {
+            // Surface unreachable-backend errors as a human-readable message with recovery steps
+            // instead of the verbose NSURLErrorDomain payload.
+            switch error.code {
+            case .cannotConnectToHost, .cannotFindHost, .timedOut, .networkConnectionLost, .notConnectedToInternet:
+                let base = "\(AuthEnvironment.vmAPIBaseURL.scheme ?? "http")://\(AuthEnvironment.vmAPIBaseURL.host ?? "?"):\(AuthEnvironment.vmAPIBaseURL.port ?? -1)"
+                throw VMClientError.backendUnreachable(url: base, detail: error.localizedDescription)
+            default:
+                throw error
+            }
+        }
         guard let http = response as? HTTPURLResponse else {
             throw VMClientError.malformedResponse("non-HTTP response")
         }

@@ -53,16 +53,48 @@ enum AuthEnvironment {
         )
     }
 
-    /// Base URL for the cmux-owned cloud VM backend (`/api/vm`, `/api/rivet`). Lives on the
-    /// website origin in both dev and prod because the routes are served by the Next.js app.
-    /// Override with CMUX_VM_API_BASE_URL when testing against a local `next dev`.
+    /// Base URL for the cmux-owned cloud VM backend (`/api/vm`, `/api/rivet`).
+    ///
+    /// Resolution order (first hit wins):
+    ///   1. process env `CMUX_VM_API_BASE_URL` — works when the app is launched from a shell.
+    ///   2. `~/.cmux-dev.env` file `CMUX_VM_API_BASE_URL=...` line — works regardless of how
+    ///      the app was launched (click-through, Dock, `open`, etc.). Only honored in DEBUG.
+    ///   3. website origin (`http://localhost:<CMUX_PORT>` in Debug, cmux.com in Release).
     static var vmAPIBaseURL: URL {
-        canonicalizedLoopbackURL(
+        if let override = devOverride(key: "CMUX_VM_API_BASE_URL"),
+           let url = URL(string: override) {
+            return canonicalizedLoopbackURL(url)
+        }
+        return canonicalizedLoopbackURL(
             resolvedURL(
                 environmentKey: "CMUX_VM_API_BASE_URL",
                 fallback: defaultWebOrigin
             )
         )
+    }
+
+    /// Look up `key=value` in `~/.cmux-dev.env` for the DEBUG build. Returns nil in Release.
+    /// Kept tiny on purpose — this is a "drop a file, restart the app, it picks up" override,
+    /// not a real config system.
+    private static func devOverride(key: String) -> String? {
+        #if DEBUG
+        guard let home = ProcessInfo.processInfo.environment["HOME"] else { return nil }
+        let path = (home as NSString).appendingPathComponent(".cmux-dev.env")
+        guard let data = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        for raw in data.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { continue }
+            let k = String(line[..<eq]).trimmingCharacters(in: .whitespaces)
+            guard k == key else { continue }
+            var v = String(line[line.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
+            if v.hasPrefix("\"") && v.hasSuffix("\"") { v = String(v.dropFirst().dropLast()) }
+            if v.hasPrefix("'") && v.hasSuffix("'") { v = String(v.dropFirst().dropLast()) }
+            return v.isEmpty ? nil : v
+        }
+        return nil
+        #else
+        return nil
+        #endif
     }
 
     private static var cmuxPort: String {
