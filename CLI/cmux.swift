@@ -2034,9 +2034,11 @@ struct CMUXCLI {
 
             case "new", "create":
                 let (imageOpt, rem0) = parseOption(rest, name: "--image")
-                let (providerOpt, remaining) = parseOption(rem0, name: "--provider")
+                let (providerOpt, rem1) = parseOption(rem0, name: "--provider")
+                let detach = hasFlag(rem1, name: "--detach") || hasFlag(rem1, name: "-d")
+                let remaining = rem1.filter { $0 != "--detach" && $0 != "-d" }
                 if let unknown = remaining.first(where: { $0.hasPrefix("--") }) {
-                    throw CLIError(message: "vm new: unknown flag '\(unknown)'. Known flags: --image, --provider")
+                    throw CLIError(message: "vm new: unknown flag '\(unknown)'. Known flags: --image, --provider, --detach/-d")
                 }
                 var params: [String: Any] = [:]
                 if let imageOpt { params["image"] = imageOpt }
@@ -2049,9 +2051,21 @@ struct CMUXCLI {
                 let id = (response["id"] as? String) ?? "?"
                 let provider = (response["provider"] as? String) ?? "?"
                 let image = (response["image"] as? String) ?? "?"
-                print("OK \(id)")
-                print("  provider: \(provider)")
-                print("  image:    \(image)")
+                if detach {
+                    print("OK \(id)")
+                    print("  provider: \(provider)")
+                    print("  image:    \(image)")
+                    break
+                }
+                // Default behavior: create + drop into shell.
+                print("Created \(id)  [\(provider)]  \(image)")
+                try vmExecInteractiveShell(id: id, client: client)
+
+            case "shell", "attach":
+                guard let vmId = rest.first else {
+                    throw CLIError(message: "Usage: cmux \(command) shell <id>")
+                }
+                try vmExecInteractiveShell(id: vmId, client: client)
 
             case "rm", "destroy", "delete":
                 guard let vmId = rest.first else {
@@ -2128,7 +2142,7 @@ struct CMUXCLI {
                 }
 
             default:
-                throw CLIError(message: "Usage: cmux \(command) <ls|new|rm|exec> [args...]")
+                throw CLIError(message: "Usage: cmux \(command) <ls|new|shell|rm|exec|ssh> [args...]")
             }
 
         case "rpc":
@@ -5214,6 +5228,67 @@ struct CMUXCLI {
         ].joined(separator: " ")
     }
 
+    /// Drop the current CLI process into an interactive shell on a cloud VM by exec'ing `ssh`.
+    /// Calls `vm.ssh_info` to mint a one-time credential, then replaces this process with
+    /// `ssh <user>:<token>@<host> -p <port>`. Freestyle's gateway parses `<vmId>+<user>:<token>`
+    /// as the SSH username and authenticates the token server-side — no password prompt.
+    private func vmExecInteractiveShell(id: String, client: SocketClient) throws -> Never {
+        let response = try client.sendV2(method: "vm.ssh_info", params: ["id": id])
+        guard let host = response["host"] as? String,
+              let port = (response["port"] as? Int),
+              let username = response["username"] as? String,
+              let cred = response["credential"] as? [String: Any],
+              let kind = cred["kind"] as? String
+        else {
+            throw CLIError(message: "vm.ssh_info returned malformed payload: \(response)")
+        }
+
+        switch kind {
+        case "password":
+            guard let token = cred["value"] as? String else {
+                throw CLIError(message: "vm.ssh_info password credential missing `value`")
+            }
+            // Build `ssh <username>:<token>@<host> -p <port>` and exec. The colon-delimited
+            // user:token is Freestyle's gateway auth format; stock OpenSSH passes the whole
+            // thing through as the SSH username.
+            let target = "\(username):\(token)@\(host)"
+            var argv: [UnsafeMutablePointer<CChar>?] = [
+                strdup("ssh"),
+                strdup(target),
+                strdup("-p"),
+                strdup(String(port)),
+                // Freestyle gateway uses its own host key; we're OK skipping known_hosts
+                // caching because tokens are per-session anyway. Drop the StrictHostKeyChecking
+                // prompt so the first connection doesn't hang on a y/n.
+                strdup("-o"),
+                strdup("StrictHostKeyChecking=no"),
+                strdup("-o"),
+                strdup("UserKnownHostsFile=/dev/null"),
+                strdup("-o"),
+                strdup("LogLevel=ERROR"),
+                nil,
+            ]
+            defer {
+                for p in argv {
+                    if let p { free(p) }
+                }
+            }
+            execvp("ssh", &argv)
+            throw CLIError(
+                message:
+                    "Failed to exec ssh: \(String(cString: strerror(errno))). Is OpenSSH installed?"
+            )
+        case "authorizedKey":
+            // Not yet produced by any driver. Keep this branch for when we switch to key auth.
+            throw CLIError(
+                message:
+                    "authorizedKey credentials aren't supported by `cmux vm shell` yet; received from server."
+            )
+        default:
+            throw CLIError(message: "vm.ssh_info returned unknown credential kind: \(kind)")
+        }
+    }
+
     private func runSSHSessionEnd(commandArgs: [String], client: SocketClient) throws {
         guard let relayPortRaw = optionValue(commandArgs, name: "--relay-port"),
               let relayPort = Int(relayPortRaw),
@@ -7023,13 +7098,16 @@ struct CMUXCLI {
 
             Subcommands:
               ls                        List your cloud VMs.
-              new [--image <template>] [--provider <e2b|freestyle>]
-                                        Create a new VM. Default provider is Freestyle.
+              new [--image <template>] [--provider <e2b|freestyle>] [--detach|-d]
+                                        Create a new VM. By default drops you into a shell on
+                                        the VM (like `docker run -it`). Pass --detach/-d to
+                                        just print the id and exit (scripting primitive).
+              shell <id>                Drop into an interactive shell on an existing VM.
+                                        Alias: `attach <id>`.
               rm <id>                   Destroy a VM.
               exec <id> -- <command...> Run a shell command inside the VM and print stdout.
-              ssh <id>                  Mint a short-lived SSH credential and print a ready
-                                        -to-paste `ssh user:token@vm-ssh.freestyle.sh -p 22`
-                                        one-liner. (Freestyle only; E2B will error.)
+              ssh <id>                  Print a ready-to-paste `ssh user:token@host -p port`
+                                        one-liner (if you want to copy it manually).
 
             Env:
               CMUX_VM_API_BASE_URL       Override the backend origin (default: the cmux website).
@@ -14596,7 +14674,7 @@ struct CMUXCLI {
           version
           capabilities
           auth <status|login|logout>
-          vm <new|ls|rm|exec|ssh> [args...]      (alias: cloud)
+          vm <new|ls|rm|exec|shell|ssh> [args...]    (alias: cloud)
           rpc <method> [json-params]
           identify [--workspace <id|ref|index>] [--surface <id|ref|index>] [--no-caller]
           list-windows
