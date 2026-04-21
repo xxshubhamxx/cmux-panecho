@@ -106,15 +106,16 @@ export const vmActor = actor({
 
     remove: async (c) => {
       await revokeAllIdentities(c.state);
+      c.state.sshIdentityHandles = [];
       if (c.state.status !== "destroyed" && c.state.providerVmId) {
-        try {
-          await getProvider(c.state.provider).destroy(c.state.providerVmId);
-        } catch {
-          // Best-effort; actor destroy still runs below.
-        }
+        // Surface provider destroy failures. Previously this path swallowed them, returned
+        // success, and then the coordinator forget() dropped the last tracking reference —
+        // the result was a ghost billable VM the user could no longer manage via cmux.
+        // Rethrow so the REST layer returns 500, the coordinator forget doesn't run, and
+        // the caller can retry. Codex P1.
+        await getProvider(c.state.provider).destroy(c.state.providerVmId);
       }
       c.state.status = "destroyed";
-      c.state.sshIdentityHandles = [];
       c.destroy();
     },
   },
