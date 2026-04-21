@@ -20,6 +20,19 @@ export const RIVET_INTERNAL_HEADER = "x-cmux-rivet-internal";
  * is loaded. In production we require the caller to set it explicitly so we don't degrade
  * into "any authenticated request is trusted".
  */
+/**
+ * Process-local fallback secret. Generated once at module load so local dev doesn't
+ * require setting CMUX_RIVET_INTERNAL_SECRET, but unpredictable across restarts and per
+ * process — an attacker with source-read can no longer spoof the header via a hardcoded
+ * string on a shared staging box. Replaced by the real env value as soon as one is set.
+ */
+const DEV_FALLBACK_SECRET: string = (() => {
+  // Lazy import so we don't pay the crypto cost on cold boot when the env is already set.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
+  return `cmux-dev-${randomBytes(24).toString("hex")}`;
+})();
+
 function rivetInternalSecret(): string {
   const value = process.env.CMUX_RIVET_INTERNAL_SECRET?.trim();
   if (value) return value;
@@ -28,9 +41,9 @@ function rivetInternalSecret(): string {
       "CMUX_RIVET_INTERNAL_SECRET must be set in production (used to gate /api/rivet/*).",
     );
   }
-  // Dev fallback: a deterministic-but-long token so local testing works without secret
-  // wrangling. Never trust this on a deployed environment.
-  return "cmux-dev-rivet-internal-secret-rotate-in-production";
+  // Per-process random fallback. Read via the module constant so every caller in this
+  // process agrees on the same value (REST route + catch-all gate would otherwise drift).
+  return DEV_FALLBACK_SECRET;
 }
 
 export function assertRivetInternal(request: Request): boolean {
