@@ -10428,14 +10428,19 @@ final class Workspace: Identifiable, ObservableObject {
         let scriptURL = tempDir.appendingPathComponent(
             "cmux-remote-disconnect-banner-\(UUID().uuidString.lowercased()).sh"
         )
-        let quotedTarget = target
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        // Encode the target as base64 and decode it inside the shell. This sidesteps every
+        // layer of shell quoting: no matter what the target contains (`$(id)`, backticks,
+        // single/double quotes, escape sequences), the shell never sees it as shell syntax.
+        // Previous version only escaped backslash and double-quote, which left command
+        // substitution and backticks as a live injection vector (Codex P2).
+        let encodedTarget = Data(target.utf8).base64EncodedString()
         let body = """
         #!/bin/sh
-        printf '\\033[1;33m[cmux] remote ssh session ended: %s\\033[0m\\n' "\(quotedTarget)" >&2
+        cmux_disconnect_target="$(printf '%s' '\(encodedTarget)' | base64 --decode 2>/dev/null || printf '%s' '\(encodedTarget)' | base64 -D 2>/dev/null)"
+        printf '\\033[1;33m[cmux] remote ssh session ended: %s\\033[0m\\n' "$cmux_disconnect_target" >&2
         printf '\\033[2m[cmux] falling back to a local shell. Reconnect with: cmux vm shell <id>\\033[0m\\n' >&2
         printf '\\n'
+        unset cmux_disconnect_target
         # Remove ourselves so /tmp doesn't accumulate these wrappers across sessions.
         rm -f -- "$0" 2>/dev/null || true
         exec "${SHELL:-/bin/sh}" -l
