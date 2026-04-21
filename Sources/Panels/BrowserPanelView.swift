@@ -926,7 +926,7 @@ struct BrowserPanelView: View {
             "panel=\(panel.id.uuidString.prefix(5)) web=\(browserPanelViewObjectID(panel.webView)) " +
             "next=\(visibleInUI ? 1 : 0) focused=\(isFocused ? 1 : 0) " +
             "window=\(panel.webView.window?.windowNumber ?? -1)"
-        browserFindDebugLog(line)
+        dlog(line)
 #endif
         if visibleInUI {
             panel.cancelPendingDeveloperToolsVisibilityLossCheck()
@@ -1579,7 +1579,7 @@ struct BrowserPanelView: View {
         let next = isPanelFocused && !panel.shouldSuppressWebViewFocus()
         if cmuxWebView.allowsFirstResponderAcquisition != next {
 #if DEBUG
-            browserFindDebugLog(
+            dlog(
                 "browser.focus.policy.resync panel=\(panel.id.uuidString.prefix(5)) " +
                 "web=\(ObjectIdentifier(cmuxWebView)) old=\(cmuxWebView.allowsFirstResponderAcquisition ? 1 : 0) " +
                 "new=\(next ? 1 : 0) reason=\(reason) " +
@@ -6907,10 +6907,7 @@ struct WebViewRepresentable: NSViewRepresentable {
 #endif
                 return
             }
-            let result = window.makeFirstResponder(webView)
-            if result {
-                panel.noteWebViewFocused()
-            }
+            let result = panel.requestMountedContentWebViewFocus(in: window, reason: "content.apply")
 #if DEBUG
             dlog(
                 "browser.focus.content.apply panel=\(panel.id.uuidString.prefix(5)) " +

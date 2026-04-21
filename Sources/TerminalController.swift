@@ -9115,11 +9115,8 @@ class TerminalController {
                 tabManager.selectWorkspace(ws)
             }
 
-            // Prevent omnibar auto-focus from immediately stealing first responder back.
-            browserPanel.suppressOmnibarAutofocus(for: 1.0)
-
             let webView = browserPanel.webView
-            guard let window = webView.window else {
+            guard webView.window != nil else {
                 result = .err(code: "invalid_state", message: "WebView is not in a window", data: nil)
                 return
             }
@@ -9128,8 +9125,7 @@ class TerminalController {
                 return
             }
 
-            window.makeFirstResponder(webView)
-            if let fr = window.firstResponder as? NSView, fr.isDescendant(of: webView) {
+            if browserPanel.requestExplicitWebViewFocus() {
                 result = .ok(["focused": true])
             } else {
                 result = .err(code: "internal_error", message: "Focus did not move into web view", data: nil)

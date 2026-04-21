@@ -358,7 +358,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
 
         panel.notePanelFocusChanged(true)
 
-        XCTAssertNotNil(panel.pendingWebContentRestoreRequestId)
+        XCTAssertNil(panel.pendingWebContentRestoreRequestId)
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
 

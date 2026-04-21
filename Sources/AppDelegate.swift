@@ -12143,7 +12143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard isLikelyWebInspectorResponder(keyWindow.firstResponder) else { return }
 
         let beforeResponder = keyWindow.firstResponder
-        let movedToWebView = keyWindow.makeFirstResponder(browser.webView)
+        let movedToWebView = browser.requestExplicitWebViewFocus()
         let movedToNil = movedToWebView ? false : keyWindow.makeFirstResponder(nil)
 
         #if DEBUG
