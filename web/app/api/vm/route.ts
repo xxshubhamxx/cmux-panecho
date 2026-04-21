@@ -48,12 +48,37 @@ export async function POST(request: Request): Promise<Response> {
     const bearer = parseBearer(request);
     if (!bearer) return unauthorized();
 
-    const body = (await request.json().catch(() => ({}))) as {
-      image?: string;
-      provider?: ProviderId;
-    };
-    const image = body.image ?? defaultImageFor(body.provider ?? defaultProviderId());
+    // Runtime-validate the payload before we call a paid provider. An invalid `provider`
+    // (client sending `"aws"` or `"docker"`) previously slipped past the type cast and
+    // surfaced as a 500 from the driver after provisioning had already half-succeeded.
+    let body: { image?: string; provider?: ProviderId };
+    try {
+      const raw = await request.json();
+      if (raw !== null && typeof raw !== "object") throw new TypeError("body must be a JSON object");
+      const candidate = (raw ?? {}) as Record<string, unknown>;
+      if (candidate.image !== undefined && typeof candidate.image !== "string") {
+        return jsonResponse({ error: "`image` must be a string when provided" }, 400);
+      }
+      if (candidate.provider !== undefined) {
+        if (typeof candidate.provider !== "string") {
+          return jsonResponse({ error: "`provider` must be a string when provided" }, 400);
+        }
+        if (candidate.provider !== "e2b" && candidate.provider !== "freestyle") {
+          return jsonResponse(
+            { error: `provider must be "e2b" or "freestyle", got ${JSON.stringify(candidate.provider)}` },
+            400,
+          );
+        }
+      }
+      body = {
+        image: typeof candidate.image === "string" ? candidate.image : undefined,
+        provider: candidate.provider as ProviderId | undefined,
+      };
+    } catch {
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
     const provider = body.provider ?? defaultProviderId();
+    const image = body.image ?? defaultImageFor(provider);
 
     const client = rivetClient(bearer);
     const created = await client.userVmsActor.getOrCreate([user.id]).create({ image, provider });
