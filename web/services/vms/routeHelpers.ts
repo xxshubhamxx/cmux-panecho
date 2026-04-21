@@ -36,9 +36,21 @@ const DEV_FALLBACK_SECRET: string = (() => {
 function rivetInternalSecret(): string {
   const value = process.env.CMUX_RIVET_INTERNAL_SECRET?.trim();
   if (value) return value;
-  if (process.env.NODE_ENV === "production") {
+  // Fallback is safe only for a single-process `next dev` on a developer's laptop.
+  // Deployed previews (Vercel, anything serving multiple workers) are guaranteed to split
+  // requests across processes with independent random fallbacks — request signed by worker
+  // A would 401 on worker B. Detect those environments and fail loud instead.
+  const looksDeployed =
+    process.env.NODE_ENV === "production" ||
+    process.env.NODE_ENV === "test" ||
+    !!process.env.VERCEL ||
+    !!process.env.VERCEL_URL ||
+    !!process.env.VERCEL_ENV ||
+    !!process.env.CMUX_DEPLOY_ENV;
+  if (looksDeployed) {
     throw new Error(
-      "CMUX_RIVET_INTERNAL_SECRET must be set in production (used to gate /api/rivet/*).",
+      "CMUX_RIVET_INTERNAL_SECRET must be set in any deployed environment — " +
+        "the per-process dev fallback is incompatible with multi-worker setups.",
     );
   }
   // Per-process random fallback. Read via the module constant so every caller in this
