@@ -228,11 +228,21 @@ final class CmuxWebViewKeyEquivalentTests: XCTestCase {
         XCTAssertFalse(spy.invoked)
     }
 
-    func testPlainTextKeyEquivalentFallsThroughToKeyDownWhenWebViewIsFirstResponder() throws {
+    func testPlainTextKeyEquivalentStaysOnNativeWebKitPathWhenWebViewIsFirstResponder() throws {
+        installCmuxUnitTestWKWebViewPerformKeyEquivalentOverride()
         let webView = CmuxWebView(frame: .zero, configuration: WKWebViewConfiguration())
         let event = try XCTUnwrap(makeKeyDownEvent(key: "z", modifiers: [], keyCode: 6))
 
+        var forwardedToWebKit = false
+        cmuxUnitTestWKWebViewPerformKeyEquivalentHook = { currentWebView, currentEvent in
+            guard currentWebView === webView, currentEvent === event else { return nil }
+            forwardedToWebKit = true
+            return false
+        }
+        defer { cmuxUnitTestWKWebViewPerformKeyEquivalentHook = nil }
+
         XCTAssertFalse(webView.performKeyEquivalent(with: event))
+        XCTAssertTrue(forwardedToWebKit)
     }
 
     func testCmdReturnDoesNotRouteToMainMenuWhenWebViewIsFirstResponder() {

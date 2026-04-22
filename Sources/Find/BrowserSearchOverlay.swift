@@ -315,6 +315,7 @@ private struct BrowserSearchTextFieldRepresentable: NSViewRepresentable {
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             markFieldEditor(textView)
             if let event = NSApp.currentEvent,
+               event.type == .keyDown,
                event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
                AppDelegate.shared?.handleBrowserSurfaceKeyEquivalent(event) == true {
                 return true
