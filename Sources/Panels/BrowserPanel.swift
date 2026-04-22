@@ -5222,6 +5222,7 @@ extension BrowserPanel {
     // MARK: - Find in Page
 
     func startFind() {
+        (webView as? CmuxWebView)?.disarmRestoredWebContentTextInputRepair(reason: "startFind")
         if searchState == nil || preferredFocusIntent != .findField {
             invalidateWebContentFocusRestoreAttempts()
             captureWebContentFocusSnapshotIfNeeded(reason: "startFind")
@@ -5450,6 +5451,7 @@ extension BrowserPanel {
 
     @discardableResult
     func requestAddressBarFocus() -> UUID {
+        (webView as? CmuxWebView)?.disarmRestoredWebContentTextInputRepair(reason: "addressBarFocus")
         clearPendingWebContentRestore()
         clearFindFieldSubfocus()
         beginSuppressWebViewFocusForAddressBar()
@@ -5797,6 +5799,11 @@ extension BrowserPanel {
                 Self.responderChainContains(window.firstResponder, target: self.webView)
             if hasWebViewResponder {
                 self.noteWebViewFocused()
+            }
+            if restored, hasWebViewResponder {
+                (self.webView as? CmuxWebView)?.armRestoredWebContentTextInputRepair(reason: reason)
+            } else {
+                (self.webView as? CmuxWebView)?.disarmRestoredWebContentTextInputRepair(reason: "restoreNotReady.\(reason)")
             }
 #if DEBUG
             dlog(

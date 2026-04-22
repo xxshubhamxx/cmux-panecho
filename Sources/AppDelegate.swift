@@ -14621,13 +14621,17 @@ private extension NSWindow {
             browserSearchOverlayPanelId(for: $0) ??
                 BrowserWindowPortalRegistry.searchOverlayPanelId(for: $0, in: self)
         }
-        if firstResponderSearchOverlayPanelId != nil,
+        if let firstResponderSearchOverlayPanelId,
            event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
-           AppDelegate.shared?.handleBrowserSurfaceKeyEquivalent(event) == true {
+           AppDelegate.shared?.handleBrowserSearchOverlayKeyDown(
+               event,
+               panelId: firstResponderSearchOverlayPanelId,
+               in: self
+           ) == true {
 #if DEBUG
             dlog(
                 "  → browser search overlay command routed to app " +
-                "panel=\(firstResponderSearchOverlayPanelId?.uuidString.prefix(5) ?? "nil")"
+                "panel=\(firstResponderSearchOverlayPanelId.uuidString.prefix(5))"
             )
 #endif
             return true

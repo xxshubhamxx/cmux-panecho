@@ -3,6 +3,7 @@ import ObjectiveC
 import SwiftUI
 
 private var cmuxBrowserSearchOverlayPanelIdKey: UInt8 = 0
+private var cmuxBrowserSearchOverlayWindowActivePanelIdKey: UInt8 = 0
 
 func setBrowserSearchOverlayPanelId(_ panelId: UUID, on view: NSView) {
     objc_setAssociatedObject(
@@ -11,6 +12,29 @@ func setBrowserSearchOverlayPanelId(_ panelId: UUID, on view: NSView) {
         panelId,
         .OBJC_ASSOCIATION_RETAIN_NONATOMIC
     )
+}
+
+private func setActiveBrowserSearchOverlayPanelId(_ panelId: UUID?, on window: NSWindow?) {
+    guard let window else { return }
+    objc_setAssociatedObject(
+        window,
+        &cmuxBrowserSearchOverlayWindowActivePanelIdKey,
+        panelId,
+        .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+    )
+}
+
+private func activeBrowserSearchOverlayPanelId(on window: NSWindow?) -> UUID? {
+    guard let window else { return nil }
+    return objc_getAssociatedObject(
+        window,
+        &cmuxBrowserSearchOverlayWindowActivePanelIdKey
+    ) as? UUID
+}
+
+private func clearActiveBrowserSearchOverlayPanelId(_ panelId: UUID, on window: NSWindow?) {
+    guard activeBrowserSearchOverlayPanelId(on: window) == panelId else { return }
+    setActiveBrowserSearchOverlayPanelId(nil, on: window)
 }
 
 private func browserSearchOverlayPanelId(from view: NSView?) -> UUID? {
@@ -29,7 +53,8 @@ func browserSearchOverlayPanelId(for responder: NSResponder?) -> UUID? {
     if let editor = responder as? NSTextView,
        editor.isFieldEditor {
         return browserSearchOverlayPanelId(from: editor) ??
-            browserSearchOverlayPanelId(from: editor.delegate as? NSView)
+            browserSearchOverlayPanelId(from: editor.delegate as? NSView) ??
+            activeBrowserSearchOverlayPanelId(on: editor.window)
     }
     return browserSearchOverlayPanelId(from: responder as? NSView)
 }
@@ -266,10 +291,13 @@ private struct BrowserSearchTextFieldRepresentable: NSViewRepresentable {
         private func markFieldEditor(_ editor: NSTextView?) {
             guard let editor else { return }
             setBrowserSearchOverlayPanelId(parent.panelId, on: editor)
+            setActiveBrowserSearchOverlayPanelId(parent.panelId, on: editor.window)
         }
 
         func focusField(_ field: BrowserSearchNativeTextField, in window: NSWindow) {
             guard window.makeFirstResponder(field) else { return }
+            setBrowserSearchOverlayPanelId(parent.panelId, on: field)
+            setActiveBrowserSearchOverlayPanelId(parent.panelId, on: window)
             DispatchQueue.main.async { [weak field] in
                 guard let field,
                       let editor = field.currentEditor() as? NSTextView else { return }
@@ -317,9 +345,14 @@ private struct BrowserSearchTextFieldRepresentable: NSViewRepresentable {
 
         func controlTextDidBeginEditing(_ obj: Notification) {
             if let field = obj.object as? NSTextField {
+                setActiveBrowserSearchOverlayPanelId(parent.panelId, on: field.window)
                 markFieldEditor(field.currentEditor() as? NSTextView)
             }
             parent.onFieldDidFocus(parent.focusRequestId)
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            clearActiveBrowserSearchOverlayPanelId(parent.panelId, on: (obj.object as? NSView)?.window)
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -388,6 +421,8 @@ private struct BrowserSearchTextFieldRepresentable: NSViewRepresentable {
         setBrowserSearchOverlayPanelId(panelId, on: nsView)
 
         if let editor = nsView.currentEditor() as? NSTextView {
+            setActiveBrowserSearchOverlayPanelId(panelId, on: nsView.window)
+            setBrowserSearchOverlayPanelId(panelId, on: editor)
             if editor.string != text, !editor.hasMarkedText() {
                 context.coordinator.isProgrammaticMutation = true
                 editor.string = text
@@ -402,6 +437,7 @@ private struct BrowserSearchTextFieldRepresentable: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: BrowserSearchNativeTextField, coordinator: Coordinator) {
+        clearActiveBrowserSearchOverlayPanelId(coordinator.parent.panelId, on: nsView.window)
         nsView.delegate = nil
         nsView.onWindowAttachment = nil
         coordinator.parentField = nil

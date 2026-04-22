@@ -364,6 +364,7 @@ final class CmuxWebView: WKWebView {
     var allowsFirstResponderAcquisition: Bool = true
     private var pointerFocusAllowanceDepth: Int = 0
     private var programmaticFocusAllowanceDepth: Int = 0
+    private var restoredWebContentTextInputRepairArmed = false
     private var pasteAsPlainTextTargetAvailable = false
     private var lastPasteAsPlainTextPerformKeyEventTimestamp: TimeInterval?
     var allowsFirstResponderAcquisitionEffective: Bool {
@@ -522,6 +523,27 @@ final class CmuxWebView: WKWebView {
         }
     }
 
+    func armRestoredWebContentTextInputRepair(reason: String) {
+        restoredWebContentTextInputRepairArmed = true
+#if DEBUG
+        dlog(
+            "browser.focus.textRepair.arm web=\(ObjectIdentifier(self)) " +
+            "reason=\(reason)"
+        )
+#endif
+    }
+
+    func disarmRestoredWebContentTextInputRepair(reason: String) {
+        guard restoredWebContentTextInputRepairArmed else { return }
+        restoredWebContentTextInputRepairArmed = false
+#if DEBUG
+        dlog(
+            "browser.focus.textRepair.disarm web=\(ObjectIdentifier(self)) " +
+            "reason=\(reason)"
+        )
+#endif
+    }
+
     private func preferredWebContentFirstResponder(in window: NSWindow) -> NSView? {
         if let firstResponder = window.firstResponder as? NSView,
            firstResponder !== self,
@@ -602,6 +624,248 @@ final class CmuxWebView: WKWebView {
         }
 
         return (completed, result, error)
+    }
+
+    private struct RestoredTextInputSnapshot: Equatable {
+        let id: String
+        let value: String
+        let selectionStart: Int
+        let selectionEnd: Int
+
+        init?(_ result: Any?) {
+            guard let payload = result as? [String: Any],
+                  (payload["ok"] as? Bool) == true,
+                  let id = payload["id"] as? String,
+                  !id.isEmpty,
+                  let value = payload["value"] as? String,
+                  let selectionStart = (payload["selectionStart"] as? NSNumber)?.intValue,
+                  let selectionEnd = (payload["selectionEnd"] as? NSNumber)?.intValue else {
+                return nil
+            }
+            self.id = id
+            self.value = value
+            self.selectionStart = selectionStart
+            self.selectionEnd = selectionEnd
+        }
+    }
+
+    private static let restoredTextInputSnapshotScript = """
+    (() => {
+      try {
+        const readState = () => {
+          let state = window.__cmuxAddressBarFocusState;
+          try {
+            if ((!state || typeof state.id !== "string" || !state.id) &&
+                window.top && window.top.__cmuxAddressBarFocusState) {
+              state = window.top.__cmuxAddressBarFocusState;
+            }
+          } catch (_) {}
+          return state;
+        };
+        const state = readState();
+        if (!state || typeof state.id !== "string" || !state.id) {
+          return { ok: false, reason: "no_state" };
+        }
+        const selector = '[data-cmux-addressbar-focus-id="' + state.id + '"]';
+        const findTarget = (doc) => {
+          if (!doc) return null;
+          const direct = doc.querySelector(selector);
+          if (direct && direct.isConnected) return direct;
+          const frames = doc.querySelectorAll("iframe,frame");
+          for (let i = 0; i < frames.length; i += 1) {
+            try {
+              const nested = findTarget(frames[i].contentDocument);
+              if (nested) return nested;
+            } catch (_) {}
+          }
+          return null;
+        };
+        const target = findTarget(document);
+        if (!target) return { ok: false, reason: "missing_target" };
+        const tag = (target.tagName || "").toLowerCase();
+        if (tag !== "input" && tag !== "textarea") {
+          return { ok: false, reason: "unsupported_target" };
+        }
+        try {
+          if (target.ownerDocument.activeElement !== target) {
+            target.focus({ preventScroll: true });
+          }
+        } catch (_) {
+          try { target.focus(); } catch (_) {}
+        }
+        if (target.ownerDocument.activeElement !== target) {
+          return { ok: false, reason: "not_focused" };
+        }
+        if (typeof target.selectionStart !== "number" || typeof target.selectionEnd !== "number") {
+          return { ok: false, reason: "missing_selection" };
+        }
+        return {
+          ok: true,
+          id: state.id,
+          value: String(target.value || ""),
+          selectionStart: target.selectionStart,
+          selectionEnd: target.selectionEnd
+        };
+      } catch (_) {
+        return { ok: false, reason: "error" };
+      }
+    })();
+    """
+
+    private static func restoredTextInputInsertScript(text: String) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: [text], options: []),
+              let arrayLiteral = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return """
+        (() => {
+          const text = \(arrayLiteral)[0];
+          try {
+            const readState = () => {
+              let state = window.__cmuxAddressBarFocusState;
+              try {
+                if ((!state || typeof state.id !== "string" || !state.id) &&
+                    window.top && window.top.__cmuxAddressBarFocusState) {
+                  state = window.top.__cmuxAddressBarFocusState;
+                }
+              } catch (_) {}
+              return state;
+            };
+            const state = readState();
+            if (!state || typeof state.id !== "string" || !state.id) {
+              return { inserted: false, reason: "no_state" };
+            }
+            const selector = '[data-cmux-addressbar-focus-id="' + state.id + '"]';
+            const findTarget = (doc) => {
+              if (!doc) return null;
+              const direct = doc.querySelector(selector);
+              if (direct && direct.isConnected) return direct;
+              const frames = doc.querySelectorAll("iframe,frame");
+              for (let i = 0; i < frames.length; i += 1) {
+                try {
+                  const nested = findTarget(frames[i].contentDocument);
+                  if (nested) return nested;
+                } catch (_) {}
+              }
+              return null;
+            };
+            const target = findTarget(document);
+            if (!target) return { inserted: false, reason: "missing_target" };
+            const tag = (target.tagName || "").toLowerCase();
+            if (tag !== "input" && tag !== "textarea") {
+              return { inserted: false, reason: "unsupported_target" };
+            }
+            try {
+              if (target.ownerDocument.activeElement !== target) {
+                target.focus({ preventScroll: true });
+              }
+            } catch (_) {
+              try { target.focus(); } catch (_) {}
+            }
+            if (target.ownerDocument.activeElement !== target) {
+              return { inserted: false, reason: "not_focused" };
+            }
+            const start = typeof target.selectionStart === "number" ? target.selectionStart : String(target.value || "").length;
+            const end = typeof target.selectionEnd === "number" ? target.selectionEnd : start;
+            const makeInputEvent = (name, cancelable) => {
+              try {
+                return new InputEvent(name, {
+                  bubbles: true,
+                  cancelable,
+                  composed: true,
+                  inputType: "insertText",
+                  data: text
+                });
+              } catch (_) {
+                const event = document.createEvent("Event");
+                event.initEvent(name, true, cancelable);
+                return event;
+              }
+            };
+            if (!target.dispatchEvent(makeInputEvent("beforeinput", true))) {
+              return { inserted: false, reason: "beforeinput_prevented" };
+            }
+            if (typeof target.setRangeText === "function") {
+              target.setRangeText(text, start, end, "end");
+            } else {
+              const value = String(target.value || "");
+              target.value = value.slice(0, start) + text + value.slice(end);
+              const caret = start + text.length;
+              if (typeof target.setSelectionRange === "function") {
+                target.setSelectionRange(caret, caret);
+              }
+            }
+            target.dispatchEvent(makeInputEvent("input", false));
+            return {
+              inserted: true,
+              value: String(target.value || ""),
+              selectionStart: typeof target.selectionStart === "number" ? target.selectionStart : -1,
+              selectionEnd: typeof target.selectionEnd === "number" ? target.selectionEnd : -1
+            };
+          } catch (_) {
+            return { inserted: false, reason: "error" };
+          }
+        })();
+        """
+    }
+
+    private static func restoredTextInputRepairText(for event: NSEvent) -> String? {
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function, .capsLock])
+        guard flags.subtracting(.shift).isEmpty else { return nil }
+        guard let text = event.characters, text.count == 1 else { return nil }
+        guard let scalar = text.unicodeScalars.first else { return nil }
+        guard !CharacterSet.controlCharacters.contains(scalar) else { return nil }
+        return text
+    }
+
+    private func restoredTextInputSnapshot() -> RestoredTextInputSnapshot? {
+        let evaluation = evaluateJavaScriptSynchronously(Self.restoredTextInputSnapshotScript)
+        guard evaluation.completed, evaluation.error == nil else { return nil }
+        return RestoredTextInputSnapshot(evaluation.result)
+    }
+
+    private func performRestoredTextInputRepairIfNeeded(
+        event: NSEvent,
+        text: String
+    ) -> String? {
+        guard restoredWebContentTextInputRepairArmed else { return nil }
+        guard let before = restoredTextInputSnapshot() else {
+            disarmRestoredWebContentTextInputRepair(reason: "snapshotMissing")
+            return nil
+        }
+
+        super.keyDown(with: event)
+
+        guard let after = restoredTextInputSnapshot() else {
+            disarmRestoredWebContentTextInputRepair(reason: "snapshotMissingAfterNative")
+            return "focusRepairNativeOnly"
+        }
+        if after != before {
+            disarmRestoredWebContentTextInputRepair(reason: "nativeInputObserved")
+            return "focusRepairNative"
+        }
+
+        guard let script = Self.restoredTextInputInsertScript(text: text) else {
+            disarmRestoredWebContentTextInputRepair(reason: "scriptBuildFailed")
+            return "focusRepairNativeOnly"
+        }
+        let insert = evaluateJavaScriptSynchronously(script)
+        let inserted = insert.completed &&
+            insert.error == nil &&
+            ((insert.result as? [String: Any])?["inserted"] as? Bool == true)
+#if DEBUG
+        let reason = ((insert.result as? [String: Any])?["reason"] as? String) ?? "nil"
+        dlog(
+            "browser.focus.textRepair.apply web=\(ObjectIdentifier(self)) " +
+            "inserted=\(inserted ? 1 : 0) reason=\(reason)"
+        )
+#endif
+        if !inserted {
+            disarmRestoredWebContentTextInputRepair(reason: "insertFailed")
+        }
+        return inserted ? "focusRepairInserted" : "focusRepairInsertFailed"
     }
 
     private func pageCanAcceptPlainTextPaste() -> Bool {
@@ -813,6 +1077,14 @@ final class CmuxWebView: WKWebView {
             return
         }
 
+        if let repairText = Self.restoredTextInputRepairText(for: event),
+           let repairRoute = performRestoredTextInputRepairIfNeeded(event: event, text: repairText) {
+#if DEBUG
+            route = repairRoute
+#endif
+            return
+        }
+
         super.keyDown(with: event)
     }
 
@@ -832,6 +1104,7 @@ final class CmuxWebView: WKWebView {
             "pointerDepth=\(pointerFocusAllowanceDepth) win=\(windowNumber) fr=\(firstResponderType)"
         )
 #endif
+        disarmRestoredWebContentTextInputRepair(reason: "mouseDown")
         NotificationCenter.default.post(name: .webViewDidReceiveClick, object: self)
         withPointerFocusAllowance {
             super.mouseDown(with: event)
