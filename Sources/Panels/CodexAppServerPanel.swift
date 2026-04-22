@@ -41,6 +41,13 @@ enum CodexAppServerTranscriptRole: Equatable, Sendable {
     case error
 }
 
+enum CodexAppServerTranscriptPresentation: Equatable, Sendable {
+    case plain
+    case toolCall(name: String?)
+    case toolOutput
+    case commandOutput
+}
+
 struct CodexAppServerTranscriptItem: Identifiable, Equatable, Sendable {
     let id: UUID
     var role: CodexAppServerTranscriptRole
@@ -48,6 +55,7 @@ struct CodexAppServerTranscriptItem: Identifiable, Equatable, Sendable {
     var body: String
     var date: Date
     var isStreaming: Bool
+    var presentation: CodexAppServerTranscriptPresentation
 
     init(
         id: UUID = UUID(),
@@ -55,7 +63,8 @@ struct CodexAppServerTranscriptItem: Identifiable, Equatable, Sendable {
         title: String,
         body: String,
         date: Date = Date(),
-        isStreaming: Bool = false
+        isStreaming: Bool = false,
+        presentation: CodexAppServerTranscriptPresentation = .plain
     ) {
         self.id = id
         self.role = role
@@ -63,6 +72,7 @@ struct CodexAppServerTranscriptItem: Identifiable, Equatable, Sendable {
         self.body = body
         self.date = date
         self.isStreaming = isStreaming
+        self.presentation = presentation
     }
 }
 
@@ -374,7 +384,8 @@ final class CodexAppServerPanel: Panel, ObservableObject {
         case "commandExecution":
             appendEvent(
                 title: String(localized: "codexAppServer.event.command", defaultValue: "Command"),
-                body: Self.commandSummary(from: item)
+                body: Self.commandSummary(from: item),
+                presentation: .toolCall(name: "shell")
             )
         case "fileChange":
             appendEvent(
@@ -415,10 +426,17 @@ final class CodexAppServerPanel: Panel, ObservableObject {
 
     private func appendCommandDelta(_ delta: String?) {
         guard let delta, !delta.isEmpty else { return }
+        if let index = transcriptItems.indices.last,
+           transcriptItems[index].presentation == .commandOutput {
+            transcriptItems[index].body = Self.truncatedTranscriptBody(transcriptItems[index].body + delta)
+            transcriptItems[index].date = Date()
+            return
+        }
         append(
             role: .event,
             title: String(localized: "codexAppServer.event.output", defaultValue: "Output"),
-            body: delta
+            body: delta,
+            presentation: .commandOutput
         )
     }
 
@@ -432,8 +450,12 @@ final class CodexAppServerPanel: Panel, ObservableObject {
         activeAssistantItemId = nil
     }
 
-    private func appendEvent(title: String, body: String) {
-        append(role: .event, title: title, body: body)
+    private func appendEvent(
+        title: String,
+        body: String,
+        presentation: CodexAppServerTranscriptPresentation = .plain
+    ) {
+        append(role: .event, title: title, body: body, presentation: presentation)
     }
 
     private func appendError(_ message: String) {
@@ -628,7 +650,8 @@ final class CodexAppServerPanel: Panel, ObservableObject {
                 role: .event,
                 title: String(localized: "codexAppServer.event.command", defaultValue: "Command"),
                 body: Self.truncatedTranscriptBody(Self.commandSummary(from: item)),
-                date: date
+                date: date,
+                presentation: .toolCall(name: "shell")
             )
         case "fileChange":
             return CodexAppServerTranscriptItem(
@@ -651,14 +674,20 @@ final class CodexAppServerPanel: Panel, ObservableObject {
         }
     }
 
-    private func append(role: CodexAppServerTranscriptRole, title: String, body: String) {
+    private func append(
+        role: CodexAppServerTranscriptRole,
+        title: String,
+        body: String,
+        presentation: CodexAppServerTranscriptPresentation = .plain
+    ) {
         let trimmedBody = Self.truncatedTranscriptBody(body.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !trimmedBody.isEmpty else { return }
         transcriptItems.append(
             CodexAppServerTranscriptItem(
                 role: role,
                 title: title,
-                body: trimmedBody
+                body: trimmedBody,
+                presentation: presentation
             )
         )
         trimTranscriptItemsIfNeeded()
@@ -992,7 +1021,8 @@ enum CodexSessionHistoryLoader {
             role: .event,
             title: title,
             body: CodexAppServerTranscriptPolicy.truncatedBody(body),
-            date: date
+            date: date,
+            presentation: .toolCall(name: name)
         )
     }
 
@@ -1009,7 +1039,8 @@ enum CodexSessionHistoryLoader {
             role: .event,
             title: String(localized: "codexAppServer.event.toolOutput", defaultValue: "Tool output"),
             body: CodexAppServerTranscriptPolicy.truncatedBody(output),
-            date: date
+            date: date,
+            presentation: .toolOutput
         )
     }
 

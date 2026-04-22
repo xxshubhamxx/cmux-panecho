@@ -257,6 +257,11 @@ final class CodexAppServerRequestFactoryTests: XCTestCase {
         XCTAssertTrue(snapshot.didTruncate)
         XCTAssertEqual(snapshot.transcriptItems.map(\.role), [.event, .event, .assistant])
         XCTAssertEqual(snapshot.transcriptItems.map(\.body), ["ls -la", "output text", "agent 2"])
+        XCTAssertEqual(snapshot.transcriptItems.map(\.presentation), [
+            .toolCall(name: "exec_command"),
+            .toolOutput,
+            .plain,
+        ])
     }
 
     @MainActor
