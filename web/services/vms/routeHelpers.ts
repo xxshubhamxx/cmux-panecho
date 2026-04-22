@@ -74,19 +74,19 @@ export function assertRivetInternal(request: Request): boolean {
 
 /**
  * Authoritative base URL for the Rivet gateway. On Vercel we trust VERCEL_URL (deployment
- * only, set by the platform). Local dev reads `CMUX_VM_API_BASE_URL` or falls back to
- * `http://localhost:3000`. Deriving this from `request.url.origin` is unsafe — a misconfigured
- * reverse proxy could rewrite Host and redirect Stack Auth tokens to an attacker-controlled
- * endpoint.
+ * only, set by the platform). Local dev reads `CMUX_VM_API_BASE_URL`, then the cmux-assigned
+ * `CMUX_PORT`, then `PORT`. Deriving this from `request.url.origin` is unsafe because a
+ * misconfigured reverse proxy could rewrite Host and redirect Stack Auth tokens to an
+ * attacker-controlled endpoint.
  */
 function rivetBaseURL(): string {
   const explicit = process.env.CMUX_VM_API_BASE_URL?.trim();
   if (explicit) return explicit.replace(/\/$/, "");
   const vercel = process.env.VERCEL_URL?.trim();
   if (vercel) return `https://${vercel}`;
-  // The repo's `next dev` script listens on 3777, not Next's default 3000 (web/package.json).
-  // Prefer PORT if the shell exports one, otherwise fall back to 3777 so a vanilla
-  // `bun run dev` works out of the box without extra env wrangling.
+  // `bun run dev` prefers the cmux-assigned terminal port, with 3777 as the plain-shell fallback.
+  const cmuxPort = process.env.CMUX_PORT?.trim();
+  if (cmuxPort && /^\d+$/.test(cmuxPort)) return `http://localhost:${cmuxPort}`;
   const port = process.env.PORT?.trim();
   return `http://localhost:${port && /^\d+$/.test(port) ? port : "3777"}`;
 }

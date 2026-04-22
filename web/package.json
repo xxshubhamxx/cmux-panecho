@@ -4,7 +4,7 @@
   "license": "GPL-3.0-or-later",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3777",
+    "dev": "next dev --port ${CMUX_PORT:-${PORT:-3777}}",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

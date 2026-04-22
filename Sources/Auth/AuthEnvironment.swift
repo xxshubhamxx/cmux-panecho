@@ -59,7 +59,7 @@ enum AuthEnvironment {
     ///   1. process env `CMUX_VM_API_BASE_URL` — works when the app is launched from a shell.
     ///   2. `~/.cmux-dev.env` file `CMUX_VM_API_BASE_URL=...` line — works regardless of how
     ///      the app was launched (click-through, Dock, `open`, etc.). Only honored in DEBUG.
-    ///   3. VM backend dev origin (`http://localhost:3777` in Debug, cmux.com in Release).
+    ///   3. VM backend dev origin (`http://localhost:$CMUX_PORT` in Debug, cmux.com in Release).
     static var vmAPIBaseURL: URL {
         if let overridden = ProcessInfo.processInfo.environment["CMUX_VM_API_BASE_URL"]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -99,8 +99,18 @@ enum AuthEnvironment {
     }
 
     private static var cmuxPort: String {
-        ProcessInfo.processInfo.environment["CMUX_PORT"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "3000"
+        environmentPort("CMUX_PORT") ?? environmentPort("PORT") ?? "3777"
+    }
+
+    private static func environmentPort(_ key: String) -> String? {
+        guard let port = ProcessInfo.processInfo.environment[key]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            let value = UInt16(port),
+            value > 0
+        else {
+            return nil
+        }
+        return port
     }
 
     private static var defaultWebOrigin: String {
@@ -118,12 +128,7 @@ enum AuthEnvironment {
 
     private static var defaultVMAPIOrigin: String {
         #if DEBUG
-        let port = ProcessInfo.processInfo.environment["PORT"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let port, !port.isEmpty {
-            return "http://localhost:\(port)"
-        }
-        return "http://localhost:3777"
+        return "http://localhost:\(cmuxPort)"
         #else
         return "https://cmux.com"
         #endif
