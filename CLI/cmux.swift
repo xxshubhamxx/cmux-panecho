@@ -13882,7 +13882,6 @@ struct CMUXCLI {
             "CLAUDE_CONFIG_DIR",
             "CMUX_CUSTOM_CLAUDE_PATH",
             "CODEX_HOME",
-            "NODE_OPTIONS",
             "OPENCODE_CONFIG_DIR",
             "PATH",
             "SHELL"
@@ -13892,7 +13891,95 @@ struct CMUXCLI {
             guard let value = normalizedHookValue(env[key]) else { continue }
             result[key] = value
         }
+        if let nodeOptions = selectedAgentLaunchNodeOptions(from: env) {
+            result["NODE_OPTIONS"] = nodeOptions
+        }
         return result
+    }
+
+    private func selectedAgentLaunchNodeOptions(from env: [String: String]) -> String? {
+        switch normalizedHookValue(env["CMUX_ORIGINAL_NODE_OPTIONS_PRESENT"]) {
+        case "1":
+            return sanitizedAgentLaunchNodeOptions(env["CMUX_ORIGINAL_NODE_OPTIONS"])
+        case "0":
+            return nil
+        default:
+            return sanitizedAgentLaunchNodeOptions(env["NODE_OPTIONS"])
+        }
+    }
+
+    private func sanitizedAgentLaunchNodeOptions(_ rawValue: String?) -> String? {
+        let tokens = rawValue?
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init) ?? []
+        guard !tokens.isEmpty else { return nil }
+
+        var sanitized: [String] = []
+        var index = 0
+        var shouldDropInjectedHeapCap = false
+        while index < tokens.count {
+            let token = tokens[index]
+
+            if shouldDropInjectedHeapCap, isInjectedNodeHeapCap(tokens, index: index) {
+                index += nodeHeapCapWidth(tokens, index: index)
+                shouldDropInjectedHeapCap = false
+                continue
+            }
+            shouldDropInjectedHeapCap = false
+
+            if isRequireOption(token), index + 1 < tokens.count,
+               isCmuxNodeOptionsRestoreModulePath(tokens[index + 1]) {
+                index += 2
+                shouldDropInjectedHeapCap = true
+                continue
+            }
+            if let path = inlineRequireOptionPath(token),
+               isCmuxNodeOptionsRestoreModulePath(path) {
+                index += 1
+                shouldDropInjectedHeapCap = true
+                continue
+            }
+
+            sanitized.append(token)
+            index += 1
+        }
+
+        let joined = sanitized.joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? nil : joined
+    }
+
+    private func isRequireOption(_ token: String) -> Bool {
+        token == "--require" || token == "-r"
+    }
+
+    private func inlineRequireOptionPath(_ token: String) -> String? {
+        for prefix in ["--require=", "-r="] where token.hasPrefix(prefix) {
+            return String(token.dropFirst(prefix.count))
+        }
+        return nil
+    }
+
+    private func isCmuxNodeOptionsRestoreModulePath(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+        guard URL(fileURLWithPath: trimmed).lastPathComponent == "restore-node-options.cjs" else {
+            return false
+        }
+        return trimmed.contains("/cmux-")
+    }
+
+    private func isInjectedNodeHeapCap(_ tokens: [String], index: Int) -> Bool {
+        guard index < tokens.count else { return false }
+        let token = tokens[index]
+        if token == "--max-old-space-size" {
+            return index + 1 < tokens.count && tokens[index + 1] == "4096"
+        }
+        return token == "--max-old-space-size=4096"
+    }
+
+    private func nodeHeapCapWidth(_ tokens: [String], index: Int) -> Int {
+        guard index < tokens.count else { return 1 }
+        return tokens[index] == "--max-old-space-size" ? min(2, tokens.count - index) : 1
     }
 
     private func normalizedHookValue(_ value: String?) -> String? {
