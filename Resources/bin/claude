@@ -191,7 +191,12 @@ normalize_node_options_for_restore() {
 }
 
 encode_launch_argv() {
-    { printf '%s\0' "$REAL_CLAUDE"; printf '%s\0' "$@"; } | base64 | tr -d '\n'
+    {
+        printf '%s\0' "$REAL_CLAUDE"
+        if (( $# > 0 )); then
+            printf '%s\0' "$@"
+        fi
+    } | base64 | tr -d '\n'
 }
 
 # Pass through subcommands that don't support session/hook flags.
