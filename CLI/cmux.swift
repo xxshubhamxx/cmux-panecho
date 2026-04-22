@@ -10896,6 +10896,7 @@ struct CMUXCLI {
     }
 
     private static let omoPluginName = "oh-my-opencode"
+    private static let openCodeSessionPluginConfigSpec = "cmux-session"
 
     private func resolveExecutableInPath(_ name: String) -> String? {
         let entries = ProcessInfo.processInfo.environment["PATH"]?.split(separator: ":").map(String.init) ?? []
@@ -11105,12 +11106,12 @@ struct CMUXCLI {
             config = [:]
         }
 
-        var plugins = (config["plugin"] as? [String]) ?? []
-        let alreadyPresent = plugins.contains {
-            $0 == Self.omoPluginName || $0.hasPrefix("\(Self.omoPluginName)@")
-        }
-        if !alreadyPresent {
+        var plugins = (config["plugin"] as? [Any]) ?? []
+        if !Self.openCodePluginListContains(plugins, spec: Self.omoPluginName, allowVersionSuffix: true) {
             plugins.append(Self.omoPluginName)
+        }
+        if !Self.openCodePluginListContains(plugins, spec: Self.openCodeSessionPluginConfigSpec) {
+            plugins.append(Self.openCodeSessionPluginConfigSpec)
         }
         config["plugin"] = plugins
 
@@ -11130,6 +11131,8 @@ struct CMUXCLI {
         if omoFileType(at: shadowBunLockURL) == .typeSymbolicLink {
             try? fm.removeItem(at: shadowBunLockURL)
         }
+
+        try writeOpenCodeSessionPlugin(in: shadowDir)
 
         // Copy oh-my-opencode plugin config (jsonc) if the user has one
         for filename in ["oh-my-opencode.json", "oh-my-opencode.jsonc"] {
@@ -11257,7 +11260,10 @@ struct CMUXCLI {
             tmuxPathPrefix: "cmux-omo",
             cmuxBinEnvVar: "CMUX_OMO_CMUX_BIN",
             termOverrideEnvVar: "CMUX_OMO_TERM",
-            extraEnvVars: [(key: "OPENCODE_PORT", value: openCodePort)]
+            extraEnvVars: [
+                (key: "OPENCODE_PORT", value: openCodePort),
+                (key: "CMUX_OPENCODE_CMUX_BIN", value: executablePath),
+            ]
         )
     }
 
@@ -14744,7 +14750,7 @@ function sendHook(subcommand, ctx, event, extra = {}) {
   } catch (_) {}
 }
 
-export const CMUXSessionRestore = async (ctx) => {
+const CMUXSessionRestore = async (ctx) => {
   return {
     event: async ({ event }) => {
       const props = eventProperties(event);
@@ -14776,6 +14782,9 @@ export const CMUXSessionRestore = async (ctx) => {
     },
   };
 };
+
+export { CMUXSessionRestore };
+export default CMUXSessionRestore;
 """#
 
     private func openCodeSessionPluginURL(for def: AgentHookDef) -> URL {
@@ -14784,8 +14793,80 @@ export const CMUXSessionRestore = async (ctx) => {
             .appendingPathComponent(Self.openCodeSessionPluginFilename, isDirectory: false)
     }
 
-    private func installOpenCodePluginHooks(_ def: AgentHookDef) throws {
+    private func writeOpenCodeSessionPlugin(in configDir: URL) throws {
+        let pluginURL = configDir
+            .appendingPathComponent("plugins", isDirectory: true)
+            .appendingPathComponent(Self.openCodeSessionPluginFilename, isDirectory: false)
         let fm = FileManager.default
+        try fm.createDirectory(at: pluginURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Self.openCodeSessionPluginSource.write(to: pluginURL, atomically: true, encoding: .utf8)
+    }
+
+    private static func openCodePluginListContains(
+        _ plugins: [Any],
+        spec: String,
+        allowVersionSuffix: Bool = false
+    ) -> Bool {
+        plugins.contains { entry in
+            let value: String?
+            if let string = entry as? String {
+                value = string
+            } else if let tuple = entry as? [Any], let string = tuple.first as? String {
+                value = string
+            } else {
+                value = nil
+            }
+            guard let value else { return false }
+            if value == spec { return true }
+            if allowVersionSuffix, value.hasPrefix("\(spec)@") { return true }
+            if spec == Self.openCodeSessionPluginConfigSpec {
+                return value == "./plugins/\(Self.openCodeSessionPluginFilename)"
+                    || value.hasSuffix("/plugins/\(Self.openCodeSessionPluginFilename)")
+                    || value.hasSuffix("/\(Self.openCodeSessionPluginFilename)")
+            }
+            return false
+        }
+    }
+
+    private func updateOpenCodePluginRegistration(
+        configDir: URL,
+        register: Bool
+    ) throws {
+        let configURL = configDir.appendingPathComponent("opencode.json", isDirectory: false)
+        var config: [String: Any]
+        if let data = try? Data(contentsOf: configURL) {
+            guard let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw CLIError(message: "Failed to parse \(configURL.path). Fix the JSON syntax and retry.")
+            }
+            config = decoded
+        } else {
+            config = [:]
+        }
+
+        var plugins = (config["plugin"] as? [Any]) ?? []
+        if register {
+            if !Self.openCodePluginListContains(plugins, spec: Self.openCodeSessionPluginConfigSpec) {
+                plugins.append(Self.openCodeSessionPluginConfigSpec)
+            }
+        } else {
+            plugins.removeAll { entry in
+                guard let value = (entry as? String) ?? ((entry as? [Any])?.first as? String) else {
+                    return false
+                }
+                return value == Self.openCodeSessionPluginConfigSpec
+                    || value == "./plugins/\(Self.openCodeSessionPluginFilename)"
+                    || value.hasSuffix("/plugins/\(Self.openCodeSessionPluginFilename)")
+                    || value.hasSuffix("/\(Self.openCodeSessionPluginFilename)")
+            }
+        }
+        config["plugin"] = plugins
+
+        let output = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
+        try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        try output.write(to: configURL, options: .atomic)
+    }
+
+    private func installOpenCodePluginHooks(_ def: AgentHookDef) throws {
         let pluginURL = openCodeSessionPluginURL(for: def)
         let skipConfirm = ProcessInfo.processInfo.arguments.contains("--yes")
             || ProcessInfo.processInfo.arguments.contains("-y")
@@ -14800,8 +14881,9 @@ export const CMUXSessionRestore = async (ctx) => {
             }
         }
 
-        try fm.createDirectory(at: pluginURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Self.openCodeSessionPluginSource.write(to: pluginURL, atomically: true, encoding: .utf8)
+        let configDir = URL(fileURLWithPath: def.resolvedConfigDir(), isDirectory: true)
+        try writeOpenCodeSessionPlugin(in: configDir)
+        try updateOpenCodePluginRegistration(configDir: configDir, register: true)
         print("OpenCode hooks installed at \(pluginURL.path)")
     }
 
@@ -14820,6 +14902,10 @@ export const CMUXSessionRestore = async (ctx) => {
         }
 
         try fm.removeItem(at: pluginURL)
+        try updateOpenCodePluginRegistration(
+            configDir: URL(fileURLWithPath: def.resolvedConfigDir(), isDirectory: true),
+            register: false
+        )
         print("Removed OpenCode cmux plugin from \(pluginURL.path)")
     }
 

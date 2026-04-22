@@ -317,6 +317,34 @@ def test_live_socket_tmpdir_failure_skips_node_options_injection(failures: list[
     expect(child_node_options == "__UNSET__", f"tmpdir failure: expected child NODE_OPTIONS passthrough, got {child_node_options!r}", failures)
 
 
+def test_live_socket_stale_mktemp_literal_does_not_warn(failures: list[str]) -> None:
+    with tempfile.TemporaryDirectory(prefix="cmux-claude-wrapper-tmp-") as td:
+        tmpdir = Path(td)
+        guard_dir = tmpdir / "cmux-claude-node-options"
+        guard_dir.mkdir(parents=True, exist_ok=True)
+        (guard_dir / "restore-node-options.XXXXXX.cjs").write_text("stale", encoding="utf-8")
+        code, _, _, stderr, _, node_options, runtime_node_options, child_node_options, _ = run_wrapper(
+            socket_state="live",
+            argv=["hello"],
+            tmpdir=str(tmpdir),
+        )
+    expect(code == 0, f"stale mktemp literal: wrapper exited {code}: {stderr}", failures)
+    expect("mktemp:" not in stderr, f"stale mktemp literal: unexpected mktemp warning: {stderr!r}", failures)
+    require_flag, _, remaining_flags = node_options.partition(" ")
+    expect(
+        require_flag.startswith("--require="),
+        f"stale mktemp literal: expected NODE_OPTIONS restore preload, got {node_options!r}",
+        failures,
+    )
+    expect(
+        remaining_flags == "--max-old-space-size=4096",
+        f"stale mktemp literal: expected injected heap cap after preload, got {node_options!r}",
+        failures,
+    )
+    expect(runtime_node_options == "__UNSET__", f"stale mktemp literal: expected runtime NODE_OPTIONS restored, got {runtime_node_options!r}", failures)
+    expect(child_node_options == "__UNSET__", f"stale mktemp literal: expected child NODE_OPTIONS restored, got {child_node_options!r}", failures)
+
+
 def test_missing_socket_skips_hook_injection(failures: list[str]) -> None:
     code, real_argv, cmux_log, stderr, claudecode, node_options, runtime_node_options, child_node_options, hook_cmux_bin = run_wrapper(
         socket_state="missing",
@@ -357,6 +385,7 @@ def main() -> int:
     test_live_socket_injects_supported_hooks(failures)
     test_live_socket_enforces_heap_cap_for_space_separated_flag(failures)
     test_live_socket_tmpdir_failure_skips_node_options_injection(failures)
+    test_live_socket_stale_mktemp_literal_does_not_warn(failures)
     test_missing_socket_skips_hook_injection(failures)
     test_stale_socket_skips_hook_injection(failures)
 
