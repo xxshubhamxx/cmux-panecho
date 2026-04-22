@@ -1277,6 +1277,35 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
         )
     }
 
+    func testClaudeResumeCommandPreservesDangerouslySkipPermissionsAndObservedEnvironment() {
+        let snapshot = SessionRestorableAgentSnapshot(
+            kind: .claude,
+            sessionId: "24ec0052-450c-4914-b1dd-2ee80d4bc84b",
+            workingDirectory: "/Users/lawrence/fun",
+            launchCommand: AgentLaunchCommandSnapshot(
+                launcher: "claude",
+                executablePath: "/Users/lawrence/.local/bin/claude",
+                arguments: [
+                    "/Users/lawrence/.local/bin/claude",
+                    "--dangerously-skip-permissions"
+                ],
+                workingDirectory: "/Users/lawrence/fun",
+                environment: [
+                    "CLAUDE_CONFIG_DIR": "/Users/lawrence/.codex-accounts/claude/_p1775010019397",
+                    "PATH": "/Users/lawrence/.local/bin:/usr/bin",
+                    "SHELL": "/bin/zsh"
+                ],
+                capturedAt: 123,
+                source: "environment"
+            )
+        )
+
+        XCTAssertEqual(
+            snapshot.resumeCommand,
+            "cd '/Users/lawrence/fun' && 'env' 'CLAUDE_CONFIG_DIR=/Users/lawrence/.codex-accounts/claude/_p1775010019397' '/Users/lawrence/.local/bin/claude' '--resume' '24ec0052-450c-4914-b1dd-2ee80d4bc84b' '--dangerously-skip-permissions'"
+        )
+    }
+
     func testCodexResumeCommandPreservesFlagsAndDropsOriginalPrompt() {
         let snapshot = SessionRestorableAgentSnapshot(
             kind: .codex,
@@ -1346,7 +1375,7 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
 
         XCTAssertEqual(
             snapshot.resumeCommand,
-            "cd '/tmp/team repo' && 'env' 'CMUX_CUSTOM_CLAUDE_PATH=/opt/Claude Code/bin/claude' 'PATH=/opt/Claude Code/bin:/usr/bin' '/Applications/cmux.app/Contents/Resources/bin/cmux' 'claude-teams' '--resume' 'claude-team-session' '--teammate-mode' 'auto' '--model' 'sonnet' '--remote-control-session-name-prefix' 'cmux-team' '--permission-mode' 'auto'"
+            "cd '/tmp/team repo' && 'env' 'CMUX_CUSTOM_CLAUDE_PATH=/opt/Claude Code/bin/claude' '/Applications/cmux.app/Contents/Resources/bin/cmux' 'claude-teams' '--resume' 'claude-team-session' '--teammate-mode' 'auto' '--model' 'sonnet' '--remote-control-session-name-prefix' 'cmux-team' '--permission-mode' 'auto'"
         )
     }
 
@@ -1382,7 +1411,7 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
         )
     }
 
-    func testResumeCommandPreservesSafeNonNodeEnvironmentValuesExactly() {
+    func testResumeCommandPreservesSafeProviderEnvironmentValuesOnly() {
         let snapshot = SessionRestorableAgentSnapshot(
             kind: .claude,
             sessionId: "claude-session-env",
@@ -1404,7 +1433,7 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
 
         XCTAssertEqual(
             snapshot.resumeCommand,
-            "'env' 'ANTHROPIC_MODEL=' 'PATH= /tmp/bin ' 'claude' '--resume' 'claude-session-env'"
+            "'env' 'ANTHROPIC_MODEL=' 'claude' '--resume' 'claude-session-env'"
         )
     }
 
@@ -1513,6 +1542,26 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
                 source: "environment"
             )
         )
+        let staleBunWorker = SessionRestorableAgentSnapshot(
+            kind: .opencode,
+            sessionId: "ses_24b0be92affeVRRBplLmUzbXQl",
+            workingDirectory: "/Users/lawrence/fun",
+            launchCommand: AgentLaunchCommandSnapshot(
+                launcher: "opencode",
+                executablePath: "/Users/lawrence/.bun/bin/opencode",
+                arguments: [
+                    "/Users/lawrence/.bun/bin/opencode",
+                    "/$bunfs/root/src/cli/cmd/tui/worker.js"
+                ],
+                workingDirectory: "/Users/lawrence/fun",
+                environment: [
+                    "PATH": "/Users/lawrence/.bun/bin:/usr/bin",
+                    "SHELL": "/bin/zsh"
+                ],
+                capturedAt: 123,
+                source: "environment"
+            )
+        )
         let omx = SessionRestorableAgentSnapshot(
             kind: .codex,
             sessionId: "codex-session-123",
@@ -1549,6 +1598,10 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
         XCTAssertEqual(
             omo.resumeCommand,
             "cd '/tmp/opencode repo' && 'env' 'OPENCODE_CONFIG_DIR=/tmp/opencode config' '/usr/local/bin/cmux' 'omo' '--session' 'opencode-session-123' '--model' 'anthropic/claude-sonnet-4-6' '/tmp/opencode repo'"
+        )
+        XCTAssertEqual(
+            staleBunWorker.resumeCommand,
+            "cd '/Users/lawrence/fun' && '/Users/lawrence/.bun/bin/opencode' '--session' 'ses_24b0be92affeVRRBplLmUzbXQl'"
         )
         XCTAssertNil(omx.resumeCommand)
         XCTAssertNil(omc.resumeCommand)

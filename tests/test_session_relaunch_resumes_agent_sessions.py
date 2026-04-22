@@ -153,6 +153,8 @@ def _write_hook_state(
     cwd: str,
     launcher: str,
     executable_path: Path,
+    arguments: list[str] | None = None,
+    environment: dict[str, str] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -166,9 +168,9 @@ def _write_hook_state(
                 "launchCommand": {
                     "launcher": launcher,
                     "executablePath": str(executable_path),
-                    "arguments": [str(executable_path)],
+                    "arguments": arguments or [str(executable_path)],
                     "workingDirectory": cwd,
-                    "environment": None,
+                    "environment": environment,
                     "capturedAt": time.time(),
                     "source": "test",
                 },
@@ -194,7 +196,10 @@ def main() -> int:
     snapshot = _snapshot_path(bundle_id)
     previous_snapshot = _snapshot_path(bundle_id, suffix="-previous")
     codex_expected = "CMUX_FAKE_CODEX_RESUME:resume codex-session-relaunch-2923"
-    claude_expected = "CMUX_FAKE_CLAUDE_RESUME:--resume claude-session-relaunch-2923"
+    claude_expected = (
+        "CMUX_FAKE_CLAUDE_RESUME:--resume claude-session-relaunch-2923 "
+        "--dangerously-skip-permissions"
+    )
     opencode_expected = "CMUX_FAKE_OPENCODE_RESUME:--session opencode-session-relaunch-2923"
 
     failures: list[str] = []
@@ -256,6 +261,16 @@ def main() -> int:
                         cwd=os.getcwd(),
                         launcher="claude",
                         executable_path=fake_bin_dir / "claude",
+                        arguments=[
+                            str(fake_bin_dir / "claude"),
+                            "--dangerously-skip-permissions",
+                        ],
+                        environment={
+                            "CLAUDE_CONFIG_DIR": str(Path(td) / "claude-config"),
+                            "PATH": launch_path,
+                            "SHELL": "/bin/zsh",
+                            "UNSAFE_TOKEN": "must-not-restore",
+                        },
                     )
 
                 opencode_workspace_id = client.new_workspace()
@@ -274,6 +289,15 @@ def main() -> int:
                         cwd=os.getcwd(),
                         launcher="opencode",
                         executable_path=fake_bin_dir / "opencode",
+                        arguments=[
+                            str(fake_bin_dir / "opencode"),
+                            "/$bunfs/root/src/cli/cmd/tui/worker.js",
+                        ],
+                        environment={
+                            "PATH": launch_path,
+                            "SHELL": "/bin/zsh",
+                            "UNSAFE_TOKEN": "must-not-restore",
+                        },
                     )
 
                 client.select_workspace(codex_workspace_id)

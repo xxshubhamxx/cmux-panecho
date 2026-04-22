@@ -363,8 +363,9 @@ private enum AgentResumeCommandBuilder {
     }
 
     private static func preservedOpenCodeArguments(_ args: [String]) -> [String]? {
-        preserveOptions(
-            args,
+        let sanitizedArgs = args.filter { !isOpenCodeInternalWorkerArgument($0) }
+        return preserveOptions(
+            sanitizedArgs,
             valueOptions: opencodeValueOptions,
             optionalValueOptions: [],
             variadicOptions: ["--cors"],
@@ -386,6 +387,12 @@ private enum AgentResumeCommandBuilder {
             resumeSubcommand: nil,
             preserveFirstPositional: true
         )
+    }
+
+    private static func isOpenCodeInternalWorkerArgument(_ value: String) -> Bool {
+        let normalized = value.replacingOccurrences(of: "\\", with: "/")
+        return normalized.contains("/$bunfs/") &&
+            normalized.contains("/src/cli/cmd/tui/worker.js")
     }
 
     private static func preserveOptions(
@@ -545,9 +552,7 @@ private enum AgentResumeCommandBuilder {
              "CMUX_CUSTOM_CLAUDE_PATH",
              "CODEX_HOME",
              "NODE_OPTIONS",
-             "OPENCODE_CONFIG_DIR",
-             "PATH",
-             "SHELL":
+             "OPENCODE_CONFIG_DIR":
             return true
         default:
             return false
