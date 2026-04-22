@@ -128,8 +128,10 @@ export class E2BProvider implements VMProvider {
         const snap = await sbx.createSnapshot();
         const id =
           (snap as { snapshotId?: string }).snapshotId ??
-          (snap as { snapshot_id?: string }).snapshot_id ??
-          JSON.stringify(snap);
+          (snap as { snapshot_id?: string }).snapshot_id;
+        if (!id || typeof id !== "string") {
+          throw new ProviderError("e2b", "createSnapshot returned no snapshot id", snap);
+        }
         span.setAttribute("cmux.snapshot.id", id);
         return { id, createdAt: Date.now(), name };
       },

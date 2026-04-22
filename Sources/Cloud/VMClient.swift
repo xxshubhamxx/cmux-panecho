@@ -182,7 +182,8 @@ actor VMClient {
         let (data, http) = try await request(
             "POST",
             path: "/api/vm/\(encodedID)/exec",
-            jsonBody: body
+            jsonBody: body,
+            timeoutSeconds: max(1, Double(timeoutMs) / 1000.0 + 5.0)
         )
         try ensureOK(http, data: data)
         let obj = try decodeJSONObject(data)
@@ -198,7 +199,8 @@ actor VMClient {
         _ method: String,
         path: String,
         jsonBody: [String: Any]? = nil,
-        extraHeaders: [String: String] = [:]
+        extraHeaders: [String: String] = [:],
+        timeoutSeconds: TimeInterval? = nil
     ) async throws -> (Data, HTTPURLResponse) {
         let tokens: (accessToken: String, refreshToken: String)
         do {
@@ -217,6 +219,9 @@ actor VMClient {
 
         var req = URLRequest(url: resolved)
         req.httpMethod = method
+        if let timeoutSeconds {
+            req.timeoutInterval = timeoutSeconds
+        }
         req.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
         req.setValue(tokens.refreshToken, forHTTPHeaderField: "X-Stack-Refresh-Token")
         if let jsonBody {

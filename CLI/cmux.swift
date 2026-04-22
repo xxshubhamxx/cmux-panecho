@@ -1818,10 +1818,16 @@ struct CMUXCLI {
 
         // Check for --help/-h on subcommands before connecting to the socket,
         // so help text is available even when cmux is not running.
+        let preSeparatorArgs: ArraySlice<String>
+        if let separatorIndex = commandArgs.firstIndex(of: "--") {
+            preSeparatorArgs = commandArgs[..<separatorIndex]
+        } else {
+            preSeparatorArgs = commandArgs[...]
+        }
         if command != "__tmux-compat",
            command != "claude-teams",
            command != "codex",
-           (commandArgs.contains("--help") || commandArgs.contains("-h")) {
+           preSeparatorArgs.contains(where: { $0 == "--help" || $0 == "-h" }) {
             if dispatchSubcommandHelp(command: command, commandArgs: commandArgs) {
                 return
             }
@@ -2214,9 +2220,8 @@ struct CMUXCLI {
                 let cred = (response["credential"] as? [String: Any]) ?? [:]
                 let credKind = (cred["kind"] as? String) ?? "?"
                 let credValue = (cred["value"] as? String) ?? "?"
-                // Print the ready-to-paste one-liner. Using password auth for Freestyle today.
                 if credKind == "password" {
-                    print("ssh \(username):\(credValue)@\(host) -p \(port)")
+                    print("ssh \(username)@\(host) -p \(port)")
                     print("")
                     print("  host:      \(host)")
                     print("  port:      \(port)")
@@ -2248,13 +2253,16 @@ struct CMUXCLI {
                     method: "vm.exec",
                     params: ["id": vmId, "command": command]
                 )
-                if jsonOutput {
-                    print(jsonString(response))
-                    break
-                }
                 let stdout = (response["stdout"] as? String) ?? ""
                 let stderr = (response["stderr"] as? String) ?? ""
                 let exitCode = (response["exit_code"] as? Int) ?? -1
+                if jsonOutput {
+                    print(jsonString(response))
+                    if exitCode != 0 {
+                        throw CLIError(message: "exit \(exitCode)")
+                    }
+                    break
+                }
                 if !stdout.isEmpty { print(stdout, terminator: stdout.hasSuffix("\n") ? "" : "\n") }
                 if !stderr.isEmpty {
                     FileHandle.standardError.write(Data(stderr.utf8))
