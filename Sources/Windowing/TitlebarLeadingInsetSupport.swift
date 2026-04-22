@@ -26,7 +26,6 @@ struct TitlebarLeadingInsetReader: NSViewRepresentable {
                 where accessory.layoutAttribute == .leading || accessory.layoutAttribute == .left {
                 leading += accessory.view.frame.width
             }
-            leading += 0
             if leading != inset {
                 inset = leading
             }
