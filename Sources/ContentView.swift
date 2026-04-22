@@ -203,6 +203,22 @@ struct SidebarWorkspaceRowBackgroundStyle {
     static let clear = Self(color: nil, opacity: 0)
 }
 
+func sidebarWorkspaceRowExplicitRailNSColor(
+    activeTabIndicatorStyle: SidebarActiveTabIndicatorStyle,
+    customColorHex: String?,
+    colorScheme: ColorScheme
+) -> NSColor? {
+    guard activeTabIndicatorStyle == .leftRail,
+          let customColorHex else {
+        return nil
+    }
+    return WorkspaceTabColorSettings.displayNSColor(
+        hex: customColorHex,
+        colorScheme: colorScheme,
+        forceBright: true
+    )
+}
+
 func sidebarWorkspaceRowBackgroundStyle(
     activeTabIndicatorStyle: SidebarActiveTabIndicatorStyle,
     isActive: Bool,
@@ -223,22 +239,13 @@ func sidebarWorkspaceRowBackgroundStyle(
             forceBright: activeTabIndicatorStyle == .leftRail
         )
     }
-    let selectedCustomBackground = customColorHex.flatMap {
-        sidebarSelectedWorkspaceCustomBackgroundNSColor(hex: $0, colorScheme: colorScheme)
-    }
 
     switch activeTabIndicatorStyle {
     case .leftRail:
         if isActive {
             return SidebarWorkspaceRowBackgroundStyle(
-                color: selectedCustomBackground ?? selectedBackground,
+                color: selectedBackground,
                 opacity: 1
-            )
-        }
-        if let customBackground {
-            return SidebarWorkspaceRowBackgroundStyle(
-                color: customBackground,
-                opacity: isMultiSelected ? 0.35 : 0.7
             )
         }
         if isMultiSelected {
@@ -249,7 +256,7 @@ func sidebarWorkspaceRowBackgroundStyle(
     case .solidFill:
         if isActive {
             return SidebarWorkspaceRowBackgroundStyle(
-                color: selectedCustomBackground ?? selectedBackground,
+                color: selectedBackground,
                 opacity: 1
             )
         }
@@ -1785,6 +1792,13 @@ private final class WindowTmuxWorkspacePaneOverlayController: NSObject {
             containerView.isHidden = true
         }
     }
+}
+
+@MainActor
+private func existingTmuxWorkspacePaneWindowOverlayController(
+    for window: NSWindow
+) -> WindowTmuxWorkspacePaneOverlayController? {
+    objc_getAssociatedObject(window, &tmuxWorkspacePaneWindowOverlayKey) as? WindowTmuxWorkspacePaneOverlayController
 }
 
 @MainActor
@@ -3790,8 +3804,12 @@ struct ContentView: View {
 
         view = AnyView(view.background(WindowAccessor(dedupeByWindow: false) { window in
             MainActor.assumeIsolated {
-                let tmuxOverlayController = tmuxWorkspacePaneWindowOverlayController(for: window)
-                tmuxOverlayController.update(state: tmuxWorkspacePaneWindowOverlayState(for: window))
+                if let tmuxOverlayState = tmuxWorkspacePaneWindowOverlayState(for: window) {
+                    let tmuxOverlayController = tmuxWorkspacePaneWindowOverlayController(for: window)
+                    tmuxOverlayController.update(state: tmuxOverlayState)
+                } else {
+                    existingTmuxWorkspacePaneWindowOverlayController(for: window)?.update(state: nil)
+                }
                 let overlayController = commandPaletteWindowOverlayController(for: window)
                 overlayController.update(rootView: AnyView(commandPaletteOverlay), isVisible: isCommandPalettePresented)
             }
@@ -13073,6 +13091,10 @@ private struct TabItemView: View, Equatable {
         .semibold
     }
 
+    private var showsLeadingRail: Bool {
+        explicitRailColor != nil
+    }
+
     private var activeBorderLineWidth: CGFloat {
         switch activeTabIndicatorStyle {
         case .leftRail:
@@ -13500,6 +13522,16 @@ private struct TabItemView: View, Equatable {
                 .overlay {
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(activeBorderColor, lineWidth: activeBorderLineWidth)
+                }
+                .overlay(alignment: .leading) {
+                    if showsLeadingRail {
+                        Capsule(style: .continuous)
+                            .fill(railColor)
+                            .frame(width: 3)
+                            .padding(.leading, 4)
+                            .padding(.vertical, 5)
+                            .offset(x: -1)
+                    }
                 }
         )
         .padding(.horizontal, 6)
@@ -13941,6 +13973,21 @@ private struct TabItemView: View, Equatable {
         )
         guard let color = style.color else { return .clear }
         return Color(nsColor: color).opacity(style.opacity)
+    }
+
+    private var railColor: Color {
+        explicitRailColor ?? .clear
+    }
+
+    private var explicitRailColor: Color? {
+        guard let railColor = sidebarWorkspaceRowExplicitRailNSColor(
+            activeTabIndicatorStyle: activeTabIndicatorStyle,
+            customColorHex: workspaceSnapshot.customColorHex,
+            colorScheme: colorScheme
+        ) else {
+            return nil
+        }
+        return Color(nsColor: railColor).opacity(0.95)
     }
 
     private func tabColorSwatchColor(for hex: String) -> NSColor {
