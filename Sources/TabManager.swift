@@ -729,13 +729,19 @@ class TabManager: ObservableObject {
         let pullRequest: WorkspacePullRequestSnapshot
     }
 
-    private struct CommandResult {
+    struct CommandResult: Sendable {
         let stdout: String?
         let stderr: String?
         let exitStatus: Int32?
         let timedOut: Bool
         let executionError: String?
     }
+
+#if DEBUG
+    nonisolated(unsafe) static var commandRunnerForTesting: (
+        @Sendable (String, String, [String], TimeInterval?) -> CommandResult?
+    )?
+#endif
 
     private struct WorkspaceGitProbeKey: Hashable, Sendable {
         let workspaceId: UUID
@@ -752,6 +758,19 @@ class TabManager: ObservableObject {
         let panelId: UUID
         let branch: String
         let repoSlugs: [String]
+    }
+
+    private struct WorkspacePullRequestCandidateSeed: Sendable {
+        let workspaceId: UUID
+        let panelId: UUID
+        let branch: String
+        let directory: String?
+    }
+
+    private struct WorkspacePullRequestCandidateResolution: Sendable {
+        let candidates: [WorkspacePullRequestCandidate]
+        let candidateBranchesByRepo: [String: Set<String>]
+        let repoDirectoriesBySlug: [String: String]
     }
 
     private struct WorkspacePullRequestResolvedItem: Sendable {
@@ -817,7 +836,7 @@ class TabManager: ObservableObject {
     }
 
     private struct WorkspacePullRequestRESTItem: Decodable, Sendable {
-        struct Head: Decodable, Sendable {
+        struct Ref: Decodable, Sendable {
             let ref: String
         }
 
@@ -826,7 +845,8 @@ class TabManager: ObservableObject {
         let htmlURL: String
         let updatedAt: String?
         let mergedAt: String?
-        let head: Head
+        let head: Ref
+        let base: Ref?
 
         enum CodingKeys: String, CodingKey {
             case number
@@ -835,6 +855,7 @@ class TabManager: ObservableObject {
             case updatedAt = "updated_at"
             case mergedAt = "merged_at"
             case head
+            case base
         }
     }
 
@@ -843,20 +864,26 @@ class TabManager: ObservableObject {
         let state: String
         let url: String
         let updatedAt: String?
+        let mergedAt: String?
         let headRefName: String?
+        let baseRefName: String?
 
         init(
             number: Int,
             state: String,
             url: String,
             updatedAt: String?,
-            headRefName: String? = nil
+            mergedAt: String? = nil,
+            headRefName: String? = nil,
+            baseRefName: String? = nil
         ) {
             self.number = number
             self.state = state
             self.url = url
             self.updatedAt = updatedAt
+            self.mergedAt = mergedAt
             self.headRefName = headRefName
+            self.baseRefName = baseRefName
         }
     }
 
@@ -882,6 +909,7 @@ class TabManager: ObservableObject {
     private nonisolated static let workspacePullRequestTerminalStateSweepInterval: TimeInterval = 15 * 60
     private nonisolated static let workspacePullRequestPollJitterFraction = 0.10
     private nonisolated static let workspacePullRequestProbeTimeout: TimeInterval = 5.0
+    private nonisolated static let mergedPullRequestBadgeStaleAfter: TimeInterval = 14 * 24 * 60 * 60
     @Published var selectedTabId: UUID? {
         willSet {
 #if DEBUG
@@ -1210,9 +1238,7 @@ class TabManager: ObservableObject {
         allowCachedResultsOverride: Bool? = nil
     ) {
         let now = Date()
-        var candidates: [WorkspacePullRequestCandidate] = []
-        var candidateBranchesByRepo: [String: Set<String>] = [:]
-        var repoDirectoriesBySlug: [String: String] = [:]
+        var candidateSeeds: [WorkspacePullRequestCandidateSeed] = []
         var requestedKeys: [WorkspaceGitProbeKey] = []
         var validKeys: Set<WorkspaceGitProbeKey> = []
 
@@ -1251,21 +1277,13 @@ class TabManager: ObservableObject {
                     continue
                 }
 
-                let candidate = workspacePullRequestCandidate(
+                let candidateSeed = workspacePullRequestCandidateSeed(
                     workspace: workspace,
                     panelId: panelId,
                     branch: branch
                 )
-                candidates.append(candidate)
+                candidateSeeds.append(candidateSeed)
                 requestedKeys.append(key)
-                for repoSlug in candidate.repoSlugs {
-                    candidateBranchesByRepo[repoSlug, default: []].insert(candidate.branch)
-                }
-                if let directory = gitProbeDirectory(for: workspace, panelId: panelId) {
-                    for repoSlug in candidate.repoSlugs where repoDirectoriesBySlug[repoSlug] == nil {
-                        repoDirectoriesBySlug[repoSlug] = directory
-                    }
-                }
             }
         }
 
@@ -1274,7 +1292,7 @@ class TabManager: ObservableObject {
             updateWorkspacePullRequestPollTimer()
             return
         }
-        guard !candidates.isEmpty else {
+        guard !candidateSeeds.isEmpty else {
             updateWorkspacePullRequestPollTimer()
             return
         }
@@ -1287,16 +1305,18 @@ class TabManager: ObservableObject {
         let cacheBySlug = workspacePullRequestRepoCacheBySlug
         let allowCachedResults = allowCachedResultsOverride
             ?? Self.workspacePullRequestRefreshAllowsRepoCache(reason: reason)
-        workspacePullRequestRefreshTask = Task { [weak self] in
+        workspacePullRequestRefreshTask = Task.detached(priority: .utility) { [weak self] in
+            let candidateResolution = await Self.resolveWorkspacePullRequestCandidateSeeds(candidateSeeds)
+            guard !Task.isCancelled else { return }
             let repoResults = await Self.fetchWorkspacePullRequestRepoResults(
-                repoDirectoriesBySlug: repoDirectoriesBySlug,
-                candidateBranchesByRepo: candidateBranchesByRepo,
+                repoDirectoriesBySlug: candidateResolution.repoDirectoriesBySlug,
+                candidateBranchesByRepo: candidateResolution.candidateBranchesByRepo,
                 cacheBySlug: cacheBySlug,
                 now: now,
                 allowCachedResults: allowCachedResults
             )
             let results = Self.resolveWorkspacePullRequestRefreshResults(
-                candidates: candidates,
+                candidates: candidateResolution.candidates,
                 repoResults: repoResults
             )
             guard !Task.isCancelled else { return }
@@ -1328,18 +1348,65 @@ class TabManager: ObservableObject {
         )
     }
 
-    private func workspacePullRequestCandidate(
+    private func workspacePullRequestCandidateSeed(
         workspace: Workspace,
         panelId: UUID,
         branch: String
-    ) -> WorkspacePullRequestCandidate {
+    ) -> WorkspacePullRequestCandidateSeed {
         let directory = gitProbeDirectory(for: workspace, panelId: panelId)
-        let repoSlugs = directory.map(Self.githubRepositorySlugs(directory:)) ?? []
-        return WorkspacePullRequestCandidate(
+        return WorkspacePullRequestCandidateSeed(
             workspaceId: workspace.id,
             panelId: panelId,
             branch: branch,
-            repoSlugs: repoSlugs
+            directory: directory
+        )
+    }
+
+    private nonisolated static func resolveWorkspacePullRequestCandidateSeeds(
+        _ seeds: [WorkspacePullRequestCandidateSeed]
+    ) async -> WorkspacePullRequestCandidateResolution {
+        var candidates: [WorkspacePullRequestCandidate] = []
+        candidates.reserveCapacity(seeds.count)
+        var candidateBranchesByRepo: [String: Set<String>] = [:]
+        var repoDirectoriesBySlug: [String: String] = [:]
+        var repoSlugsByDirectory: [String: [String]] = [:]
+
+        for seed in seeds {
+            let repoSlugs: [String]
+            if let directory = seed.directory {
+                if let cachedRepoSlugs = repoSlugsByDirectory[directory] {
+                    repoSlugs = cachedRepoSlugs
+                } else {
+                    let resolvedRepoSlugs = await githubRepositorySlugs(directory: directory)
+                    repoSlugsByDirectory[directory] = resolvedRepoSlugs
+                    repoSlugs = resolvedRepoSlugs
+                }
+            } else {
+                repoSlugs = []
+            }
+
+            candidates.append(
+                WorkspacePullRequestCandidate(
+                    workspaceId: seed.workspaceId,
+                    panelId: seed.panelId,
+                    branch: seed.branch,
+                    repoSlugs: repoSlugs
+                )
+            )
+            for repoSlug in repoSlugs {
+                candidateBranchesByRepo[repoSlug, default: []].insert(seed.branch)
+            }
+            if let directory = seed.directory {
+                for repoSlug in repoSlugs where repoDirectoriesBySlug[repoSlug] == nil {
+                    repoDirectoriesBySlug[repoSlug] = directory
+                }
+            }
+        }
+
+        return WorkspacePullRequestCandidateResolution(
+            candidates: candidates,
+            candidateBranchesByRepo: candidateBranchesByRepo,
+            repoDirectoriesBySlug: repoDirectoriesBySlug
         )
     }
 
@@ -2226,9 +2293,10 @@ class TabManager: ObservableObject {
             return
         }
 
-        initialWorkspaceGitProbeQueue.async { [weak self] in
-            let snapshot = Self.initialWorkspaceGitMetadataSnapshot(for: expectedDirectory)
-            Task { @MainActor [weak self] in
+        Task.detached(priority: .utility) { [weak self] in
+            let snapshot = await Self.initialWorkspaceGitMetadataSnapshot(for: expectedDirectory)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
                 self?.applyWorkspaceGitMetadataSnapshot(
                     snapshot,
                     probeKey: probeKey,
@@ -2417,8 +2485,9 @@ class TabManager: ObservableObject {
 
     private nonisolated static func initialWorkspaceGitMetadataSnapshot(
         for directory: String
-    ) -> InitialWorkspaceGitMetadataSnapshot {
-        let branch = normalizedBranchName(runGitCommand(directory: directory, arguments: ["branch", "--show-current"]))
+    ) async -> InitialWorkspaceGitMetadataSnapshot {
+        let branchOutput = await runGitCommand(directory: directory, arguments: ["branch", "--show-current"])
+        let branch = normalizedBranchName(branchOutput)
         guard let branch else {
             return InitialWorkspaceGitMetadataSnapshot(
                 branch: nil,
@@ -2427,7 +2496,7 @@ class TabManager: ObservableObject {
             )
         }
 
-        let statusOutput = runGitCommand(directory: directory, arguments: ["status", "--porcelain", "-uno"])
+        let statusOutput = await runGitCommand(directory: directory, arguments: ["status", "--porcelain", "-uno"])
         let isDirty = !(statusOutput?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         return InitialWorkspaceGitMetadataSnapshot(
             branch: branch,
@@ -2436,8 +2505,8 @@ class TabManager: ObservableObject {
         )
     }
 
-    private nonisolated static func runGitCommand(directory: String, arguments: [String]) -> String? {
-        runCommand(
+    private nonisolated static func runGitCommand(directory: String, arguments: [String]) async -> String? {
+        await runCommand(
             directory: directory,
             executable: "git",
             arguments: arguments
@@ -2457,7 +2526,7 @@ class TabManager: ObservableObject {
         configuration.timeoutIntervalForRequest = max(Self.workspacePullRequestProbeTimeout, 8)
         configuration.timeoutIntervalForResource = max(Self.workspacePullRequestProbeTimeout, 8)
         let session = URLSession(configuration: configuration)
-        let authHeader = workspacePullRequestAuthHeaderValue()
+        let authHeader = await workspacePullRequestAuthHeaderValue()
         var results: [String: WorkspacePullRequestRepoFetchResult] = [:]
 
         let fetchedResults = await withTaskGroup(
@@ -2836,7 +2905,9 @@ class TabManager: ObservableObject {
             state: rawState,
             url: pullRequest.htmlURL,
             updatedAt: pullRequest.updatedAt,
-            headRefName: pullRequest.head.ref
+            mergedAt: pullRequest.mergedAt,
+            headRefName: pullRequest.head.ref,
+            baseRefName: pullRequest.base?.ref
         )
     }
 
@@ -2871,7 +2942,7 @@ class TabManager: ObservableObject {
         }
     }
 
-    private nonisolated static func workspacePullRequestAuthHeaderValue() -> String? {
+    private nonisolated static func workspacePullRequestAuthHeaderValue() async -> String? {
         let environment = ProcessInfo.processInfo.environment
         if let envToken = environment["GH_TOKEN"] ?? environment["GITHUB_TOKEN"] {
             let trimmed = envToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2881,7 +2952,7 @@ class TabManager: ObservableObject {
         }
 
         let directory = FileManager.default.currentDirectoryPath
-        let token = runCommand(
+        let token = await runCommand(
             directory: directory,
             executable: "gh",
             arguments: ["auth", "token"],
@@ -2891,20 +2962,30 @@ class TabManager: ObservableObject {
         return "Bearer \(token)"
     }
 
+    nonisolated static func pullRequestMapByNormalizedBranchForTesting(
+        from pullRequests: [GitHubPullRequestProbeItem],
+        now: Date
+    ) -> [String: GitHubPullRequestProbeItem] {
+        pullRequestMapByNormalizedBranch(from: pullRequests, now: now)
+    }
+
     private nonisolated static func pullRequestMapByNormalizedBranch(
-        from pullRequests: [GitHubPullRequestProbeItem]
+        from pullRequests: [GitHubPullRequestProbeItem],
+        now: Date = Date()
     ) -> [String: GitHubPullRequestProbeItem] {
         var pullRequestsByBranch: [String: GitHubPullRequestProbeItem] = [:]
 
         for pullRequest in pullRequests {
             guard let branch = normalizedBranchName(pullRequest.headRefName),
-                  pullRequestStatus(from: pullRequest.state) != nil,
-                  URL(string: pullRequest.url) != nil else {
+                  isSidebarPullRequestCandidate(pullRequest, now: now) else {
                 continue
             }
 
             if let currentBest = pullRequestsByBranch[branch] {
-                pullRequestsByBranch[branch] = preferredPullRequest(from: [currentBest, pullRequest]) ?? currentBest
+                pullRequestsByBranch[branch] = preferredPullRequest(
+                    from: [currentBest, pullRequest],
+                    now: now
+                ) ?? currentBest
             } else {
                 pullRequestsByBranch[branch] = pullRequest
             }
@@ -2914,7 +2995,8 @@ class TabManager: ObservableObject {
     }
 
     nonisolated static func preferredPullRequest(
-        from pullRequests: [GitHubPullRequestProbeItem]
+        from pullRequests: [GitHubPullRequestProbeItem],
+        now: Date = Date()
     ) -> GitHubPullRequestProbeItem? {
         func statusPriority(_ status: SidebarPullRequestStatus) -> Int {
             switch status {
@@ -2953,8 +3035,7 @@ class TabManager: ObservableObject {
 
         var best: GitHubPullRequestProbeItem?
         for pullRequest in pullRequests {
-            guard pullRequestStatus(from: pullRequest.state) != nil,
-                  URL(string: pullRequest.url) != nil else {
+            guard isSidebarPullRequestCandidate(pullRequest, now: now) else {
                 continue
             }
             guard let currentBest = best else {
@@ -2966,6 +3047,41 @@ class TabManager: ObservableObject {
             }
         }
         return best
+    }
+
+    private nonisolated static func isSidebarPullRequestCandidate(
+        _ pullRequest: GitHubPullRequestProbeItem,
+        now: Date
+    ) -> Bool {
+        guard pullRequestStatus(from: pullRequest.state) != nil,
+              URL(string: pullRequest.url) != nil else {
+            return false
+        }
+        return !isStaleMergedPullRequest(pullRequest, now: now)
+    }
+
+    private nonisolated static func isStaleMergedPullRequest(
+        _ pullRequest: GitHubPullRequestProbeItem,
+        now: Date
+    ) -> Bool {
+        guard pullRequestStatus(from: pullRequest.state) == .merged,
+              let mergedAt = githubTimestampDate(from: pullRequest.mergedAt) else {
+            return false
+        }
+        return now.timeIntervalSince(mergedAt) > mergedPullRequestBadgeStaleAfter
+    }
+
+    private nonisolated static func githubTimestampDate(from rawTimestamp: String?) -> Date? {
+        let timestamp = rawTimestamp?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !timestamp.isEmpty else { return nil }
+
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: timestamp) {
+            return date
+        }
+
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: timestamp)
     }
 
     private nonisolated static func pullRequestStatus(
@@ -3055,13 +3171,122 @@ class TabManager: ObservableObject {
         return nil
     }
 
+    private final class CommandRunState: @unchecked Sendable {
+        fileprivate typealias Continuation = CheckedContinuation<CommandResult?, Never>
+
+        private let lock = NSLock()
+        private var continuation: Continuation?
+        private var stdoutData: Data?
+        private var stderrData: Data?
+        private var exitStatus: Int32?
+        private var didTerminate = false
+        private var didResume = false
+        private var timeoutWorkItem: DispatchWorkItem?
+
+        fileprivate init(continuation: Continuation) {
+            self.continuation = continuation
+        }
+
+        func setTimeoutWorkItem(_ item: DispatchWorkItem?) {
+            guard let item else { return }
+            lock.lock()
+            if didResume {
+                lock.unlock()
+                item.cancel()
+                return
+            }
+            timeoutWorkItem = item
+            lock.unlock()
+        }
+
+        func hasResumed() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return didResume
+        }
+
+        func completeStdout(_ data: Data) {
+            complete {
+                stdoutData = data
+            }
+        }
+
+        func completeStderr(_ data: Data) {
+            complete {
+                stderrData = data
+            }
+        }
+
+        func completeTermination(exitStatus: Int32) {
+            complete {
+                self.exitStatus = exitStatus
+                didTerminate = true
+            }
+        }
+
+        func resume(returning result: CommandResult?) {
+            var continuationToResume: Continuation?
+            var timeoutToCancel: DispatchWorkItem?
+            lock.lock()
+            guard !didResume else {
+                lock.unlock()
+                return
+            }
+            didResume = true
+            continuationToResume = continuation
+            continuation = nil
+            timeoutToCancel = timeoutWorkItem
+            timeoutWorkItem = nil
+            lock.unlock()
+
+            timeoutToCancel?.cancel()
+            continuationToResume?.resume(returning: result)
+        }
+
+        private func complete(_ mutate: () -> Void) {
+            var continuationToResume: Continuation?
+            var timeoutToCancel: DispatchWorkItem?
+            var resultToResume: CommandResult?
+
+            lock.lock()
+            guard !didResume else {
+                lock.unlock()
+                return
+            }
+
+            mutate()
+            if let stdoutData,
+               let stderrData,
+               didTerminate {
+                didResume = true
+                resultToResume = CommandResult(
+                    stdout: String(data: stdoutData, encoding: .utf8),
+                    stderr: String(data: stderrData, encoding: .utf8),
+                    exitStatus: exitStatus,
+                    timedOut: false,
+                    executionError: nil
+                )
+                continuationToResume = continuation
+                continuation = nil
+                timeoutToCancel = timeoutWorkItem
+                timeoutWorkItem = nil
+            }
+            lock.unlock()
+
+            timeoutToCancel?.cancel()
+            if let resultToResume {
+                continuationToResume?.resume(returning: resultToResume)
+            }
+        }
+    }
+
     private nonisolated static func runCommand(
         directory: String,
         executable: String,
         arguments: [String],
         timeout: TimeInterval? = nil
-    ) -> String? {
-        let result = runCommandResult(
+    ) async -> String? {
+        let result = await runCommandResult(
             directory: directory,
             executable: executable,
             arguments: arguments,
@@ -3080,65 +3305,92 @@ class TabManager: ObservableObject {
         executable: String,
         arguments: [String],
         timeout: TimeInterval? = nil
-    ) -> CommandResult? {
-        let process = Process()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        if let resolvedExecutable = resolvedCommandPath(executable: executable) {
-            process.executableURL = URL(fileURLWithPath: resolvedExecutable)
-            process.arguments = arguments
-        } else {
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = [executable] + arguments
+    ) async -> CommandResult? {
+#if DEBUG
+        assert(!Thread.isMainThread, "TabManager.runCommandResult must not run on the main thread")
+        if let commandRunnerForTesting {
+            return commandRunnerForTesting(directory, executable, arguments, timeout)
         }
-        process.currentDirectoryURL = URL(fileURLWithPath: directory)
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        let completion = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in
-            completion.signal()
-        }
-
-        do {
-            try process.run()
-        } catch {
-            return CommandResult(
-                stdout: nil,
-                stderr: nil,
-                exitStatus: nil,
-                timedOut: false,
-                executionError: String(describing: error)
-            )
-        }
-
-        if let timeout,
-           completion.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
-            if completion.wait(timeout: .now() + 0.2) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = completion.wait(timeout: .now() + 0.2)
+#endif
+        return await withCheckedContinuation { continuation in
+            let process = Process()
+            let stdout = Pipe()
+            let stderr = Pipe()
+            if let resolvedExecutable = resolvedCommandPath(executable: executable) {
+                process.executableURL = URL(fileURLWithPath: resolvedExecutable)
+                process.arguments = arguments
+            } else {
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                process.arguments = [executable] + arguments
             }
-            return CommandResult(
-                stdout: nil,
-                stderr: nil,
-                exitStatus: nil,
-                timedOut: true,
-                executionError: nil
-            )
-        } else if timeout == nil {
-            completion.wait()
-        }
+            process.currentDirectoryURL = URL(fileURLWithPath: directory)
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = stdout
+            process.standardError = stderr
 
-        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-        return CommandResult(
-            stdout: String(data: stdoutData, encoding: .utf8),
-            stderr: String(data: stderrData, encoding: .utf8),
-            exitStatus: process.terminationStatus,
-            timedOut: false,
-            executionError: nil
-        )
+            let state = CommandRunState(continuation: continuation)
+            let timeoutWorkItem = timeout.map { _ in
+                DispatchWorkItem { [state, process] in
+                    guard !state.hasResumed() else { return }
+                    guard process.isRunning else { return }
+                    process.terminate()
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.2) {
+                        if process.isRunning {
+                            kill(process.processIdentifier, SIGKILL)
+                        }
+                    }
+                    state.resume(
+                        returning: CommandResult(
+                            stdout: nil,
+                            stderr: nil,
+                            exitStatus: nil,
+                            timedOut: true,
+                            executionError: nil
+                        )
+                    )
+                }
+            }
+            state.setTimeoutWorkItem(timeoutWorkItem)
+            process.terminationHandler = { terminatedProcess in
+                state.completeTermination(exitStatus: terminatedProcess.terminationStatus)
+            }
+
+            do {
+                try process.run()
+            } catch {
+                try? stdout.fileHandleForWriting.close()
+                try? stderr.fileHandleForWriting.close()
+                state.resume(
+                    returning: CommandResult(
+                        stdout: nil,
+                        stderr: nil,
+                        exitStatus: nil,
+                        timedOut: false,
+                        executionError: String(describing: error)
+                    )
+                )
+                return
+            }
+
+            try? stdout.fileHandleForWriting.close()
+            try? stderr.fileHandleForWriting.close()
+
+            DispatchQueue.global(qos: .utility).async {
+                let data = stdout.fileHandleForReading.readDataToEndOfFile()
+                state.completeStdout(data)
+            }
+            DispatchQueue.global(qos: .utility).async {
+                let data = stderr.fileHandleForReading.readDataToEndOfFile()
+                state.completeStderr(data)
+            }
+            if let timeout,
+               let timeoutWorkItem {
+                DispatchQueue.global(qos: .utility).asyncAfter(
+                    deadline: .now() + timeout,
+                    execute: timeoutWorkItem
+                )
+            }
+        }
     }
 
     nonisolated static func githubRepositorySlugs(fromGitRemoteVOutput output: String) -> [String] {
@@ -3182,8 +3434,8 @@ class TabManager: ObservableObject {
         return orderedSlugs
     }
 
-    private nonisolated static func githubRepositorySlugs(directory: String) -> [String] {
-        guard let output = runGitCommand(directory: directory, arguments: ["remote", "-v"]) else {
+    private nonisolated static func githubRepositorySlugs(directory: String) async -> [String] {
+        guard let output = await runGitCommand(directory: directory, arguments: ["remote", "-v"]) else {
             return []
         }
         return githubRepositorySlugs(fromGitRemoteVOutput: output)
