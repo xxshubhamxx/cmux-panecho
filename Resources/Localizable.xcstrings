@@ -512,6 +512,23 @@
         }
       }
     },
+    "codexAppServer.event.warning": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "警告"
+          }
+        }
+      }
+    },
     "codexAppServer.toolGroup.exitCode": {
       "extractionState": "manual",
       "localizations": {

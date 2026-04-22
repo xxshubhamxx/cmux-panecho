@@ -1013,7 +1013,7 @@ final class CodexTrajectoryTranscriptScrollView: NSScrollView {
     }
 }
 
-private final class CodexTrajectoryTranscriptDocumentView: NSView {
+private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfaceValidations {
     private enum PageChrome {
         case plain
         case accordionHeader
@@ -1048,6 +1048,31 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView {
         var duration: TimeInterval
     }
 
+    private struct TextSelectionEndpoint: Comparable, Equatable {
+        var pageEntryIndex: Int
+        var utf16Offset: Int
+
+        static func < (lhs: Self, rhs: Self) -> Bool {
+            if lhs.pageEntryIndex != rhs.pageEntryIndex {
+                return lhs.pageEntryIndex < rhs.pageEntryIndex
+            }
+            return lhs.utf16Offset < rhs.utf16Offset
+        }
+    }
+
+    private struct TextSelection {
+        var anchor: TextSelectionEndpoint
+        var focus: TextSelectionEndpoint
+
+        var normalized: (lower: TextSelectionEndpoint, upper: TextSelectionEndpoint) {
+            anchor <= focus ? (anchor, focus) : (focus, anchor)
+        }
+
+        var isEmpty: Bool {
+            anchor == focus
+        }
+    }
+
     private let layoutEngine = CodexTrajectoryLayoutEngine()
     private let renderer = CodexTrajectoryRenderer()
     private var entries: [CodexTrajectoryTranscriptDisplayEntry] = []
@@ -1056,6 +1081,8 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView {
     private var cachedLayouts: [LayoutCacheKey: CachedLayout] = [:]
     private var expandedAccordionIDs: Set<String> = []
     private var expansionAnimations: [String: ExpansionAnimation] = [:]
+    private var textSelection: TextSelection?
+    private var isSelectingText = false
     private var animationTimer: Timer?
     private var documentWidth: CGFloat = 1
     private let horizontalInset: CGFloat = 14
@@ -1072,6 +1099,10 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView {
 
     override var wantsUpdateLayer: Bool {
         false
+    }
+
+    override var acceptsFirstResponder: Bool {
+        true
     }
 
     deinit {
@@ -1116,6 +1147,14 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView {
                     height: page.measuredSize.height
                 )
                 drawBackground(for: pageEntry.entry.block.kind, in: pageRect, context: context)
+                drawSelectionIfNeeded(
+                    pageEntry: pageEntry,
+                    pageEntryIndex: index,
+                    page: page,
+                    pageRect: pageRect,
+                    theme: theme,
+                    context: context
+                )
                 renderer.draw(
                     block: pageEntry.entry.block,
                     page: page,
@@ -1151,6 +1190,14 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView {
                 context.clip(to: clipRect)
                 context.setAlpha(min(1, progress * 1.35))
                 drawAccordionContentBackground(in: pageRect, context: context)
+                drawSelectionIfNeeded(
+                    pageEntry: pageEntry,
+                    pageEntryIndex: index,
+                    page: page,
+                    pageRect: pageRect,
+                    theme: theme,
+                    context: context
+                )
                 renderer.draw(
                     block: pageEntry.entry.block,
                     page: page,
@@ -1168,8 +1215,17 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if let endpoint = textEndpoint(at: point, allowNearest: false) {
+            window?.makeFirstResponder(self)
+            textSelection = TextSelection(anchor: endpoint, focus: endpoint)
+            isSelectingText = true
+            needsDisplay = true
+            return
+        }
+
         guard let index = heightIndex.index(containingOffset: point.y),
               pageEntries.indices.contains(index) else {
+            clearTextSelection()
             super.mouseDown(with: event)
             return
         }
@@ -1189,25 +1245,105 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView {
         toggleAccordion(id: pageEntry.entry.id)
     }
 
+    override func mouseDragged(with event: NSEvent) {
+        guard isSelectingText, let selection = textSelection else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        if let endpoint = textEndpoint(at: point, allowNearest: true),
+           endpoint != selection.focus {
+            textSelection = TextSelection(anchor: selection.anchor, focus: endpoint)
+            needsDisplay = true
+        }
+        _ = autoscroll(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if isSelectingText {
+            isSelectingText = false
+            if textSelection?.isEmpty == true {
+                textSelection = nil
+                needsDisplay = true
+            }
+            return
+        }
+        super.mouseUp(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "a" {
+            selectAll(nil)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    @objc func copy(_ sender: Any?) {
+        guard let text = selectedTranscriptText, !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    override func selectAll(_ sender: Any?) {
+        guard let first = firstTextEndpoint(), let last = lastTextEndpoint(), first != last else { return }
+        window?.makeFirstResponder(self)
+        textSelection = TextSelection(anchor: first, focus: last)
+        needsDisplay = true
+    }
+
+    func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)) {
+            return selectedTranscriptText?.isEmpty == false
+        }
+        if item.action == #selector(selectAll(_:)) {
+            return firstTextEndpoint() != nil
+        }
+        return true
+    }
+
     override func resetCursorRects() {
         super.resetCursorRects()
+        let theme = Self.theme(for: effectiveAppearance)
         let visibleRange = heightIndex.indexRange(
             intersectingOffset: visibleRect.minY,
             length: visibleRect.height,
             overscan: 80
         )
         for index in visibleRange {
-            guard pageEntries.indices.contains(index),
-                  case .accordionHeader = pageEntries[index].chrome else {
+            guard pageEntries.indices.contains(index) else {
                 continue
             }
             let y = heightIndex.prefixSum(upTo: index)
-            addCursorRect(accordionHeaderRect(at: y), cursor: .pointingHand)
+            let pageEntry = pageEntries[index]
+            switch pageEntry.chrome {
+            case .accordionHeader:
+                addCursorRect(accordionHeaderRect(at: y), cursor: .pointingHand)
+            case .plain, .accordionContent:
+                if let rect = selectablePageRect(
+                    for: pageEntry,
+                    at: index,
+                    y: y,
+                    theme: theme
+                ) {
+                    addCursorRect(rect, cursor: .iBeam)
+                }
+            case .compaction:
+                continue
+            }
         }
     }
 
     private var backgroundColor: NSColor {
         .textBackgroundColor
+    }
+
+    private func clearTextSelection() {
+        guard textSelection != nil else { return }
+        textSelection = nil
+        isSelectingText = false
+        needsDisplay = true
     }
 
     private func rebuildLayout() {
@@ -1289,6 +1425,12 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView {
 
         heightIndex.replaceAll(with: heights)
         setFrameSize(NSSize(width: documentWidth, height: max(1, heightIndex.totalHeight)))
+        if let selection = textSelection,
+           (!pageEntries.indices.contains(selection.anchor.pageEntryIndex)
+               || !pageEntries.indices.contains(selection.focus.pageEntryIndex)) {
+            textSelection = nil
+            isSelectingText = false
+        }
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
     }
@@ -1314,6 +1456,397 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView {
         )
         cachedLayouts[cacheKey] = CachedLayout(block: block, layout: layout)
         return layout
+    }
+
+    private func selectablePageRect(
+        for pageEntry: PageEntry,
+        at index: Int,
+        y: CGFloat,
+        theme: CodexTrajectoryTheme
+    ) -> CGRect? {
+        guard let page = pageEntry.page else { return nil }
+        switch pageEntry.chrome {
+        case .plain:
+            return CGRect(
+                x: horizontalInset,
+                y: y + rowSpacing / 2,
+                width: max(1, documentWidth - horizontalInset * 2),
+                height: page.measuredSize.height
+            )
+        case .accordionContent:
+            let allocatedHeight = heightIndex.height(at: index) ?? 0
+            guard allocatedHeight > 0.5 else { return nil }
+            let progress = max(0.01, expansionProgress(for: pageEntry.entry.id))
+            return CGRect(
+                x: horizontalInset + accordionContentIndent,
+                y: y + pageEntry.topSpacing * progress,
+                width: max(1, documentWidth - horizontalInset * 2 - accordionContentIndent),
+                height: page.measuredSize.height
+            )
+        case .accordionHeader, .compaction:
+            return nil
+        }
+    }
+
+    private func textEndpoint(at point: CGPoint, allowNearest: Bool) -> TextSelectionEndpoint? {
+        let theme = Self.theme(for: effectiveAppearance)
+        let lookupRange = heightIndex.indexRange(
+            intersectingOffset: visibleRect.minY,
+            length: visibleRect.height,
+            overscan: allowNearest ? 2_000 : 80
+        )
+        var nearest: (distance: CGFloat, endpoint: TextSelectionEndpoint)?
+
+        for index in lookupRange {
+            guard pageEntries.indices.contains(index) else { continue }
+            let pageEntry = pageEntries[index]
+            guard let page = pageEntry.page else { continue }
+            let y = heightIndex.prefixSum(upTo: index)
+            guard let pageRect = selectablePageRect(for: pageEntry, at: index, y: y, theme: theme) else {
+                continue
+            }
+
+            if pageRect.contains(point),
+               let endpoint = textEndpoint(
+                   in: pageEntry,
+                   pageEntryIndex: index,
+                   page: page,
+                   pageRect: pageRect,
+                   point: point,
+                   theme: theme
+               ) {
+                return endpoint
+            }
+
+            guard allowNearest else { continue }
+            let dy: CGFloat
+            if point.y < pageRect.minY {
+                dy = pageRect.minY - point.y
+            } else if point.y > pageRect.maxY {
+                dy = point.y - pageRect.maxY
+            } else {
+                dy = 0
+            }
+            let clampedPoint = CGPoint(
+                x: min(max(point.x, pageRect.minX), pageRect.maxX),
+                y: min(max(point.y, pageRect.minY), pageRect.maxY)
+            )
+            if let endpoint = textEndpoint(
+                in: pageEntry,
+                pageEntryIndex: index,
+                page: page,
+                pageRect: pageRect,
+                point: clampedPoint,
+                theme: theme
+            ),
+                nearest == nil || dy < nearest!.distance {
+                nearest = (dy, endpoint)
+            }
+        }
+
+        return nearest?.endpoint
+    }
+
+    private func textEndpoint(
+        in pageEntry: PageEntry,
+        pageEntryIndex: Int,
+        page: CodexTrajectoryLayoutPage,
+        pageRect: CGRect,
+        point: CGPoint,
+        theme: CodexTrajectoryTheme
+    ) -> TextSelectionEndpoint? {
+        let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
+        let textLength = (pageText as NSString).length
+        guard textLength > 0 else {
+            return TextSelectionEndpoint(pageEntryIndex: pageEntryIndex, utf16Offset: 0)
+        }
+
+        let frame = textFrame(
+            text: pageText,
+            kind: pageEntry.entry.block.kind,
+            pageRect: pageRect,
+            theme: theme
+        )
+        let lines = CTFrameGetLines(frame) as? [CTLine] ?? []
+        guard !lines.isEmpty else {
+            return TextSelectionEndpoint(pageEntryIndex: pageEntryIndex, utf16Offset: 0)
+        }
+        var origins = Array(repeating: CGPoint.zero, count: lines.count)
+        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
+
+        let localPoint = CGPoint(x: point.x - pageRect.minX, y: pageRect.maxY - point.y)
+        var bestLineIndex = 0
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for (lineIndex, line) in lines.enumerated() {
+            var ascent: CGFloat = 0
+            var descent: CGFloat = 0
+            var leading: CGFloat = 0
+            CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+            let origin = origins[lineIndex]
+            let minY = origin.y - descent - leading / 2
+            let maxY = origin.y + ascent + leading / 2
+            if localPoint.y >= minY, localPoint.y <= maxY {
+                bestLineIndex = lineIndex
+                break
+            }
+            let distance = localPoint.y < minY ? minY - localPoint.y : localPoint.y - maxY
+            if distance < bestDistance {
+                bestDistance = distance
+                bestLineIndex = lineIndex
+            }
+        }
+
+        let line = lines[bestLineIndex]
+        let origin = origins[bestLineIndex]
+        let range = CTLineGetStringRange(line)
+        let lower = max(0, range.location)
+        let upper = min(textLength, lower + max(0, range.length))
+        let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        let linePoint = CGPoint(
+            x: min(max(localPoint.x - origin.x, 0), max(0, width)),
+            y: localPoint.y - origin.y
+        )
+        var offset = CTLineGetStringIndexForPosition(line, linePoint)
+        if offset == kCFNotFound {
+            offset = linePoint.x <= 0 ? lower : upper
+        }
+        offset = min(max(offset, lower), upper)
+        return TextSelectionEndpoint(pageEntryIndex: pageEntryIndex, utf16Offset: offset)
+    }
+
+    private func drawSelectionIfNeeded(
+        pageEntry: PageEntry,
+        pageEntryIndex: Int,
+        page: CodexTrajectoryLayoutPage,
+        pageRect: CGRect,
+        theme: CodexTrajectoryTheme,
+        context: CGContext
+    ) {
+        guard let selection = textSelection, !selection.isEmpty else { return }
+        let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
+        guard let range = selectedUTF16Range(
+            forPageEntryIndex: pageEntryIndex,
+            pageText: pageText,
+            selection: selection
+        ) else {
+            return
+        }
+
+        let frame = textFrame(
+            text: pageText,
+            kind: pageEntry.entry.block.kind,
+            pageRect: pageRect,
+            theme: theme
+        )
+        let rects = selectionRects(
+            in: frame,
+            selectedRange: range,
+            pageRect: pageRect
+        )
+        guard !rects.isEmpty else { return }
+
+        let fill = Self.color(.selectedTextBackgroundColor, appearance: effectiveAppearance)
+            .withAlphaComponent(0.62)
+        context.saveGState()
+        context.setFillColor(fill.cgColor)
+        for rect in rects {
+            context.fill(rect)
+        }
+        context.restoreGState()
+    }
+
+    private func selectedUTF16Range(
+        forPageEntryIndex pageEntryIndex: Int,
+        pageText: String,
+        selection: TextSelection
+    ) -> Range<Int>? {
+        let normalized = selection.normalized
+        guard pageEntryIndex >= normalized.lower.pageEntryIndex,
+              pageEntryIndex <= normalized.upper.pageEntryIndex else {
+            return nil
+        }
+
+        let textLength = (pageText as NSString).length
+        let lower: Int
+        let upper: Int
+        if normalized.lower.pageEntryIndex == normalized.upper.pageEntryIndex {
+            lower = min(max(normalized.lower.utf16Offset, 0), textLength)
+            upper = min(max(normalized.upper.utf16Offset, 0), textLength)
+        } else if pageEntryIndex == normalized.lower.pageEntryIndex {
+            lower = min(max(normalized.lower.utf16Offset, 0), textLength)
+            upper = textLength
+        } else if pageEntryIndex == normalized.upper.pageEntryIndex {
+            lower = 0
+            upper = min(max(normalized.upper.utf16Offset, 0), textLength)
+        } else {
+            lower = 0
+            upper = textLength
+        }
+        guard upper > lower else { return nil }
+        return lower..<upper
+    }
+
+    private func selectionRects(
+        in frame: CTFrame,
+        selectedRange: Range<Int>,
+        pageRect: CGRect
+    ) -> [CGRect] {
+        let lines = CTFrameGetLines(frame) as? [CTLine] ?? []
+        guard !lines.isEmpty else { return [] }
+        var origins = Array(repeating: CGPoint.zero, count: lines.count)
+        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
+
+        var rects: [CGRect] = []
+        for (lineIndex, line) in lines.enumerated() {
+            let lineRange = CTLineGetStringRange(line)
+            let lineLower = max(0, lineRange.location)
+            let lineUpper = lineLower + max(0, lineRange.length)
+            let lower = max(selectedRange.lowerBound, lineLower)
+            let upper = min(selectedRange.upperBound, lineUpper)
+            guard upper > lower else { continue }
+
+            var ascent: CGFloat = 0
+            var descent: CGFloat = 0
+            var leading: CGFloat = 0
+            CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+            let origin = origins[lineIndex]
+            let startX = CTLineGetOffsetForStringIndex(line, lower, nil)
+            let endX = CTLineGetOffsetForStringIndex(line, upper, nil)
+            let width = max(2, abs(endX - startX))
+            let yUpTop = origin.y + ascent + leading / 2
+            let yUpBottom = origin.y - descent - leading / 2
+            rects.append(
+                CGRect(
+                    x: pageRect.minX + origin.x + min(startX, endX),
+                    y: pageRect.maxY - yUpTop,
+                    width: width,
+                    height: max(1, yUpTop - yUpBottom)
+                )
+            )
+        }
+        return rects
+    }
+
+    private func textFrame(
+        text: String,
+        kind: CodexTrajectoryBlockKind,
+        pageRect: CGRect,
+        theme: CodexTrajectoryTheme
+    ) -> CTFrame {
+        let style = theme.style(for: kind)
+        let attributes: [CFString: Any] = [
+            kCTFontAttributeName: style.font,
+            kCTForegroundColorAttributeName: style.foregroundColor,
+        ]
+        let attributed = CFAttributedStringCreate(kCFAllocatorDefault, text as CFString, attributes as CFDictionary)!
+        let framesetter = CTFramesetterCreateWithAttributedString(attributed)
+        let insets = theme.contentInsets
+        let localTextRect = CGRect(
+            x: insets.left,
+            y: insets.bottom,
+            width: max(0, pageRect.width - insets.left - insets.right),
+            height: max(0, pageRect.height - insets.top - insets.bottom)
+        )
+        let path = CGMutablePath()
+        path.addRect(localTextRect)
+        return CTFramesetterCreateFrame(
+            framesetter,
+            CFRange(location: 0, length: 0),
+            path,
+            nil
+        )
+    }
+
+    private var selectedTranscriptText: String? {
+        guard let selection = textSelection, !selection.isEmpty else { return nil }
+        let normalized = selection.normalized
+        guard pageEntries.indices.contains(normalized.lower.pageEntryIndex),
+              pageEntries.indices.contains(normalized.upper.pageEntryIndex) else {
+            return nil
+        }
+
+        var chunks: [String] = []
+        for index in normalized.lower.pageEntryIndex...normalized.upper.pageEntryIndex {
+            guard pageEntries.indices.contains(index),
+                  let page = pageEntries[index].page else {
+                continue
+            }
+            let pageEntry = pageEntries[index]
+            switch pageEntry.chrome {
+            case .plain, .accordionContent:
+                break
+            case .accordionHeader, .compaction:
+                continue
+            }
+            let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
+            guard let range = selectedUTF16Range(
+                forPageEntryIndex: index,
+                pageText: pageText,
+                selection: selection
+            ) else {
+                continue
+            }
+            let text = (pageText as NSString).substring(
+                with: NSRange(location: range.lowerBound, length: range.count)
+            )
+            if !text.isEmpty {
+                chunks.append(text)
+            }
+        }
+        let text = chunks.joined(separator: "\n").trimmingCharacters(in: .newlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private func firstTextEndpoint() -> TextSelectionEndpoint? {
+        for (index, pageEntry) in pageEntries.enumerated() {
+            guard let page = pageEntry.page else { continue }
+            switch pageEntry.chrome {
+            case .plain, .accordionContent:
+                let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
+                if (pageText as NSString).length > 0 {
+                    return TextSelectionEndpoint(pageEntryIndex: index, utf16Offset: 0)
+                }
+            case .accordionHeader, .compaction:
+                continue
+            }
+        }
+        return nil
+    }
+
+    private func lastTextEndpoint() -> TextSelectionEndpoint? {
+        for (index, pageEntry) in pageEntries.enumerated().reversed() {
+            guard let page = pageEntry.page else { continue }
+            switch pageEntry.chrome {
+            case .plain, .accordionContent:
+                let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
+                let length = (pageText as NSString).length
+                if length > 0 {
+                    return TextSelectionEndpoint(pageEntryIndex: index, utf16Offset: length)
+                }
+            case .accordionHeader, .compaction:
+                continue
+            }
+        }
+        return nil
+    }
+
+    private static func pageText(
+        for block: CodexTrajectoryBlock,
+        page: CodexTrajectoryLayoutPage
+    ) -> String {
+        let displayText = block.displayText.isEmpty ? " " : block.displayText
+        guard page.textRange.length > 0 else { return "" }
+        let lower = displayText.index(
+            displayText.startIndex,
+            offsetBy: page.textRange.location,
+            limitedBy: displayText.endIndex
+        ) ?? displayText.endIndex
+        let upper = displayText.index(
+            lower,
+            offsetBy: page.textRange.length,
+            limitedBy: displayText.endIndex
+        ) ?? displayText.endIndex
+        return String(displayText[lower..<upper])
     }
 
     private func toggleAccordion(id: String) {

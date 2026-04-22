@@ -365,6 +365,11 @@ final class CodexAppServerPanel: Panel, ObservableObject {
             handleCompletedItem(params?["item"] as? [String: Any])
         case "thread/compacted":
             appendCompactionEvent()
+        case "warning":
+            appendEvent(
+                title: String(localized: "codexAppServer.event.warning", defaultValue: "Warning"),
+                body: Self.stringValue(named: "message", in: params) ?? Self.prettyJSON(params)
+            )
         default:
             appendEvent(title: method, body: Self.prettyJSON(params))
         }
@@ -813,9 +818,10 @@ enum CodexSessionHistoryLoader {
     private static let chunkSize = 1024 * 1024
     private static let eventMessageNeedle = Data(#""type":"event_msg""#.utf8)
     private static let contextCompactedNeedle = Data(#""type":"context_compacted""#.utf8)
+    private static let userMessageNeedle = Data(#""type":"user_message""#.utf8)
+    private static let warningNeedle = Data(#""type":"warning""#.utf8)
     private static let responseItemNeedle = Data(#""type":"response_item""#.utf8)
     private static let messageNeedle = Data(#""type":"message""#.utf8)
-    private static let userRoleNeedle = Data(#""role":"user""#.utf8)
     private static let assistantRoleNeedle = Data(#""role":"assistant""#.utf8)
     private static let functionCallNeedle = Data(#""type":"function_call""#.utf8)
     private static let functionCallOutputNeedle = Data(#""type":"function_call_output""#.utf8)
@@ -976,10 +982,12 @@ enum CodexSessionHistoryLoader {
     private static func shouldParseLine(_ line: Data) -> Bool {
         if line.range(of: eventMessageNeedle) != nil {
             return line.range(of: contextCompactedNeedle) != nil
+                || line.range(of: userMessageNeedle) != nil
+                || line.range(of: warningNeedle) != nil
         }
         guard line.range(of: responseItemNeedle) != nil else { return false }
         if line.range(of: messageNeedle) != nil {
-            return line.range(of: userRoleNeedle) != nil || line.range(of: assistantRoleNeedle) != nil
+            return line.range(of: assistantRoleNeedle) != nil
         }
         return line.range(of: functionCallNeedle) != nil
             || line.range(of: functionCallOutputNeedle) != nil
@@ -1017,19 +1025,45 @@ enum CodexSessionHistoryLoader {
         from payload: [String: Any],
         date: Date
     ) -> CodexAppServerTranscriptItem? {
-        guard stringValue(named: "type", in: payload) == "context_compacted" else {
+        switch stringValue(named: "type", in: payload) {
+        case "context_compacted":
+            return CodexAppServerTranscriptItem(
+                role: .event,
+                title: String(
+                    localized: "codexAppServer.event.contextCompacted",
+                    defaultValue: "Context automatically compacted"
+                ),
+                body: "",
+                date: date,
+                presentation: .compaction
+            )
+        case "user_message":
+            guard let text = stringValue(named: "message", in: payload)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                !text.isEmpty else {
+                return nil
+            }
+            return CodexAppServerTranscriptItem(
+                role: .user,
+                title: String(localized: "codexAppServer.role.user", defaultValue: "You"),
+                body: CodexAppServerTranscriptPolicy.truncatedBody(text),
+                date: date
+            )
+        case "warning":
+            guard let message = stringValue(named: "message", in: payload)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                !message.isEmpty else {
+                return nil
+            }
+            return CodexAppServerTranscriptItem(
+                role: .event,
+                title: String(localized: "codexAppServer.event.warning", defaultValue: "Warning"),
+                body: CodexAppServerTranscriptPolicy.truncatedBody(message),
+                date: date
+            )
+        default:
             return nil
         }
-        return CodexAppServerTranscriptItem(
-            role: .event,
-            title: String(
-                localized: "codexAppServer.event.contextCompacted",
-                defaultValue: "Context automatically compacted"
-            ),
-            body: "",
-            date: date,
-            presentation: .compaction
-        )
     }
 
     private static func messageTranscriptItem(
@@ -1041,8 +1075,7 @@ enum CodexSessionHistoryLoader {
         let title: String
         switch role {
         case "user":
-            transcriptRole = .user
-            title = String(localized: "codexAppServer.role.user", defaultValue: "You")
+            return nil
         case "assistant":
             transcriptRole = .assistant
             title = String(localized: "codexAppServer.role.assistant", defaultValue: "Codex")
