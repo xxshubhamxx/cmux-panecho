@@ -1598,6 +1598,56 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
         )
     }
 
+    func testMinimalModeTitlebarPaddingOnlyCancelsHostingSafeArea() {
+        XCTAssertEqual(
+            ContentView.effectiveTitlebarPadding(
+                isMinimalMode: false,
+                isFullScreen: false,
+                titlebarPadding: 32,
+                hostingSafeAreaTop: 0
+            ),
+            32,
+            accuracy: 0.5,
+            "Standard mode should keep reserving titlebar space above terminal content"
+        )
+
+        XCTAssertEqual(
+            ContentView.effectiveTitlebarPadding(
+                isMinimalMode: true,
+                isFullScreen: true,
+                titlebarPadding: 32,
+                hostingSafeAreaTop: 32
+            ),
+            0,
+            accuracy: 0.5,
+            "Fullscreen minimal mode should not offset for a titlebar"
+        )
+
+        XCTAssertEqual(
+            ContentView.effectiveTitlebarPadding(
+                isMinimalMode: true,
+                isFullScreen: false,
+                titlebarPadding: 32,
+                hostingSafeAreaTop: 0
+            ),
+            0,
+            accuracy: 0.5,
+            "Manually hosted minimal windows already have zero safe area, so the Bonsplit strip must not be pulled offscreen"
+        )
+
+        XCTAssertEqual(
+            ContentView.effectiveTitlebarPadding(
+                isMinimalMode: true,
+                isFullScreen: false,
+                titlebarPadding: 32,
+                hostingSafeAreaTop: 28
+            ),
+            -28,
+            accuracy: 0.5,
+            "SwiftUI WindowGroup windows still need their native titlebar safe area cancelled"
+        )
+    }
+
     func testMinimalModeCollapsedSidebarResyncsTrafficLightInsetAfterNewWorkspaceCreation() {
         guard let appDelegate = AppDelegate.shared else {
             XCTFail("Expected AppDelegate.shared")
