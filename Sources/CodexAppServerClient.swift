@@ -169,6 +169,14 @@ struct CodexAppServerLineBuffer {
         buffer.removeAll(keepingCapacity: keepCapacity)
         scanOffset = buffer.startIndex
     }
+
+    mutating func finish() -> Data? {
+        guard !buffer.isEmpty else { return nil }
+        let data = buffer
+        buffer.removeAll(keepingCapacity: false)
+        scanOffset = buffer.startIndex
+        return data
+    }
 }
 
 final class CodexAppServerClient: @unchecked Sendable {

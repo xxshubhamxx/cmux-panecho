@@ -87,6 +87,27 @@ struct CodexAppServerResumeSnapshot: Equatable {
     var responseWasTruncated: Bool
 }
 
+struct CodexSessionHistorySnapshot: Equatable, Sendable {
+    var threadId: String
+    var fileURL: URL?
+    var transcriptItems: [CodexAppServerTranscriptItem]
+    var totalDisplayableItemCount: Int
+    var didTruncate: Bool
+}
+
+enum CodexAppServerTranscriptPolicy {
+    static let maxItemCharacters = 160_000
+
+    static func truncatedBody(_ body: String) -> String {
+        guard body.utf8.count > maxItemCharacters else { return body }
+        let prefix = String(
+            localized: "codexAppServer.transcriptItem.truncatedPrefix",
+            defaultValue: "[Earlier output omitted]"
+        )
+        return "\(prefix)\n\(String(body.suffix(maxItemCharacters)))"
+    }
+}
+
 enum CodexAppServerApprovalDecision: String {
     case accept
     case decline
@@ -99,8 +120,8 @@ final class CodexAppServerPanel: Panel, ObservableObject {
     let panelType: PanelType = .codexAppServer
 
     private static let restoredTranscriptItemLimit = 250
-    private static let maxTranscriptItems = 500
-    private static let maxTranscriptItemCharacters = 160_000
+    private static let localHistoryItemLimit = 2_000
+    private static let maxTranscriptItems = 2_500
 
     private(set) var workspaceId: UUID
 
@@ -167,7 +188,10 @@ final class CodexAppServerPanel: Panel, ObservableObject {
                     cwd: currentWorkingDirectory()
                 )
                 didResumeInitialThread = true
-                applyResumeResponse(response, fallbackThreadId: initialResumeThreadId)
+                let snapshot = applyResumeResponse(response, fallbackThreadId: initialResumeThreadId)
+                if snapshot.responseWasTruncated {
+                    await loadLocalHistory(for: snapshot.threadId)
+                }
                 status = .ready
                 appendEvent(
                     title: String(localized: "codexAppServer.event.resumed", defaultValue: "Thread resumed"),
@@ -420,7 +444,8 @@ final class CodexAppServerPanel: Panel, ObservableObject {
         )
     }
 
-    private func applyResumeResponse(_ response: [String: Any], fallbackThreadId: String) {
+    @discardableResult
+    private func applyResumeResponse(_ response: [String: Any], fallbackThreadId: String) -> CodexAppServerResumeSnapshot {
         let snapshot = Self.resumeSnapshot(
             from: response,
             fallbackThreadId: fallbackThreadId,
@@ -434,6 +459,31 @@ final class CodexAppServerPanel: Panel, ObservableObject {
         activeAssistantItemId = nil
 
         if snapshot.responseWasTruncated {
+            return snapshot
+        }
+
+        guard !snapshot.transcriptItems.isEmpty else { return snapshot }
+        if snapshot.didTruncate {
+            transcriptItems = [
+                Self.historyTruncatedItem(
+                    displayedCount: snapshot.transcriptItems.count,
+                    totalCount: snapshot.totalRestoredItemCount,
+                    date: snapshot.transcriptItems.first?.date
+                )
+            ] + snapshot.transcriptItems
+        } else {
+            transcriptItems = snapshot.transcriptItems
+        }
+        return snapshot
+    }
+
+    private func loadLocalHistory(for threadId: String) async {
+        let snapshot = await CodexSessionHistoryLoader.loadHistory(
+            threadId: threadId,
+            limit: Self.localHistoryItemLimit
+        )
+        guard !isClosed else { return }
+        guard !snapshot.transcriptItems.isEmpty else {
             appendEvent(
                 title: String(localized: "codexAppServer.event.historyOmitted", defaultValue: "History omitted"),
                 body: String(
@@ -444,12 +494,30 @@ final class CodexAppServerPanel: Panel, ObservableObject {
             return
         }
 
-        guard !snapshot.transcriptItems.isEmpty else { return }
+        activeAssistantItemId = nil
         if snapshot.didTruncate {
-            transcriptItems = [Self.historyTruncatedItem(snapshot: snapshot)] + snapshot.transcriptItems
+            transcriptItems = [
+                Self.historyTruncatedItem(
+                    displayedCount: snapshot.transcriptItems.count,
+                    totalCount: snapshot.totalDisplayableItemCount,
+                    date: snapshot.transcriptItems.first?.date
+                )
+            ] + snapshot.transcriptItems
         } else {
             transcriptItems = snapshot.transcriptItems
         }
+        let format = String(
+            localized: "codexAppServer.event.historyLoaded.body",
+            defaultValue: "Loaded the latest %1$ld items from local Codex history."
+        )
+        appendEvent(
+            title: String(localized: "codexAppServer.event.historyLoaded", defaultValue: "History loaded"),
+            body: String(
+                format: format,
+                locale: Locale.current,
+                snapshot.transcriptItems.count
+            )
+        )
     }
 
     static func resumeSnapshot(
@@ -502,22 +570,26 @@ final class CodexAppServerPanel: Panel, ObservableObject {
         )
     }
 
-    private static func historyTruncatedItem(snapshot: CodexAppServerResumeSnapshot) -> CodexAppServerTranscriptItem {
+    private static func historyTruncatedItem(
+        displayedCount: Int,
+        totalCount: Int,
+        date: Date?
+    ) -> CodexAppServerTranscriptItem {
         let format = String(
             localized: "codexAppServer.event.historyTruncated.body",
-            defaultValue: "Showing the latest %1$ld of %2$ld restored items."
+            defaultValue: "Showing the latest %1$ld of %2$ld history items."
         )
         let body = String(
             format: format,
             locale: Locale.current,
-            snapshot.transcriptItems.count,
-            snapshot.totalRestoredItemCount
+            displayedCount,
+            totalCount
         )
         return CodexAppServerTranscriptItem(
             role: .event,
             title: String(localized: "codexAppServer.event.historyTruncated", defaultValue: "Earlier history omitted"),
             body: body,
-            date: snapshot.transcriptItems.first?.date ?? Date()
+            date: date ?? Date()
         )
     }
 
@@ -532,7 +604,7 @@ final class CodexAppServerPanel: Panel, ObservableObject {
             return CodexAppServerTranscriptItem(
                 role: .user,
                 title: String(localized: "codexAppServer.role.user", defaultValue: "You"),
-                body: text,
+                body: Self.truncatedTranscriptBody(text),
                 date: date
             )
         case "agentMessage":
@@ -540,7 +612,7 @@ final class CodexAppServerPanel: Panel, ObservableObject {
             return CodexAppServerTranscriptItem(
                 role: .assistant,
                 title: String(localized: "codexAppServer.role.assistant", defaultValue: "Codex"),
-                body: text,
+                body: Self.truncatedTranscriptBody(text),
                 date: date
             )
         case "plan":
@@ -548,21 +620,21 @@ final class CodexAppServerPanel: Panel, ObservableObject {
             return CodexAppServerTranscriptItem(
                 role: .event,
                 title: String(localized: "codexAppServer.event.plan", defaultValue: "Plan"),
-                body: text,
+                body: Self.truncatedTranscriptBody(text),
                 date: date
             )
         case "commandExecution":
             return CodexAppServerTranscriptItem(
                 role: .event,
                 title: String(localized: "codexAppServer.event.command", defaultValue: "Command"),
-                body: Self.commandSummary(from: item),
+                body: Self.truncatedTranscriptBody(Self.commandSummary(from: item)),
                 date: date
             )
         case "fileChange":
             return CodexAppServerTranscriptItem(
                 role: .event,
                 title: String(localized: "codexAppServer.event.fileChange", defaultValue: "File change"),
-                body: Self.prettyJSON(item),
+                body: Self.truncatedTranscriptBody(Self.prettyJSON(item)),
                 date: date
             )
         default:
@@ -573,7 +645,7 @@ final class CodexAppServerPanel: Panel, ObservableObject {
                 title: type.isEmpty
                     ? String(localized: "codexAppServer.event.item", defaultValue: "Item")
                     : type,
-                body: body,
+                body: Self.truncatedTranscriptBody(body),
                 date: date
             )
         }
@@ -608,12 +680,7 @@ final class CodexAppServerPanel: Panel, ObservableObject {
     }
 
     private static func truncatedTranscriptBody(_ body: String) -> String {
-        guard body.count > maxTranscriptItemCharacters else { return body }
-        let prefix = String(
-            localized: "codexAppServer.transcriptItem.truncatedPrefix",
-            defaultValue: "[Earlier output omitted]"
-        )
-        return "\(prefix)\n\(String(body.suffix(maxTranscriptItemCharacters)))"
+        CodexAppServerTranscriptPolicy.truncatedBody(body)
     }
 
     private func removePendingRequest(id: Int) {
@@ -672,6 +739,349 @@ final class CodexAppServerPanel: Panel, ObservableObject {
             return command.joined(separator: " ")
         }
         return Self.prettyJSON(item)
+    }
+
+    private static func prettyJSON(_ value: Any?) -> String {
+        guard let value else { return "{}" }
+        let object: Any
+        if JSONSerialization.isValidJSONObject(value) {
+            object = value
+        } else {
+            object = ["value": String(describing: value)]
+        }
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: object,
+            options: [.prettyPrinted, .sortedKeys]
+        ),
+              let text = String(data: data, encoding: .utf8) else {
+            return String(describing: value)
+        }
+        return text
+    }
+}
+
+enum CodexSessionHistoryLoader {
+    private static let chunkSize = 1024 * 1024
+    private static let responseItemNeedle = Data(#""type":"response_item""#.utf8)
+    private static let messageNeedle = Data(#""type":"message""#.utf8)
+    private static let userRoleNeedle = Data(#""role":"user""#.utf8)
+    private static let assistantRoleNeedle = Data(#""role":"assistant""#.utf8)
+    private static let functionCallNeedle = Data(#""type":"function_call""#.utf8)
+    private static let functionCallOutputNeedle = Data(#""type":"function_call_output""#.utf8)
+
+    static func loadHistory(threadId: String, limit: Int) async -> CodexSessionHistorySnapshot {
+        await Task.detached(priority: .utility) {
+            loadHistorySync(threadId: threadId, limit: limit)
+        }.value
+    }
+
+    static func loadHistorySync(
+        threadId: String,
+        limit: Int,
+        searchRoots: [URL]? = nil
+    ) -> CodexSessionHistorySnapshot {
+        let sanitizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sanitizedThreadId.isEmpty else {
+            return emptySnapshot(threadId: threadId, fileURL: nil)
+        }
+
+        let roots = searchRoots ?? defaultSearchRoots()
+        guard let fileURL = historyFile(threadId: sanitizedThreadId, searchRoots: roots) else {
+            return emptySnapshot(threadId: sanitizedThreadId, fileURL: nil)
+        }
+
+        return parseHistoryFile(fileURL, threadId: sanitizedThreadId, limit: limit)
+    }
+
+    private static func defaultSearchRoots() -> [URL] {
+        let codexHome = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex", isDirectory: true)
+        return [
+            codexHome.appendingPathComponent("sessions", isDirectory: true),
+            codexHome.appendingPathComponent("archived_sessions", isDirectory: true),
+        ]
+    }
+
+    private static func emptySnapshot(threadId: String, fileURL: URL?) -> CodexSessionHistorySnapshot {
+        CodexSessionHistorySnapshot(
+            threadId: threadId,
+            fileURL: fileURL,
+            transcriptItems: [],
+            totalDisplayableItemCount: 0,
+            didTruncate: false
+        )
+    }
+
+    private static func historyFile(threadId: String, searchRoots: [URL]) -> URL? {
+        var jsonlFiles: [URL] = []
+        for root in searchRoots {
+            guard FileManager.default.fileExists(atPath: root.path) else { continue }
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+            for case let fileURL as URL in enumerator {
+                guard fileURL.pathExtension == "jsonl" else { continue }
+                guard isRegularFile(fileURL) else { continue }
+                jsonlFiles.append(fileURL)
+            }
+        }
+
+        let filenameMatches = jsonlFiles.filter { $0.lastPathComponent.contains(threadId) }
+        if let match = sortedMostRecentlyModified(filenameMatches).first {
+            return match
+        }
+
+        let metadataMatches = jsonlFiles.filter { sessionMetadataMatches(fileURL: $0, threadId: threadId) }
+        return sortedMostRecentlyModified(metadataMatches).first
+    }
+
+    private static func sortedMostRecentlyModified(_ files: [URL]) -> [URL] {
+        files.sorted { lhs, rhs in
+            modificationDate(lhs) > modificationDate(rhs)
+        }
+    }
+
+    private static func modificationDate(_ fileURL: URL) -> Date {
+        (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+    }
+
+    private static func isRegularFile(_ fileURL: URL) -> Bool {
+        (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+    }
+
+    private static func sessionMetadataMatches(fileURL: URL, threadId: String) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 64 * 1024), !data.isEmpty else {
+            return false
+        }
+        let idNeedle = Data(("\"id\":\"\(threadId)\"").utf8)
+        return data.range(of: idNeedle) != nil
+    }
+
+    private static func parseHistoryFile(
+        _ fileURL: URL,
+        threadId: String,
+        limit: Int
+    ) -> CodexSessionHistorySnapshot {
+        let resolvedLimit = max(1, limit)
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            return emptySnapshot(threadId: threadId, fileURL: fileURL)
+        }
+        defer { try? handle.close() }
+
+        var lineBuffer = CodexAppServerLineBuffer()
+        var transcriptItems: [CodexAppServerTranscriptItem] = []
+        var totalDisplayableItemCount = 0
+
+        func consume(_ line: Data) {
+            guard shouldParseLine(line),
+                  let item = transcriptItem(from: line) else {
+                return
+            }
+            totalDisplayableItemCount += 1
+            transcriptItems.append(item)
+            if transcriptItems.count > resolvedLimit * 2 {
+                transcriptItems.removeFirst(transcriptItems.count - resolvedLimit)
+            }
+        }
+
+        while true {
+            let chunk: Data?
+            do {
+                chunk = try handle.read(upToCount: chunkSize)
+            } catch {
+                break
+            }
+            guard let chunk, !chunk.isEmpty else {
+                break
+            }
+            for line in lineBuffer.append(chunk) {
+                consume(line)
+            }
+        }
+        if let finalLine = lineBuffer.finish() {
+            consume(finalLine)
+        }
+
+        if transcriptItems.count > resolvedLimit {
+            transcriptItems = Array(transcriptItems.suffix(resolvedLimit))
+        }
+
+        return CodexSessionHistorySnapshot(
+            threadId: threadId,
+            fileURL: fileURL,
+            transcriptItems: transcriptItems,
+            totalDisplayableItemCount: totalDisplayableItemCount,
+            didTruncate: totalDisplayableItemCount > transcriptItems.count
+        )
+    }
+
+    private static func shouldParseLine(_ line: Data) -> Bool {
+        guard line.range(of: responseItemNeedle) != nil else { return false }
+        if line.range(of: messageNeedle) != nil {
+            return line.range(of: userRoleNeedle) != nil || line.range(of: assistantRoleNeedle) != nil
+        }
+        return line.range(of: functionCallNeedle) != nil
+            || line.range(of: functionCallOutputNeedle) != nil
+    }
+
+    private static func transcriptItem(from line: Data) -> CodexAppServerTranscriptItem? {
+        guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              object["type"] as? String == "response_item",
+              let payload = object["payload"] as? [String: Any] else {
+            return nil
+        }
+
+        let date = dateValue(named: "timestamp", in: object) ?? Date()
+        switch stringValue(named: "type", in: payload) {
+        case "message":
+            return messageTranscriptItem(from: payload, date: date)
+        case "function_call":
+            return functionCallTranscriptItem(from: payload, date: date)
+        case "function_call_output":
+            return functionCallOutputTranscriptItem(from: payload, date: date)
+        default:
+            return nil
+        }
+    }
+
+    private static func messageTranscriptItem(
+        from payload: [String: Any],
+        date: Date
+    ) -> CodexAppServerTranscriptItem? {
+        let role = stringValue(named: "role", in: payload)
+        let transcriptRole: CodexAppServerTranscriptRole
+        let title: String
+        switch role {
+        case "user":
+            transcriptRole = .user
+            title = String(localized: "codexAppServer.role.user", defaultValue: "You")
+        case "assistant":
+            transcriptRole = .assistant
+            title = String(localized: "codexAppServer.role.assistant", defaultValue: "Codex")
+        default:
+            return nil
+        }
+
+        guard let text = messageText(from: payload["content"]), !text.isEmpty else {
+            return nil
+        }
+        return CodexAppServerTranscriptItem(
+            role: transcriptRole,
+            title: title,
+            body: CodexAppServerTranscriptPolicy.truncatedBody(text),
+            date: date
+        )
+    }
+
+    private static func functionCallTranscriptItem(
+        from payload: [String: Any],
+        date: Date
+    ) -> CodexAppServerTranscriptItem? {
+        let name = stringValue(named: "name", in: payload)
+        let body = functionCallBody(from: payload).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return nil }
+        let title = (name?.isEmpty == false ? name : nil)
+            ?? String(localized: "codexAppServer.event.toolCall", defaultValue: "Tool call")
+        return CodexAppServerTranscriptItem(
+            role: .event,
+            title: title,
+            body: CodexAppServerTranscriptPolicy.truncatedBody(body),
+            date: date
+        )
+    }
+
+    private static func functionCallOutputTranscriptItem(
+        from payload: [String: Any],
+        date: Date
+    ) -> CodexAppServerTranscriptItem? {
+        guard let output = stringValue(named: "output", in: payload)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !output.isEmpty else {
+            return nil
+        }
+        return CodexAppServerTranscriptItem(
+            role: .event,
+            title: String(localized: "codexAppServer.event.toolOutput", defaultValue: "Tool output"),
+            body: CodexAppServerTranscriptPolicy.truncatedBody(output),
+            date: date
+        )
+    }
+
+    private static func messageText(from content: Any?) -> String? {
+        if let text = content as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        guard let parts = content as? [[String: Any]] else { return nil }
+        let text = parts.compactMap { part -> String? in
+            if let text = stringValue(named: "text", in: part) {
+                return text
+            }
+            if let text = stringValue(named: "content", in: part) {
+                return text
+            }
+            if let url = stringValue(named: "url", in: part) {
+                return url
+            }
+            return nil
+        }
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private static func functionCallBody(from payload: [String: Any]) -> String {
+        guard let arguments = stringValue(named: "arguments", in: payload) else {
+            return prettyJSON(payload)
+        }
+        guard let data = arguments.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return arguments
+        }
+
+        if let command = stringValue(named: "cmd", in: object) {
+            return command
+        }
+        if let command = stringValue(named: "command", in: object) {
+            return command
+        }
+        if let command = object["command"] as? [String] {
+            return command.joined(separator: " ")
+        }
+        return prettyJSON(object)
+    }
+
+    private static func stringValue(named key: String, in object: [String: Any]?) -> String? {
+        guard let value = object?[key] else { return nil }
+        if let value = value as? String {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.stringValue
+        }
+        return nil
+    }
+
+    private static func dateValue(named key: String, in object: [String: Any]?) -> Date? {
+        guard let value = object?[key] else { return nil }
+        if let value = value as? String {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: value) {
+                return date
+            }
+            return ISO8601DateFormatter().date(from: value)
+        }
+        if let value = value as? NSNumber {
+            return Date(timeIntervalSince1970: value.doubleValue)
+        }
+        return nil
     }
 
     private static func prettyJSON(_ value: Any?) -> String {

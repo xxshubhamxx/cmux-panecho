@@ -257,6 +257,40 @@
         }
       }
     },
+    "codexAppServer.event.historyLoaded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History loaded"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "履歴を読み込みました"
+          }
+        }
+      }
+    },
+    "codexAppServer.event.historyLoaded.body": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loaded the latest %1$ld items from local Codex history."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローカルの Codex 履歴から最新 %1$ld 件を読み込みました。"
+          }
+        }
+      }
+    },
     "codexAppServer.event.historyTruncated": {
       "extractionState": "manual",
       "localizations": {
@@ -280,13 +314,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Showing the latest %1$ld of %2$ld restored items."
+            "value": "Showing the latest %1$ld of %2$ld history items."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "復元した項目 %2$ld 件のうち最新 %1$ld 件を表示しています。"
+            "value": "履歴 %2$ld 件のうち最新 %1$ld 件を表示しています。"
           }
         }
       }
@@ -423,6 +457,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "App Server が終了しました"
+          }
+        }
+      }
+    },
+    "codexAppServer.event.toolCall": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tool call"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ツール呼び出し"
+          }
+        }
+      }
+    },
+    "codexAppServer.event.toolOutput": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tool output"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ツール出力"
           }
         }
       }

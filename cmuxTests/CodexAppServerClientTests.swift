@@ -174,6 +174,74 @@ final class CodexAppServerRequestFactoryTests: XCTestCase {
         XCTAssertEqual(buffer.bufferedByteCount, 0)
     }
 
+    func testLineBufferReturnsFinalLineWithoutTrailingNewline() throws {
+        var buffer = CodexAppServerLineBuffer()
+
+        XCTAssertTrue(buffer.append(Data("partial".utf8)).isEmpty)
+
+        let finalLine = try XCTUnwrap(buffer.finish())
+        XCTAssertEqual(String(data: finalLine, encoding: .utf8), "partial")
+        XCTAssertNil(buffer.finish())
+    }
+
+    func testLocalCodexHistoryLoaderRestoresTailFromJsonl() throws {
+        let fileManager = FileManager.default
+        let threadId = "019d6637-e5cc-7cc0-a321-2c43b799036b"
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("cmux-codex-history-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let sessionDirectory = tempDirectory
+            .appendingPathComponent("2026/04/06", isDirectory: true)
+        try fileManager.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        let fileURL = sessionDirectory
+            .appendingPathComponent("rollout-2026-04-06T21-33-52-\(threadId).jsonl")
+
+        let records: [[String: Any]] = [
+            [
+                "timestamp": "2026-04-06T21:33:52.000Z",
+                "type": "session_meta",
+                "payload": ["id": threadId],
+            ],
+            Self.responseItem(role: "developer", text: "skip developer instructions"),
+            Self.responseItem(role: "user", text: "user 1"),
+            Self.responseItem(role: "assistant", text: "agent 1"),
+            [
+                "timestamp": "2026-04-06T21:34:03.000Z",
+                "type": "response_item",
+                "payload": [
+                    "type": "function_call",
+                    "name": "exec_command",
+                    "arguments": "{\"cmd\":\"ls -la\"}",
+                ],
+            ],
+            [
+                "timestamp": "2026-04-06T21:34:04.000Z",
+                "type": "response_item",
+                "payload": [
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "output text",
+                ],
+            ],
+            Self.responseItem(role: "assistant", text: "agent 2"),
+        ]
+        let jsonl = try records.map(Self.jsonLine).joined(separator: "\n")
+        try jsonl.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let snapshot = CodexSessionHistoryLoader.loadHistorySync(
+            threadId: threadId,
+            limit: 3,
+            searchRoots: [tempDirectory]
+        )
+
+        XCTAssertEqual(snapshot.fileURL?.resolvingSymlinksInPath(), fileURL.resolvingSymlinksInPath())
+        XCTAssertEqual(snapshot.totalDisplayableItemCount, 5)
+        XCTAssertTrue(snapshot.didTruncate)
+        XCTAssertEqual(snapshot.transcriptItems.map(\.role), [.event, .event, .assistant])
+        XCTAssertEqual(snapshot.transcriptItems.map(\.body), ["ls -la", "output text", "agent 2"])
+    }
+
     @MainActor
     func testResumeSnapshotCapsRestoredTranscriptToTailItems() throws {
         let turns: [[String: Any]] = (0..<3).map { index in
@@ -298,5 +366,27 @@ final class CodexAppServerRequestFactoryTests: XCTestCase {
         XCTAssertEqual(request.id, 88)
         XCTAssertEqual(request.method, .itemPermissionsRequestApproval)
         XCTAssertEqual(request.paramsObject?["reason"] as? String, "test")
+    }
+
+    private static func responseItem(role: String, text: String) -> [String: Any] {
+        [
+            "timestamp": "2026-04-06T21:34:00.000Z",
+            "type": "response_item",
+            "payload": [
+                "type": "message",
+                "role": role,
+                "content": [
+                    [
+                        "type": role == "assistant" ? "output_text" : "input_text",
+                        "text": text,
+                    ],
+                ],
+            ],
+        ]
+    }
+
+    private static func jsonLine(_ object: [String: Any]) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return try XCTUnwrap(String(data: data, encoding: .utf8))
     }
 }
