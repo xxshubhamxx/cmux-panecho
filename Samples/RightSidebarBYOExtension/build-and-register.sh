@@ -150,7 +150,7 @@ xcrun xcstringstool installloc "$ROOT/Resources" --output-directory "$APP_PATH/C
 xcrun xcstringstool installloc "$ROOT/Resources" --output-directory "$EXT_PATH/Contents/Resources" --languages "en ja"
 
 codesign --force --sign - --timestamp=none --entitlements "$BUILD_ROOT/Extension.entitlements" "$EXT_PATH"
-codesign --force --deep --sign - --timestamp=none "$APP_PATH"
+codesign --force --sign - --timestamp=none "$APP_PATH"
 
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH"
 pluginkit -a "$EXT_PATH"
