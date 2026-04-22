@@ -123,6 +123,52 @@ final class SidebarSelectedWorkspaceColorTests: XCTestCase {
         XCTAssertEqual(background.opacity, 1.0, accuracy: 0.001)
         withExtendedLifetime(cancellable) {}
     }
+
+    @MainActor
+    func testLeftRailLeavesInactiveCustomColoredWorkspaceRowTransparent() {
+        let manager = TabManager()
+        guard let workspace = manager.tabs.first else {
+            XCTFail("Expected TabManager to initialise with a workspace")
+            return
+        }
+
+        manager.setTabColor(tabId: workspace.id, color: "#C0392B")
+
+        let background = sidebarWorkspaceRowBackgroundStyle(
+            activeTabIndicatorStyle: .leftRail,
+            isActive: false,
+            isMultiSelected: false,
+            customColorHex: workspace.customColor,
+            colorScheme: .light,
+            sidebarSelectionColorHex: nil
+        )
+
+        XCTAssertNil(background.color)
+        XCTAssertEqual(background.opacity, 0, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testSolidFillUsesInactiveCustomWorkspaceColorAsBackground() {
+        let manager = TabManager()
+        guard let workspace = manager.tabs.first else {
+            XCTFail("Expected TabManager to initialise with a workspace")
+            return
+        }
+
+        manager.setTabColor(tabId: workspace.id, color: "#C0392B")
+
+        let background = sidebarWorkspaceRowBackgroundStyle(
+            activeTabIndicatorStyle: .solidFill,
+            isActive: false,
+            isMultiSelected: false,
+            customColorHex: workspace.customColor,
+            colorScheme: .light,
+            sidebarSelectionColorHex: nil
+        )
+
+        XCTAssertEqual(background.color?.hexString(), "#C0392B")
+        XCTAssertEqual(background.opacity, 0.7, accuracy: 0.001)
+    }
 }
 
 
