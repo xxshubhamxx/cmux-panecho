@@ -799,8 +799,9 @@ final class CmuxWebView: WKWebView {
         text: String
     ) -> String? {
         guard restoredWebContentTextInputRepairArmed else { return nil }
-        if window?.firstResponder === self {
-            return bridgeRestoredTextInputRepairToActiveElement(text: text)
+        if window?.firstResponder === self,
+           let bridgeRoute = bridgeRestoredTextInputRepairToActiveElement(text: text) {
+            return bridgeRoute
         }
         guard let before = restoredTextInputSnapshot() else {
             disarmRestoredWebContentTextInputRepair(reason: "snapshotMissing")
@@ -839,10 +840,10 @@ final class CmuxWebView: WKWebView {
         return inserted ? "focusRepairInserted" : "focusRepairInsertFailed"
     }
 
-    private func bridgeRestoredTextInputRepairToActiveElement(text: String) -> String {
+    private func bridgeRestoredTextInputRepairToActiveElement(text: String) -> String? {
         guard let script = Self.restoredTextInputInsertScript(text: text) else {
             disarmRestoredWebContentTextInputRepair(reason: "bridgeScriptBuildFailed")
-            return "focusRepairBridgeScriptBuildFailed"
+            return nil
         }
 
         let insert = evaluateJavaScriptSynchronously(script)
@@ -859,10 +860,10 @@ final class CmuxWebView: WKWebView {
             "inserted=\(inserted ? 1 : 0) reason=\(reason) error=\(errorDescription)"
         )
 #endif
-        if !inserted {
+        if !inserted, insert.completed, insert.error == nil {
             disarmRestoredWebContentTextInputRepair(reason: "bridgeInsertFailed")
         }
-        return inserted ? "focusRepairBridgeInserted" : "focusRepairBridgeInsertFailed"
+        return inserted ? "focusRepairBridgeInserted" : nil
     }
 
     private func bridgeRestoredTextInputRepairIfWrapperIsFirstResponder(text: String) -> String? {

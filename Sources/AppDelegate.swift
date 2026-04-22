@@ -10367,6 +10367,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 preludeMs = (ProcessInfo.processInfo.systemUptime - preludeStart) * 1000.0
                 let shortcutTimingStart = CmuxTypingTiming.start()
 #endif
+                if self.handleBrowserSearchOverlayCommandEvent(
+                    event,
+                    preferredWindow: event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+                ) {
+#if DEBUG
+                    dlog("  -> consumed by browser find overlay command routing")
+#endif
+                    return nil
+                }
                 let shortcutStart = ProcessInfo.processInfo.systemUptime
                 let handledByShortcut = self.handleCustomShortcut(event: event)
 #if DEBUG
