@@ -701,8 +701,7 @@ extension Workspace {
             let shouldReplayScrollback = Self.shouldReplaySessionScrollback(
                 restorableAgent: restorableAgent
             )
-            let restoredAgentResumeCommand = restorableAgent?.resumeCommand
-            let restoredAgentResumeInput = restoredAgentResumeCommand.map { $0 + "\n" }
+            let restoredAgentResumeInput = restorableAgent?.resumeStartupInput()
 #if DEBUG
             if let restorableAgent {
                 let sessionPreview = String(restorableAgent.sessionId.prefix(8))
@@ -711,7 +710,7 @@ extension Workspace {
                     "session.restore.agent panel=\(snapshot.id.uuidString.prefix(5)) " +
                     "kind=\(restorableAgent.kind.rawValue) session=\(sessionPreview) " +
                     "hasLaunch=\(restorableAgent.launchCommand == nil ? 0 : 1) " +
-                    "launchArgc=\(launchArgc) hasResume=\(restoredAgentResumeCommand == nil ? 0 : 1) " +
+                    "launchArgc=\(launchArgc) hasResume=\(restoredAgentResumeInput == nil ? 0 : 1) " +
                     "replayScrollback=\(shouldReplayScrollback ? 1 : 0)"
                 )
             }

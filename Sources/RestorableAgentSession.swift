@@ -50,6 +50,10 @@ struct AgentLaunchCommandSnapshot: Codable, Equatable, Sendable {
     var source: String?
 }
 
+fileprivate func shellSingleQuoted(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
 private enum AgentResumeCommandBuilder {
     private static let claudeValueOptions: Set<String> = [
         "--add-dir",
@@ -647,13 +651,11 @@ private enum AgentResumeCommandBuilder {
         }
         return trimmed
     }
-
-    private static func shellSingleQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
 }
 
 struct SessionRestorableAgentSnapshot: Codable, Sendable {
+    static let maxInlineStartupInputBytes = 900
+
     var kind: RestorableAgentKind
     var sessionId: String
     var workingDirectory: String?
@@ -665,6 +667,88 @@ struct SessionRestorableAgentSnapshot: Codable, Sendable {
             launchCommand: launchCommand,
             workingDirectory: workingDirectory
         )
+    }
+
+    func resumeStartupInput(
+        fileManager: FileManager = .default,
+        temporaryDirectory: URL = FileManager.default.temporaryDirectory
+    ) -> String? {
+        guard let command = resumeCommand else { return nil }
+
+        let inlineInput = command + "\n"
+        guard inlineInput.utf8.count > Self.maxInlineStartupInputBytes else {
+            return inlineInput
+        }
+        guard let scriptURL = AgentResumeScriptStore.writeLauncherScript(
+            command: command,
+            kind: kind,
+            sessionId: sessionId,
+            fileManager: fileManager,
+            temporaryDirectory: temporaryDirectory
+        ) else {
+            return nil
+        }
+
+        let scriptInput = "/bin/zsh \(shellSingleQuoted(scriptURL.path))\n"
+        return scriptInput.utf8.count <= Self.maxInlineStartupInputBytes ? scriptInput : nil
+    }
+}
+
+private enum AgentResumeScriptStore {
+    private static let directoryName = "cmux-agent-resume"
+    private static let scriptTTL: TimeInterval = 24 * 60 * 60
+
+    static func writeLauncherScript(
+        command: String,
+        kind: RestorableAgentKind,
+        sessionId: String,
+        fileManager: FileManager,
+        temporaryDirectory: URL
+    ) -> URL? {
+        let directoryURL = temporaryDirectory.appendingPathComponent(directoryName, isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
+            pruneOldScripts(in: directoryURL, fileManager: fileManager)
+
+            let safeSessionPrefix = sessionId
+                .prefix(12)
+                .map { character -> Character in
+                    character.isLetter || character.isNumber || character == "-" ? character : "_"
+                }
+            let scriptURL = directoryURL.appendingPathComponent(
+                "\(kind.rawValue)-\(String(safeSessionPrefix))-\(UUID().uuidString).zsh",
+                isDirectory: false
+            )
+            let contents = """
+            #!/bin/zsh
+            rm -f -- "$0" 2>/dev/null || true
+            \(command)
+            """
+            try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: scriptURL.path)
+            return scriptURL
+        } catch {
+            return nil
+        }
+    }
+
+    private static func pruneOldScripts(in directoryURL: URL, fileManager: FileManager) {
+        guard let scriptURLs = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let cutoff = Date().addingTimeInterval(-scriptTTL)
+        for scriptURL in scriptURLs where scriptURL.pathExtension == "zsh" {
+            let values = try? scriptURL.resourceValues(forKeys: [.contentModificationDateKey])
+            if let modified = values?.contentModificationDate, modified < cutoff {
+                try? fileManager.removeItem(at: scriptURL)
+            }
+        }
     }
 }
 
