@@ -4723,9 +4723,15 @@ struct CMUXCLI {
 
         var payload = configuredPayload
 
-        payload["ssh_command"] = initialSSHCommand
+        let redactsDestination = sshOptions.destination != sshOptions.displayDestination
+        if redactsDestination {
+            payload["ssh_command"] = "<redacted>"
+            payload["ssh_terminal_command"] = "<redacted>"
+        } else {
+            payload["ssh_command"] = initialSSHCommand
+            payload["ssh_terminal_command"] = remoteTerminalSSHCommand
+        }
         payload["ssh_startup_command"] = initialSSHStartupCommand
-        payload["ssh_terminal_command"] = remoteTerminalSSHCommand
         payload["ssh_terminal_startup_command"] = remoteTerminalSSHStartupCommand
         payload["ssh_env_overrides"] = [
             "GHOSTTY_SHELL_FEATURES": shellFeaturesValue,
@@ -5410,6 +5416,7 @@ struct CMUXCLI {
             scriptLines.append(shellFeaturesBootstrap)
         }
         scriptLines += [
+            "rm -f -- \"$0\" 2>/dev/null || true",
             "CMUX_SSH_SESSION_ENDED=0",
             "cmux_ssh_session_end() { if [ \"${CMUX_SSH_SESSION_ENDED:-0}\" = 1 ]; then return; fi; CMUX_SSH_SESSION_ENDED=1; \(lifecycleCleanup); }",
             "trap 'cmux_ssh_session_end' EXIT HUP INT TERM",
