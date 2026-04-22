@@ -91166,13 +91166,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Build a cmux right sidebar ExtensionKit demo extension in Swift.\n\nRequirements:\n- Use ExtensionFoundation and ExtensionKit.\n- Bind to app extension point com.cmuxterm.app.debug.extkit.right-sidebar-panel.\n- Provide a PrimitiveAppExtensionScene with scene id cmux-right-sidebar-demo.\n- Render a compact SwiftUI panel that fits a narrow right sidebar.\n- Accept the scene XPC connection.\n- Add the Info.plist and Xcode project settings needed for an ExtensionKit .appex, including EXAppExtensionAttributes.EXExtensionPointIdentifier = com.cmuxterm.app.debug.extkit.right-sidebar-panel.\n- Keep all UI strings localized."
+            "value": "Build a cmux right sidebar ExtensionKit demo extension in Swift.\n\nRequirements:\n- Use ExtensionFoundation and ExtensionKit.\n- Bind to app extension point com.cmuxterm.app.debug.extkit.right-sidebar-panel.\n- Provide a PrimitiveAppExtensionScene with scene id cmux-right-sidebar-demo.\n- Render a compact SwiftUI panel that fits a narrow right sidebar.\n- Return AppExtensionSceneConfiguration(body) from the AppExtension configuration and do not install a custom NSXPCConnection acceptor for the scene.\n- Add the Info.plist and Xcode project settings needed for an ExtensionKit .appex, including EXAppExtensionAttributes.EXExtensionPointIdentifier = com.cmuxterm.app.debug.extkit.right-sidebar-panel.\n- Keep all UI strings localized."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Swiftでcmux右サイドバー用のExtensionKitデモ拡張機能を作成してください。\n\n要件:\n- ExtensionFoundationとExtensionKitを使用する。\n- アプリ拡張ポイントcom.cmuxterm.app.debug.extkit.right-sidebar-panelにバインドする。\n- シーンID cmux-right-sidebar-demoのPrimitiveAppExtensionSceneを用意する。\n- 狭い右サイドバーに収まるコンパクトなSwiftUIパネルを描画する。\n- シーンのXPC接続を受け入れる。\n- EXAppExtensionAttributes.EXExtensionPointIdentifier = com.cmuxterm.app.debug.extkit.right-sidebar-panelを含め、ExtensionKit .appexに必要なInfo.plistとXcodeプロジェクト設定を追加する。\n- すべてのUI文字列をローカライズする。"
+            "value": "Swiftでcmux右サイドバー用のExtensionKitデモ拡張機能を作成してください。\n\n要件:\n- ExtensionFoundationとExtensionKitを使用する。\n- アプリ拡張ポイントcom.cmuxterm.app.debug.extkit.right-sidebar-panelにバインドする。\n- シーンID cmux-right-sidebar-demoのPrimitiveAppExtensionSceneを用意する。\n- 狭い右サイドバーに収まるコンパクトなSwiftUIパネルを描画する。\n- AppExtensionのconfigurationからAppExtensionSceneConfiguration(body)を返し、シーン用のカスタムNSXPCConnectionアクセプターを追加しない。\n- EXAppExtensionAttributes.EXExtensionPointIdentifier = com.cmuxterm.app.debug.extkit.right-sidebar-panelを含め、ExtensionKit .appexに必要なInfo.plistとXcodeプロジェクト設定を追加する。\n- すべてのUI文字列をローカライズする。"
           }
         }
       }

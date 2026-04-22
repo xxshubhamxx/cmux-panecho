@@ -8,14 +8,6 @@ private enum SampleExtensionConstants {
     static let sceneID = "cmux-right-sidebar-demo"
 }
 
-struct CmuxRightSidebarConfiguration<E: CmuxRightSidebarExtension>: AppExtensionConfiguration {
-    let appExtension: E
-
-    func accept(connection: NSXPCConnection) -> Bool {
-        true
-    }
-}
-
 protocol CmuxRightSidebarExtension: AppExtension {
     associatedtype Body: CmuxRightSidebarScene
     var body: Body { get }
@@ -42,7 +34,7 @@ struct CmuxRightSidebarPanelScene<Content: View>: CmuxRightSidebarScene {
 
 extension CmuxRightSidebarExtension {
     var configuration: AppExtensionSceneConfiguration {
-        AppExtensionSceneConfiguration(self.body, configuration: CmuxRightSidebarConfiguration(appExtension: self))
+        AppExtensionSceneConfiguration(self.body)
     }
 }
 

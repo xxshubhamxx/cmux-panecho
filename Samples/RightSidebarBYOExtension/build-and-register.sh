@@ -126,11 +126,6 @@ cat > "$EXT_PATH/Contents/Info.plist" <<PLIST
   </dict>
   <key>LSMinimumSystemVersion</key>
   <string>26.0</string>
-  <key>NSExtension</key>
-  <dict>
-    <key>NSExtensionPointIdentifier</key>
-    <string>${EXTENSION_POINT_ID}</string>
-  </dict>
 </dict>
 </plist>
 PLIST
@@ -156,6 +151,7 @@ codesign --force --sign - --timestamp=none "$APP_PATH"
 
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH"
 pluginkit -a "$EXT_PATH"
+pluginkit -e use -i "$EXT_BUNDLE_ID" -p "$EXTENSION_POINT_ID" >/dev/null 2>&1 || true
 
 echo "Sample app:"
 echo "  $APP_PATH"

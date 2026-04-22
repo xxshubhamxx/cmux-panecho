@@ -37,6 +37,7 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
     )
     @Published var isLoading: Bool = false
     @Published var isBundledDemoExtensionPresent: Bool = RightSidebarExtensionDemoStore.bundledDemoExtensionExists()
+    @Published var registryGeneration: Int = 0
 
     private var monitor: Any?
     private var reloadGeneration = 0
@@ -75,20 +76,16 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
                 observeMonitor(monitor)
                 guard generation == reloadGeneration else { return }
                 let monitorState = monitor.state
-                if monitorState.identities.isEmpty {
-                    let matchingIdentities = (try? await loadMatchingIdentities()) ?? []
-                    guard generation == reloadGeneration else { return }
-                    if matchingIdentities.isEmpty {
-                        applyMonitorState(monitorState)
-                    } else {
-                        applyDiscoveredIdentities(
-                            matchingIdentities,
-                            disabledCount: monitorState.disabledCount,
-                            unapprovedCount: monitorState.unapprovedCount
-                        )
-                    }
-                } else {
+                let matchingIdentities = (try? await loadMatchingIdentities()) ?? []
+                guard generation == reloadGeneration else { return }
+                if matchingIdentities.isEmpty {
                     applyMonitorState(monitorState)
+                } else {
+                    applyDiscoveredIdentities(
+                        matchingIdentities,
+                        disabledCount: monitorState.disabledCount,
+                        unapprovedCount: monitorState.unapprovedCount
+                    )
                 }
             } else {
                 self.monitor = nil
@@ -125,11 +122,17 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
         unapprovedCount: Int = 0
     ) {
         isBundledDemoExtensionPresent = Self.bundledDemoExtensionExists()
+        let previousIdentityIDs = identities.map(\.id)
         let sortedIdentities = uniqueIdentities(discoveredIdentities).sorted {
             $0.localizedName.localizedCaseInsensitiveCompare($1.localizedName) == .orderedAscending
         }
+        let currentIdentityIDs = sortedIdentities.map(\.id)
+        if currentIdentityIDs != previousIdentityIDs {
+            registryGeneration += 1
+        }
+
         let unavailableCount = disabledCount + unapprovedCount
-        if sortedIdentities.isEmpty, unavailableCount == 0, !identities.isEmpty {
+        if sortedIdentities.isEmpty, !identities.isEmpty {
             let bundledIdentifier = RightSidebarExtensionDemoStore.bundledDemoExtensionBundleIdentifier()
             let bundledIdentities = identities.filter { identity in
                 bundledIdentifier.map { $0 == identity.bundleIdentifier } == true &&
@@ -140,6 +143,7 @@ final class RightSidebarExtensionDemoStore: ObservableObject {
                 if selectedIdentityID.map({ id in !bundledIdentities.contains { $0.id == id } }) ?? true {
                     selectedIdentityID = bundledIdentities.first?.id
                 }
+                registryGeneration += 1
                 statusMessage = String(
                     localized: "rightSidebar.extensionDemo.settlingStatus",
                     defaultValue: "Extension discovery is settling. Keeping the last extension."
@@ -389,7 +393,11 @@ struct RightSidebarExtensionDemoPanelView: View {
                 .pickerStyle(.menu)
 
                 if let identity = store.selectedIdentity {
-                    ExtensionKitSidebarHostView(identity: identity, statusMessage: $store.statusMessage)
+                    ExtensionKitSidebarHostView(
+                        identity: identity,
+                        registryGeneration: store.registryGeneration,
+                        statusMessage: $store.statusMessage
+                    )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .overlay(
@@ -436,7 +444,7 @@ struct RightSidebarExtensionDemoPanelView: View {
             - Bind to app extension point com.cmuxterm.app.debug.extkit.right-sidebar-panel.
             - Provide a PrimitiveAppExtensionScene with scene id cmux-right-sidebar-demo.
             - Render a compact SwiftUI panel that fits a narrow right sidebar.
-            - Accept the scene XPC connection.
+            - Return AppExtensionSceneConfiguration(body) from the AppExtension configuration and do not install a custom NSXPCConnection acceptor for the scene.
             - Add the Info.plist and Xcode project settings needed for an ExtensionKit .appex, including EXAppExtensionAttributes.EXExtensionPointIdentifier = com.cmuxterm.app.debug.extkit.right-sidebar-panel.
             - Keep all UI strings localized.
             """
@@ -502,6 +510,7 @@ private struct ExtensionPromptInfoPopover: View {
 
 struct ExtensionKitSidebarHostView: NSViewControllerRepresentable {
     let identity: AppExtensionIdentity
+    let registryGeneration: Int
     @Binding var statusMessage: String
 
     func makeCoordinator() -> Coordinator {
@@ -513,7 +522,8 @@ struct ExtensionKitSidebarHostView: NSViewControllerRepresentable {
         controller.configure(
             delegate: context.coordinator,
             placeholderView: NSHostingView(rootView: ExtensionKitHostPlaceholderView()),
-            configuration: configuration
+            configuration: configuration,
+            registryGeneration: registryGeneration
         )
         return controller
     }
@@ -523,8 +533,9 @@ struct ExtensionKitSidebarHostView: NSViewControllerRepresentable {
         controller.hostViewController.delegate = context.coordinator
 
         if controller.hostViewController.configuration?.appExtension != identity ||
-            controller.hostViewController.configuration?.sceneID != RightSidebarExtensionPoint.sceneID {
-            controller.hostViewController.configuration = configuration
+            controller.hostViewController.configuration?.sceneID != RightSidebarExtensionPoint.sceneID ||
+            controller.registryGeneration != registryGeneration {
+            controller.apply(configuration: configuration, registryGeneration: registryGeneration)
         }
     }
 
@@ -543,6 +554,7 @@ struct ExtensionKitSidebarHostView: NSViewControllerRepresentable {
         }
 
         func hostViewControllerDidActivate(_ viewController: EXHostViewController) {
+            reconnectAttempts = 0
             statusMessage.wrappedValue = String(
                 localized: "rightSidebar.extensionDemo.xpcConnected",
                 defaultValue: "Extension scene activated."
@@ -555,6 +567,7 @@ struct ExtensionKitSidebarHostView: NSViewControllerRepresentable {
                     localized: "rightSidebar.extensionDemo.deactivatedWithError",
                     defaultValue: "Extension scene disconnected:"
                 ) + " \(error.localizedDescription)"
+                retryAfterDisconnect(viewController)
             } else {
                 statusMessage.wrappedValue = String(
                     localized: "rightSidebar.extensionDemo.deactivated",
@@ -562,11 +575,26 @@ struct ExtensionKitSidebarHostView: NSViewControllerRepresentable {
                 )
             }
         }
+
+        private var reconnectAttempts = 0
+
+        private func retryAfterDisconnect(_ viewController: EXHostViewController) {
+            guard reconnectAttempts < 2,
+                  let configuration = viewController.configuration else {
+                return
+            }
+            reconnectAttempts += 1
+            viewController.configuration = nil
+            Task { @MainActor [weak viewController] in
+                viewController?.configuration = configuration
+            }
+        }
     }
 }
 
 final class RightSidebarExtensionHostContainerController: NSViewController {
     let hostViewController = EXHostViewController()
+    private(set) var registryGeneration: Int = -1
 
     override func loadView() {
         let containerView = RightSidebarExtensionInteractionView()
@@ -597,10 +625,19 @@ final class RightSidebarExtensionHostContainerController: NSViewController {
     func configure(
         delegate: EXHostViewControllerDelegate,
         placeholderView: NSView,
-        configuration: EXHostViewController.Configuration
+        configuration: EXHostViewController.Configuration,
+        registryGeneration: Int
     ) {
         hostViewController.delegate = delegate
         hostViewController.placeholderView = placeholderView
+        apply(configuration: configuration, registryGeneration: registryGeneration)
+    }
+
+    func apply(
+        configuration: EXHostViewController.Configuration,
+        registryGeneration: Int
+    ) {
+        self.registryGeneration = registryGeneration
         hostViewController.configuration = configuration
     }
 }
@@ -836,7 +873,7 @@ struct RightSidebarExtensionDemoPanelView: View {
             - Bind to app extension point com.cmuxterm.app.debug.extkit.right-sidebar-panel.
             - Provide a PrimitiveAppExtensionScene with scene id cmux-right-sidebar-demo.
             - Render a compact SwiftUI panel that fits a narrow right sidebar.
-            - Accept the scene XPC connection.
+            - Return AppExtensionSceneConfiguration(body) from the AppExtension configuration and do not install a custom NSXPCConnection acceptor for the scene.
             - Add the Info.plist and Xcode project settings needed for an ExtensionKit .appex, including EXAppExtensionAttributes.EXExtensionPointIdentifier = com.cmuxterm.app.debug.extkit.right-sidebar-panel.
             - Keep all UI strings localized.
             """

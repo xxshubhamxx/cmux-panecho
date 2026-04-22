@@ -530,6 +530,24 @@ register_extensionkit_extensions() {
     return
   fi
 
+  elect_extensionkit_extension_if_needed() {
+    local extension_bundle="$1"
+    local info_plist="$extension_bundle/Contents/Info.plist"
+    local extension_bundle_id
+    local extension_point_id
+
+    extension_bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$info_plist" 2>/dev/null || true)"
+    extension_point_id="$(plutil -extract EXAppExtensionAttributes.EXExtensionPointIdentifier raw -o - "$info_plist" 2>/dev/null || true)"
+
+    if [[ -z "$extension_bundle_id" || -z "$extension_point_id" ]]; then
+      return
+    fi
+
+    if ! pluginkit -m -A -D -v -p "$extension_point_id" 2>/dev/null | grep -q '^[[:space:]]*+'; then
+      pluginkit -e use -i "$extension_bundle_id" -p "$extension_point_id" >/dev/null 2>&1 || true
+    fi
+  }
+
   if [[ -n "${TAG:-}" ]]; then
     UNTAGGED_APP_PATH="$(dirname "$APP_PATH")/${BASE_APP_NAME}.app"
     if [[ -d "$UNTAGGED_APP_PATH/Contents/Extensions" && "$UNTAGGED_APP_PATH" != "$APP_PATH" ]]; then
@@ -546,6 +564,7 @@ register_extensionkit_extensions() {
     if ! pluginkit -a "$EXTENSION_BUNDLE" >/dev/null 2>&1; then
       echo "warning: failed to register ExtensionKit extension: $EXTENSION_BUNDLE" >&2
     fi
+    elect_extensionkit_extension_if_needed "$EXTENSION_BUNDLE"
   done < <(find "$APP_PATH/Contents/Extensions" -maxdepth 1 -name "*.appex" -print0)
 }
 CLI_PATH="$APP_PATH/Contents/Resources/bin/cmux"
