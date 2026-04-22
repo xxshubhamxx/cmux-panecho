@@ -5183,6 +5183,10 @@ extension BrowserPanel {
     // MARK: - Find in Page
 
     func startFind() {
+        if searchState == nil || preferredFocusIntent != .findField {
+            invalidateWebContentFocusRestoreAttempts()
+            captureWebContentFocusSnapshotIfNeeded(reason: "startFind")
+        }
         let created = searchState == nil
         if created {
             searchState = BrowserSearchState()
@@ -5232,13 +5236,8 @@ extension BrowserPanel {
             webViewInstanceID: webViewInstanceID
         )
         updateSubfocusState(.webView)
-        let didStartRestore = drivePendingWebContentRestoreIfPossible(
-            trigger: "findDismiss.\(reason)",
-            clearFindOnCompletion: true
-        )
-        if !didStartRestore {
-            searchState = nil
-        }
+        searchState = nil
+        drivePendingWebContentRestoreIfPossible(trigger: "findDismiss.\(reason)")
     }
 
     func noteFindOverlayDisappeared(source: String) {
@@ -5771,8 +5770,7 @@ extension BrowserPanel {
 
     @discardableResult
     private func drivePendingWebContentRestoreIfPossible(
-        trigger: String,
-        clearFindOnCompletion: Bool = false
+        trigger: String
     ) -> Bool {
         guard let pendingRestore = findFocusCoordinator.pendingWebContentRestore else { return false }
 
@@ -5813,6 +5811,7 @@ extension BrowserPanel {
         }
 
         guard findFocusCoordinator.markWebContentRestoreApplying(pendingRestore) else { return false }
+        findFocusCoordinator.completeWebContentRestore(pendingRestore)
 #if DEBUG
         let hasWebViewResponder = Self.responderChainContains(window.firstResponder, target: webView)
         let firstResponderDescription = window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
@@ -5827,14 +5826,11 @@ extension BrowserPanel {
         let focused = transitionToWebContentFocus(
             reason: pendingRestore.reason,
             yieldFindFieldResponder: true,
-            // Find is chrome-only. Refocus WKWebView and let WebKit preserve DOM focus and caret.
-            restoreStoredDOMFocus: false,
+            // Find is browser chrome, like the address bar. Restore the page-owned
+            // editable focus after the native first-responder handoff.
+            restoreStoredDOMFocus: true,
             completion: { [weak self] restored in
                 guard let self else { return }
-                self.findFocusCoordinator.completeWebContentRestore(pendingRestore)
-                if clearFindOnCompletion, self.searchState != nil {
-                    self.searchState = nil
-                }
 #if DEBUG
                 dlog(
                     "browser.focus.webContent.pending.result panel=\(self.id.uuidString.prefix(5)) " +
