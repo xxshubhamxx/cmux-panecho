@@ -10,10 +10,12 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
     "@stackframe/js": "^2.8.78",
     "@stackframe/stack": "^2.8.78",
     "@t3-oss/env-nextjs": "^0.13.10",
     "@vercel/firewall": "^1.1.2",
+    "@vercel/otel": "^2.1.2",
     "e2b": "^2.19.0",
     "freestyle": "0.1.46",
     "next": "16.1.6",
