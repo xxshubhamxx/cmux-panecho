@@ -2234,6 +2234,8 @@ final class BrowserPanel: Panel, ObservableObject {
             let reason: String
             let webViewInstanceID: UUID
             let sourceFindRequestId: UUID?
+            let requiresFindOverlayTeardown: Bool
+            var findOverlayTeardownObserved: Bool
         }
 
         enum Phase: Equatable {
@@ -2323,20 +2325,38 @@ final class BrowserPanel: Panel, ObservableObject {
                 return nil
             }
             let sourceFindRequestId: UUID?
+            let requiresFindOverlayTeardown: Bool
             switch phase {
             case .focusing(let transaction), .focused(let transaction):
                 sourceFindRequestId = transaction.requestId
+                requiresFindOverlayTeardown = transaction.fieldMounted || transaction.fieldFocused
             case .idle, .waitingForWebViewFocus, .restoring:
                 sourceFindRequestId = nil
+                requiresFindOverlayTeardown = false
             }
             let transaction = WebContentRestoreTransaction(
                 requestId: UUID(),
                 reason: reason,
                 webViewInstanceID: webViewInstanceID,
-                sourceFindRequestId: sourceFindRequestId
+                sourceFindRequestId: sourceFindRequestId,
+                requiresFindOverlayTeardown: requiresFindOverlayTeardown,
+                findOverlayTeardownObserved: !requiresFindOverlayTeardown
             )
             phase = .waitingForWebViewFocus(transaction)
             return transaction
+        }
+
+        mutating func noteFindOverlayDisappeared() {
+            switch phase {
+            case .waitingForWebViewFocus(var transaction):
+                transaction.findOverlayTeardownObserved = true
+                phase = .waitingForWebViewFocus(transaction)
+            case .restoring(var transaction):
+                transaction.findOverlayTeardownObserved = true
+                phase = .restoring(transaction)
+            case .idle, .focusing, .focused:
+                break
+            }
         }
 
         mutating func markWebContentRestoreApplying(_ transaction: WebContentRestoreTransaction) -> Bool {
@@ -2379,7 +2399,6 @@ final class BrowserPanel: Panel, ObservableObject {
     @Published private var subfocusState: BrowserSubfocusState = .webView
     private var findFocusCoordinator = BrowserFindFocusCoordinator()
     private var isPaneFocusedForBrowserRestore = false
-    private var pendingFindDismissSearchStateClearRequestId: UUID?
 
     var pendingAddressBarFocusRequestId: UUID? {
         subfocusState.pendingAddressBarFocusRequestId
@@ -5245,34 +5264,21 @@ extension BrowserPanel {
             searchState = nil
             return
         }
-        let pendingRestore = findFocusCoordinator.beginFindDismiss(
+        _ = findFocusCoordinator.beginFindDismiss(
             reason: "findDismiss.\(reason)",
             shouldRestoreWebContent: true,
             webViewInstanceID: webViewInstanceID
         )
         updateSubfocusState(.webView)
-        let dismissingSearchState = searchState
-        pendingFindDismissSearchStateClearRequestId = pendingRestore?.requestId
-        let startedRestore = drivePendingWebContentRestoreIfPossible(
-            trigger: "findDismiss.\(reason)",
-            completion: { [weak self] _ in
-                guard let self, let requestId = pendingRestore?.requestId else { return }
-                self.finishDeferredFindDismissSearchStateClear(
-                    requestId: requestId,
-                    dismissingSearchState: dismissingSearchState
-                )
-            }
-        )
-        if !startedRestore {
-            pendingFindDismissSearchStateClearRequestId = nil
-            searchState = nil
-        }
+        searchState = nil
+        drivePendingWebContentRestoreIfPossible(trigger: "findDismiss.\(reason)")
     }
 
     func noteFindOverlayDisappeared(source: String) {
         if searchState != nil, preferredFocusIntent == .findField {
             _ = requestFindFieldFocus(reason: "findOverlayRemount.\(source)")
         } else {
+            findFocusCoordinator.noteFindOverlayDisappeared()
             drivePendingWebContentRestoreIfPossible(trigger: "findOverlayDisappear.\(source)")
             if isPaneFocusedForBrowserRestore,
                let window = webView.window,
@@ -5806,18 +5812,7 @@ extension BrowserPanel {
     }
 
     private func clearPendingWebContentRestore() {
-        pendingFindDismissSearchStateClearRequestId = nil
         findFocusCoordinator.cancelWebContentRestore()
-    }
-
-    private func finishDeferredFindDismissSearchStateClear(
-        requestId: UUID,
-        dismissingSearchState: BrowserSearchState?
-    ) {
-        guard pendingFindDismissSearchStateClearRequestId == requestId else { return }
-        pendingFindDismissSearchStateClearRequestId = nil
-        guard searchState === dismissingSearchState else { return }
-        searchState = nil
     }
 
     @discardableResult
@@ -5826,6 +5821,17 @@ extension BrowserPanel {
         completion: ((Bool) -> Void)? = nil
     ) -> Bool {
         guard let pendingRestore = findFocusCoordinator.pendingWebContentRestore else { return false }
+        guard pendingRestore.findOverlayTeardownObserved else {
+#if DEBUG
+            dlog(
+                "browser.focus.webContent.pending.skip panel=\(id.uuidString.prefix(5)) " +
+                "request=\(pendingRestore.requestId.uuidString.prefix(8)) " +
+                "reason=\(pendingRestore.reason) source=findDismiss " +
+                "trigger=\(trigger) cause=find_overlay_visible"
+            )
+#endif
+            return false
+        }
 
         guard isPaneFocusedForBrowserRestore else {
 #if DEBUG

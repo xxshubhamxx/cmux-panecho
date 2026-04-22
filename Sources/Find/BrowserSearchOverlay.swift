@@ -252,11 +252,17 @@ private struct BrowserSearchTextFieldRepresentable: NSViewRepresentable {
             self.parent = parent
         }
 
+        private func markFieldEditor(_ editor: NSTextView?) {
+            guard let editor else { return }
+            setBrowserSearchOverlayPanelId(parent.panelId, on: editor)
+        }
+
         func focusField(_ field: BrowserSearchNativeTextField, in window: NSWindow) {
             guard window.makeFirstResponder(field) else { return }
             DispatchQueue.main.async { [weak field] in
                 guard let field,
                       let editor = field.currentEditor() as? NSTextView else { return }
+                self.markFieldEditor(editor)
                 let end = field.stringValue.utf16.count
                 editor.setSelectedRange(NSRange(location: end, length: 0))
             }
@@ -299,10 +305,14 @@ private struct BrowserSearchTextFieldRepresentable: NSViewRepresentable {
         }
 
         func controlTextDidBeginEditing(_ obj: Notification) {
+            if let field = obj.object as? NSTextField {
+                markFieldEditor(field.currentEditor() as? NSTextView)
+            }
             parent.onFieldDidFocus(parent.focusRequestId)
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            markFieldEditor(textView)
             if let event = NSApp.currentEvent,
                event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
                AppDelegate.shared?.handleBrowserSurfaceKeyEquivalent(event) == true {

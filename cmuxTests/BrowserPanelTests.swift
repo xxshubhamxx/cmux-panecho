@@ -349,7 +349,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         XCTAssertEqual(panel.preferredFocusIntentForActivation(), .browser(.findField))
     }
 
-    func testPendingFindDismissRestoreWaitsForPaneFocusBeforeTakingWebViewFocus() throws {
+    func testPendingFindDismissRestoreWaitsForPaneFocusAndOverlayTeardownBeforeTakingWebViewFocus() throws {
         let panel = BrowserPanel(workspaceId: UUID())
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
@@ -378,10 +378,16 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         panel.hideFind(reason: "test")
 
         XCTAssertNotNil(panel.pendingWebContentRestoreRequestId)
+        XCTAssertNil(panel.searchState)
         XCTAssertEqual(browserSearchOverlayPanelId(for: window.firstResponder), panel.id)
 
         panel.notePanelFocusChanged(true)
+        XCTAssertNotNil(panel.pendingWebContentRestoreRequestId)
+        XCTAssertEqual(browserSearchOverlayPanelId(for: window.firstResponder), panel.id)
 
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        findField.removeFromSuperview()
+        panel.noteFindOverlayDisappeared(source: "test")
         waitForBrowserPanelCondition {
             panel.pendingWebContentRestoreRequestId == nil
         }
@@ -511,8 +517,11 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         panel.hideFind(reason: "test")
 
         XCTAssertNotNil(panel.pendingWebContentRestoreRequestId)
-        XCTAssertNotNil(panel.searchState)
+        XCTAssertNil(panel.searchState)
 
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        findField.removeFromSuperview()
+        panel.noteFindOverlayDisappeared(source: "test")
         waitForBrowserPanelCondition {
             panel.pendingWebContentRestoreRequestId == nil && panel.searchState == nil
         }
