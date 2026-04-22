@@ -167,10 +167,7 @@ func handleWebSocketPTY(w http.ResponseWriter, r *http.Request, cfg wsPTYServerC
 
 	shellPath := resolvePTYShell(cfg.Shell)
 	cmd := exec.Command(shellPath)
-	cmd.Env = append(os.Environ(),
-		"TERM=xterm-256color",
-		"CMUX_REMOTE_TRANSPORT=ws",
-	)
+	cmd.Env = defaultWebSocketPTYEnv(shellPath)
 	ptyFile, err := pty.StartWithSize(cmd, &pty.Winsize{
 		Cols: uint16(auth.Cols),
 		Rows: uint16(auth.Rows),
@@ -244,6 +241,70 @@ func consumeWebSocketPTYLease(path string, auth wsPTYAuthFrame) error {
 		}
 	}
 	return nil
+}
+
+func defaultWebSocketPTYEnv(shellPath string) []string {
+	env, order := envMapWithOrder(os.Environ())
+	set := func(key, value string) {
+		if _, ok := env[key]; !ok {
+			order = append(order, key)
+		}
+		env[key] = value
+	}
+	setIfMissing := func(key, value string) {
+		if strings.TrimSpace(env[key]) == "" {
+			set(key, value)
+		}
+	}
+
+	set("TERM", "xterm-256color")
+	setIfMissing("COLORTERM", "truecolor")
+	setIfMissing("TERM_PROGRAM", "ghostty")
+	setIfMissing("SHELL", shellPath)
+	set("CMUX_REMOTE_TRANSPORT", "ws")
+	if !envHasUTF8Locale(env) {
+		set("LANG", "C.UTF-8")
+		set("LC_CTYPE", "C.UTF-8")
+		set("LC_ALL", "C.UTF-8")
+	}
+
+	out := make([]string, 0, len(order))
+	seen := make(map[string]struct{}, len(order))
+	for _, key := range order {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key+"="+env[key])
+	}
+	return out
+}
+
+func envMapWithOrder(values []string) (map[string]string, []string) {
+	env := make(map[string]string, len(values))
+	order := make([]string, 0, len(values))
+	for _, value := range values {
+		key, rest, ok := strings.Cut(value, "=")
+		if !ok {
+			continue
+		}
+		if _, exists := env[key]; !exists {
+			order = append(order, key)
+		}
+		env[key] = rest
+	}
+	return env, order
+}
+
+func envHasUTF8Locale(env map[string]string) bool {
+	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		value := strings.ToUpper(strings.TrimSpace(env[key]))
+		if value == "" {
+			continue
+		}
+		return strings.Contains(value, "UTF-8") || strings.Contains(value, "UTF8")
+	}
+	return false
 }
 
 func writeWSJSON(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, payload any) error {

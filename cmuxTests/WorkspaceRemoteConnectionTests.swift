@@ -208,6 +208,54 @@ final class WorkspaceRemoteConnectionTests: XCTestCase {
         XCTAssertTrue(histfile.contains("/dotfiles/.zsh_history"))
     }
 
+    func testRemoteUTF8LocaleSetupLinesSeedUTF8LocaleWhenMissing() {
+        let script = (RemoteShellEnvironment.utf8LocaleSetupLines() + [
+            #"printf '%s' "${LANG}|${LC_CTYPE}|${LC_ALL}""#,
+        ])
+            .joined(separator: "\n")
+
+        let result = runProcess(
+            executablePath: "/usr/bin/env",
+            arguments: [
+                "LANG=",
+                "LC_CTYPE=",
+                "LC_ALL=",
+                "/bin/sh",
+                "-c",
+                script,
+            ],
+            timeout: 5
+        )
+
+        XCTAssertFalse(result.timedOut, result.stderr)
+        XCTAssertEqual(result.status, 0, result.stderr)
+        XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "C.UTF-8|C.UTF-8|C.UTF-8")
+    }
+
+    func testRemoteUTF8LocaleSetupLinesPreserveExistingUTF8Locale() {
+        let script = (RemoteShellEnvironment.utf8LocaleSetupLines() + [
+            #"printf '%s' "${LANG}|${LC_CTYPE}|${LC_ALL}""#,
+        ])
+            .joined(separator: "\n")
+
+        let result = runProcess(
+            executablePath: "/usr/bin/env",
+            arguments: [
+                "LANG=ja_JP.UTF-8",
+                "LC_CTYPE=",
+                "LC_ALL=",
+                "/bin/sh",
+                "-c",
+                script,
+            ],
+            timeout: 5
+        )
+
+        XCTAssertFalse(result.timedOut, result.stderr)
+        XCTAssertEqual(result.status, 0, result.stderr)
+        XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "ja_JP.UTF-8||")
+    }
+
     func testReverseRelayStartupFailureDetailCapturesImmediateForwardingFailure() throws {
         let process = Process()
         let stderrPipe = Pipe()

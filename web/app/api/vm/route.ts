@@ -115,7 +115,7 @@ export async function POST(request: Request): Promise<Response> {
 function defaultImageFor(provider: ProviderId): string {
   if (provider === "e2b") {
     return process.env.E2B_CMUXD_WS_TEMPLATE ??
-      "cmuxd-ws:ws-3046d";
+      "cmuxd-ws:utf8fix";
   }
   // Freestyle default populated when its snapshot lands.
   return process.env.FREESTYLE_SANDBOX_SNAPSHOT ?? "";

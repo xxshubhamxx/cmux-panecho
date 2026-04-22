@@ -13,10 +13,11 @@ import {
 } from "./types";
 import { withVmSpan } from "../telemetry";
 
-const DEFAULT_WS_TEMPLATE = "cmuxd-ws:ws-3046d";
+const DEFAULT_WS_TEMPLATE = "cmuxd-ws:utf8fix";
 const CMUXD_WS_PORT = 7777;
 const CMUXD_WS_LEASE_PATH = "/tmp/cmux/attach-lease.json";
 const CMUXD_WS_LEASE_TTL_SECONDS = 5 * 60;
+const DEFAULT_SANDBOX_ENVS = { LANG: "C.UTF-8" };
 
 // Default cmuxd WebSocket PTY template. Built by web/scripts/build-cloud-vm-images.ts.
 // E2B does not expose raw TCP, so interactive attach requires the cmuxd-remote WS image.
@@ -39,6 +40,7 @@ export class E2BProvider implements VMProvider {
       async (span) => {
         try {
           const sandbox = await Sandbox.create(image, {
+            envs: DEFAULT_SANDBOX_ENVS,
             network: { allowPublicTraffic: false },
           });
           span.setAttribute("cmux.vm.id", sandbox.sandboxId);
@@ -143,7 +145,10 @@ export class E2BProvider implements VMProvider {
       "cmux.vm.provider.restore",
       { "cmux.vm.provider": "e2b", "cmux.vm.operation": "restore", "cmux.snapshot.id": snapshotId },
       async (span) => {
-        const sbx = await Sandbox.create(snapshotId);
+        const sbx = await Sandbox.create(snapshotId, {
+          envs: DEFAULT_SANDBOX_ENVS,
+          network: { allowPublicTraffic: false },
+        });
         span.setAttribute("cmux.vm.id", sbx.sandboxId);
         return {
           provider: "e2b",

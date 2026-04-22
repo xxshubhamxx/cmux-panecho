@@ -5013,6 +5013,7 @@ struct CMUXCLI {
         terminfoSource: String? = nil
     ) -> String {
         let remoteTerminalLines = interactiveRemoteTerminalSetupLines(terminfoSource: terminfoSource)
+        let remoteLocaleLines = RemoteShellEnvironment.utf8LocaleSetupLines()
         let remoteEnvExportLines = interactiveRemoteShellExportLines(shellFeatures: shellFeatures)
         let shellStateDir = shellStateDirForRemoteRelayPort(remoteRelayPort)
         let remoteCallerExportLines = [
@@ -5022,6 +5023,7 @@ struct CMUXCLI {
         ]
         let relaySocket = remoteRelayPort > 0 ? "127.0.0.1:\(remoteRelayPort)" : nil
         var commonShellExportLines = remoteTerminalLines
+        commonShellExportLines.append(contentsOf: remoteLocaleLines)
         commonShellExportLines.append(contentsOf: remoteEnvExportLines)
         commonShellExportLines.append("export PATH=\"$HOME/.cmux/bin:$PATH\"")
         commonShellExportLines.append("export CMUX_BUNDLED_CLI_PATH=\"$HOME/.cmux/bin/cmux\"")

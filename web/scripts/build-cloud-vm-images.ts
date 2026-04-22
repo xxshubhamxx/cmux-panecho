@@ -80,6 +80,7 @@ async function buildE2BTemplate(tag: string, daemonPath: string, skipCache: bool
   const template = Template({ fileContextPath })
     .fromUbuntuImage("24.04")
     .aptInstall(["bash", "ca-certificates", "curl", "git"], { noInstallRecommends: true })
+    .setEnvs({ LANG: "C.UTF-8" })
     .copy(path.basename(daemonPath), "/usr/local/bin/cmuxd-remote", {
       forceUpload: true,
       mode: 0o755,
@@ -116,6 +117,7 @@ async function buildFreestyleSnapshot(tag: string, daemonPath: string, skipCache
       baseImage: {
         dockerfileContent: [
           "FROM ubuntu:24.04",
+          "ENV LANG=C.UTF-8",
           "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bash ca-certificates curl git && rm -rf /var/lib/apt/lists/*",
           `RUN curl -fsSL ${shellQuote(daemonURL)} -o /usr/local/bin/cmuxd-remote && chmod 0755 /usr/local/bin/cmuxd-remote`,
           "RUN useradd -m -s /bin/bash cmux || true",

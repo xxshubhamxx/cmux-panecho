@@ -200,6 +200,55 @@ func TestWebSocketPTYRunsShellOverBinaryFrames(t *testing.T) {
 	t.Fatalf("websocket stayed open after shell exit, output=%q", output.String())
 }
 
+func TestWebSocketPTYSeedsUTF8LocaleAndTerminalEnv(t *testing.T) {
+	leasePath := filepath.Join(t.TempDir(), "lease.json")
+	server := httptest.NewServer(newWebSocketPTYHandler(wsPTYServerConfig{
+		AuthLeaseFile: leasePath,
+		Shell:         "/bin/sh",
+	}, &bytes.Buffer{}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	writeTestLease(t, leasePath, "env-token", "sess-env", true, time.Now().Add(time.Minute))
+	conn := dialPTY(t, ctx, server.URL)
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+	sendAuth(t, ctx, conn, "env-token", "sess-env", 80, 24)
+	msgType, payload, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read ready: %v", err)
+	}
+	if msgType != websocket.MessageText || !strings.Contains(string(payload), `"ready"`) {
+		t.Fatalf("first frame should be ready text, type=%v payload=%q", msgType, string(payload))
+	}
+
+	command := "printf '%s\\n' \"$LANG|$LC_CTYPE|$LC_ALL|$TERM|$COLORTERM|$TERM_PROGRAM|$CMUX_REMOTE_TRANSPORT\"; exit\r"
+	if err := conn.Write(ctx, websocket.MessageBinary, []byte(command)); err != nil {
+		t.Fatalf("write terminal command: %v", err)
+	}
+
+	var output strings.Builder
+	want := "C.UTF-8|C.UTF-8|C.UTF-8|xterm-256color|truecolor|ghostty|ws"
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		readCtx, cancelRead := context.WithTimeout(ctx, time.Until(deadline))
+		msgType, payload, err = conn.Read(readCtx)
+		cancelRead()
+		if err != nil {
+			t.Fatalf("read terminal env: %v output=%q", err, output.String())
+		}
+		if msgType != websocket.MessageBinary {
+			continue
+		}
+		output.Write(payload)
+		if strings.Contains(output.String(), want) {
+			return
+		}
+	}
+	t.Fatalf("timed out waiting for terminal env, got %q", output.String())
+}
+
 func dialPTY(t *testing.T, ctx context.Context, serverURL string) *websocket.Conn {
 	t.Helper()
 	wsURL := "ws" + strings.TrimPrefix(serverURL, "http") + "/terminal"
