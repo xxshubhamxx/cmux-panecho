@@ -182,6 +182,8 @@ struct CodexAppServerLineBuffer {
 final class CodexAppServerClient: @unchecked Sendable {
     typealias EventHandler = (CodexAppServerEvent) -> Void
 
+    private final class QueueIdentity {}
+
     private final class PendingRequest {
         let continuation: CheckedContinuation<[String: Any], Error>
         let maximumResponseBytesToParse: Int?
@@ -207,8 +209,10 @@ final class CodexAppServerClient: @unchecked Sendable {
     }
 
     private static let maximumResumeResponseBytesToParse = 16 * 1024 * 1024
+    private static let stateQueueSpecificKey = DispatchSpecificKey<QueueIdentity>()
 
     private let stateQueue = DispatchQueue(label: "cmux.codexAppServerClient.state")
+    private let stateQueueIdentity = QueueIdentity()
     private let callbackQueue: DispatchQueue
     private var process: Process?
     private var stdinPipe: Pipe?
@@ -222,10 +226,11 @@ final class CodexAppServerClient: @unchecked Sendable {
 
     init(callbackQueue: DispatchQueue = .main) {
         self.callbackQueue = callbackQueue
+        stateQueue.setSpecific(key: Self.stateQueueSpecificKey, value: stateQueueIdentity)
     }
 
     deinit {
-        stop()
+        stopFromDeinit()
     }
 
     func start() throws {
@@ -243,6 +248,16 @@ final class CodexAppServerClient: @unchecked Sendable {
     func stop() {
         stateQueue.async {
             self.stopLocked()
+        }
+    }
+
+    private func stopFromDeinit() {
+        if DispatchQueue.getSpecific(key: Self.stateQueueSpecificKey) === stateQueueIdentity {
+            stopLocked()
+        } else {
+            stateQueue.sync {
+                stopLocked()
+            }
         }
     }
 
