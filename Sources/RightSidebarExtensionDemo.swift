@@ -561,20 +561,23 @@ struct ExtensionKitSidebarHostView: NSViewControllerRepresentable {
         Coordinator(statusMessage: $statusMessage)
     }
 
-    func makeNSViewController(context: Context) -> EXHostViewController {
-        let controller = EXHostViewController()
-        controller.delegate = context.coordinator
-        controller.placeholderView = NSHostingView(rootView: ExtensionKitHostPlaceholderView())
-        controller.configuration = configuration
+    func makeNSViewController(context: Context) -> RightSidebarExtensionHostContainerController {
+        let controller = RightSidebarExtensionHostContainerController()
+        controller.configure(
+            delegate: context.coordinator,
+            placeholderView: NSHostingView(rootView: ExtensionKitHostPlaceholderView()),
+            configuration: configuration
+        )
         return controller
     }
 
-    func updateNSViewController(_ controller: EXHostViewController, context: Context) {
+    func updateNSViewController(_ controller: RightSidebarExtensionHostContainerController, context: Context) {
         context.coordinator.statusMessage = $statusMessage
+        controller.hostViewController.delegate = context.coordinator
 
-        if controller.configuration?.appExtension != identity ||
-            controller.configuration?.sceneID != RightSidebarExtensionPoint.sceneID {
-            controller.configuration = configuration
+        if controller.hostViewController.configuration?.appExtension != identity ||
+            controller.hostViewController.configuration?.sceneID != RightSidebarExtensionPoint.sceneID {
+            controller.hostViewController.configuration = configuration
         }
     }
 
@@ -612,6 +615,175 @@ struct ExtensionKitSidebarHostView: NSViewControllerRepresentable {
                 )
             }
         }
+    }
+}
+
+final class RightSidebarExtensionHostContainerController: NSViewController {
+    let hostViewController = EXHostViewController()
+
+    override func loadView() {
+        let containerView = RightSidebarExtensionInteractionView()
+        containerView.identifier = cmuxRightSidebarExtensionHostContainerIdentifier
+        view = containerView
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        addChild(hostViewController)
+
+        let hostedView = hostViewController.view
+        hostedView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hostedView)
+        if let interactionView = view as? RightSidebarExtensionInteractionView {
+            interactionView.hostedContentView = hostedView
+        }
+
+        NSLayoutConstraint.activate([
+            hostedView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            hostedView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            hostedView.topAnchor.constraint(equalTo: view.topAnchor),
+            hostedView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+    }
+
+    func configure(
+        delegate: EXHostViewControllerDelegate,
+        placeholderView: NSView,
+        configuration: EXHostViewController.Configuration
+    ) {
+        hostViewController.delegate = delegate
+        hostViewController.placeholderView = placeholderView
+        hostViewController.configuration = configuration
+    }
+}
+
+private final class RightSidebarExtensionInteractionView: NSView {
+    weak var hostedContentView: NSView?
+    private weak var lastPointerTarget: NSView?
+    private var keyForwardingDepth = 0
+
+    override var isOpaque: Bool { false }
+    override var acceptsFirstResponder: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let target = super.hitTest(point)
+        if let target, Self.shouldClaimFocus(for: NSApp.currentEvent) {
+            claimKeyboardFocus(startingAt: target)
+        }
+        return target
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        claimKeyboardFocus(startingAt: self)
+        super.mouseDown(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        claimKeyboardFocus(startingAt: self)
+        super.rightMouseDown(with: event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        claimKeyboardFocus(startingAt: self)
+        super.otherMouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard forwardKeyDown(event) else {
+            super.keyDown(with: event)
+            return
+        }
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        guard forwardFlagsChanged(event) else {
+            super.flagsChanged(with: event)
+            return
+        }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if keyForwardingDepth == 0,
+           let target = preferredKeyTarget(),
+           target !== self {
+            keyForwardingDepth += 1
+            defer { keyForwardingDepth = max(0, keyForwardingDepth - 1) }
+            if target.performKeyEquivalent(with: event) {
+                return true
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    private func forwardKeyDown(_ event: NSEvent) -> Bool {
+        guard keyForwardingDepth == 0,
+              let target = preferredKeyTarget(),
+              target !== self else {
+            return false
+        }
+        keyForwardingDepth += 1
+        defer { keyForwardingDepth = max(0, keyForwardingDepth - 1) }
+        target.keyDown(with: event)
+        return true
+    }
+
+    private func forwardFlagsChanged(_ event: NSEvent) -> Bool {
+        guard keyForwardingDepth == 0,
+              let target = preferredKeyTarget(),
+              target !== self else {
+            return false
+        }
+        keyForwardingDepth += 1
+        defer { keyForwardingDepth = max(0, keyForwardingDepth - 1) }
+        target.flagsChanged(with: event)
+        return true
+    }
+
+    private func preferredKeyTarget() -> NSView? {
+        guard window?.firstResponder === self else { return nil }
+        if let lastPointerTarget,
+           lastPointerTarget !== self,
+           lastPointerTarget.window === window,
+           lastPointerTarget.isDescendant(of: self) {
+            return lastPointerTarget
+        }
+        return hostedContentView
+    }
+
+    private static func shouldClaimFocus(for event: NSEvent?) -> Bool {
+        switch event?.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func claimKeyboardFocus(startingAt target: NSView) {
+        guard target === self || target.isDescendant(of: self) else { return }
+        lastPointerTarget = target
+
+        guard let window else { return }
+        if let focusTarget = firstFocusableTarget(startingAt: target),
+           window.makeFirstResponder(focusTarget) {
+            return
+        }
+        _ = window.makeFirstResponder(self)
+    }
+
+    private func firstFocusableTarget(startingAt target: NSView) -> NSView? {
+        var current: NSView? = target
+        while let candidate = current {
+            if candidate.acceptsFirstResponder {
+                return candidate
+            }
+            if candidate === self {
+                break
+            }
+            current = candidate.superview
+        }
+        return nil
     }
 }
 
