@@ -175,6 +175,7 @@ private enum AgentResumeCommandBuilder {
         "stats",
         "export",
         "import",
+        "pr",
         "github",
         "session",
         "plugin",

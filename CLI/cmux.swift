@@ -1844,9 +1844,29 @@ struct CMUXCLI {
             }
         }
 
+        // OpenCode plugin management (no socket needed)
+        if command == "opencode" {
+            let sub = commandArgs.first?.lowercased() ?? "help"
+            if sub == "install-hooks" {
+                try installAgentHooks(Self.agentDef(named: "opencode")!)
+                return
+            } else if sub == "uninstall-hooks" {
+                try uninstallAgentHooks(Self.agentDef(named: "opencode")!)
+                return
+            }
+        }
+
         // Codex hook handler: gracefully no-op when not inside cmux
         // (before socket connection, so it doesn't fail when no socket exists)
         if command == "codex-hook" {
+            guard ProcessInfo.processInfo.environment["CMUX_SURFACE_ID"] != nil else {
+                print("{}")
+                return
+            }
+        }
+
+        // OpenCode hook handler: gracefully no-op when not inside cmux
+        if command == "opencode-hook" {
             guard ProcessInfo.processInfo.environment["CMUX_SURFACE_ID"] != nil else {
                 print("{}")
                 return
@@ -2748,6 +2768,17 @@ struct CMUXCLI {
             } catch {
                 cliTelemetry.breadcrumb("codex-hook.failure")
                 cliTelemetry.captureError(stage: "codex_hook_dispatch", error: error)
+                throw error
+            }
+
+        case "opencode-hook":
+            cliTelemetry.breadcrumb("opencode-hook.dispatch")
+            do {
+                try runGenericAgentHook(def: Self.agentDef(named: "opencode")!, commandArgs: commandArgs, client: client, telemetry: cliTelemetry)
+                cliTelemetry.breadcrumb("opencode-hook.completed")
+            } catch {
+                cliTelemetry.breadcrumb("opencode-hook.failure")
+                cliTelemetry.captureError(stage: "opencode_hook_dispatch", error: error)
                 throw error
             }
 
@@ -7003,6 +7034,20 @@ struct CMUXCLI {
               cmux omo --continue
               cmux omo --model claude-sonnet-4-6
             """)
+        case "opencode":
+            return """
+            Usage: cmux opencode <install-hooks|uninstall-hooks> [--yes]
+
+            Install or remove the OpenCode plugin that lets cmux remember
+            restorable OpenCode session IDs for reopened terminals.
+
+            Files:
+              ~/.config/opencode/plugins/cmux-session.js
+
+            Examples:
+              cmux opencode install-hooks --yes
+              cmux opencode uninstall-hooks
+            """
         case "omx":
             return String(localized: "cli.omx.usage", defaultValue: """
             Usage: cmux omx [omx-args...]
@@ -13823,6 +13868,13 @@ struct CMUXCLI {
             postInstallAction: .codexConfigToml
         ),
         AgentHookDef(
+            name: "opencode", displayName: "OpenCode", statusKey: "opencode",
+            configDir: ".config/opencode", configFile: "plugins/cmux-session.js", configDirEnvOverride: "OPENCODE_CONFIG_DIR",
+            sessionStoreSuffix: "opencode", disableEnvVar: "CMUX_OPENCODE_HOOKS_DISABLED",
+            hookMarker: "cmux opencode-hook", format: .flat,
+            events: []
+        ),
+        AgentHookDef(
             name: "cursor", displayName: "Cursor", statusKey: "cursor",
             configDir: ".cursor", configFile: "hooks.json",
             sessionStoreSuffix: "cursor", disableEnvVar: "CMUX_CURSOR_HOOKS_DISABLED",
@@ -13920,7 +13972,215 @@ struct CMUXCLI {
         return result
     }
 
+    private static let openCodeSessionPluginMarker = "cmux-opencode-session-plugin-marker"
+    private static let openCodeSessionPluginFilename = "cmux-session.js"
+    private static let openCodeSessionPluginSource = #"""
+// cmux-opencode-session-plugin-marker v1
+// Bridges OpenCode session lifecycle events into cmux's restorable session store.
+// Installed by `cmux opencode install-hooks` or `cmux setup-hooks`.
+// DO NOT EDIT MANUALLY. cmux upgrades this file in place.
+
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+function eventProperties(event) {
+  return (event && typeof event === "object" && event.properties) || {};
+}
+
+function sessionIdFor(event) {
+  const props = eventProperties(event);
+  return firstString(
+    props.info && props.info.id,
+    props.sessionID,
+    props.sessionId,
+    props.session_id,
+    props.session && props.session.id,
+    event && event.sessionID,
+    event && event.sessionId,
+    event && event.id
+  );
+}
+
+function cwdFor(ctx, event) {
+  const props = eventProperties(event);
+  return firstString(
+    props.info && props.info.directory,
+    props.cwd,
+    props.directory,
+    ctx && ctx.directory,
+    process.cwd()
+  );
+}
+
+function resolveExecutable(name) {
+  const pathEnv = process.env.PATH || "";
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch (_) {}
+  }
+  return name;
+}
+
+function looksLikeOpenCodeScript(value) {
+  if (!value) return false;
+  const lower = String(value).toLowerCase();
+  return lower.includes("opencode") || lower.includes("open-code");
+}
+
+function normalizedLaunchArgv() {
+  const raw = Array.isArray(process.argv) ? process.argv.filter(Boolean) : [];
+  if (raw.length === 0) return [resolveExecutable("opencode")];
+
+  const firstBase = path.basename(raw[0]).toLowerCase();
+  if (looksLikeOpenCodeScript(firstBase)) return raw;
+
+  let tail = raw.slice(1);
+  if (tail.length > 0 && looksLikeOpenCodeScript(tail[0])) {
+    tail = tail.slice(1);
+  }
+  return [resolveExecutable("opencode"), ...tail];
+}
+
+function base64NulSeparated(values) {
+  return Buffer.from(values.join("\u0000"), "utf8").toString("base64");
+}
+
+function hookEnvironment(cwd) {
+  const env = { ...process.env };
+  if (!env.CMUX_AGENT_LAUNCH_ARGV_B64) {
+    const argv = normalizedLaunchArgv();
+    env.CMUX_AGENT_LAUNCH_KIND = "opencode";
+    env.CMUX_AGENT_LAUNCH_EXECUTABLE = argv[0] || resolveExecutable("opencode");
+    env.CMUX_AGENT_LAUNCH_ARGV_B64 = base64NulSeparated(argv);
+    env.CMUX_AGENT_LAUNCH_CWD = cwd || process.cwd();
+  }
+  return env;
+}
+
+function sendHook(subcommand, ctx, event, extra = {}) {
+  if (process.env.CMUX_OPENCODE_HOOKS_DISABLED === "1") return;
+  if (!process.env.CMUX_SURFACE_ID) return;
+
+  const sessionId = sessionIdFor(event);
+  if (!sessionId) return;
+
+  const cwd = cwdFor(ctx, event);
+  const payload = {
+    session_id: sessionId,
+    cwd,
+    event: event && event.type,
+    hook_event_name: event && event.type,
+    ...extra,
+  };
+  const cmux = process.env.CMUX_OPENCODE_CMUX_BIN || "cmux";
+  try {
+    spawnSync(cmux, ["opencode-hook", subcommand], {
+      input: JSON.stringify(payload),
+      encoding: "utf8",
+      env: hookEnvironment(cwd),
+      stdio: ["pipe", "ignore", "ignore"],
+      timeout: 5000,
+    });
+  } catch (_) {}
+}
+
+export const CMUXSessionRestore = async (ctx) => {
+  return {
+    event: async ({ event }) => {
+      const props = eventProperties(event);
+      switch (event && event.type) {
+        case "session.created":
+          sendHook("session-start", ctx, event);
+          break;
+        case "session.updated":
+          if (props.info && props.info.time && props.info.time.archived) {
+            sendHook("session-end", ctx, event);
+          } else {
+            sendHook("session-start", ctx, event);
+          }
+          break;
+        case "session.status":
+          if (props.status && props.status.type === "idle") {
+            sendHook("stop", ctx, event);
+          }
+          break;
+        case "session.idle":
+          sendHook("stop", ctx, event);
+          break;
+        case "session.deleted":
+          sendHook("session-end", ctx, event);
+          break;
+        default:
+          break;
+      }
+    },
+  };
+};
+"""#
+
+    private func openCodeSessionPluginURL(for def: AgentHookDef) -> URL {
+        URL(fileURLWithPath: def.resolvedConfigDir(), isDirectory: true)
+            .appendingPathComponent("plugins", isDirectory: true)
+            .appendingPathComponent(Self.openCodeSessionPluginFilename, isDirectory: false)
+    }
+
+    private func installOpenCodePluginHooks(_ def: AgentHookDef) throws {
+        let fm = FileManager.default
+        let pluginURL = openCodeSessionPluginURL(for: def)
+        let skipConfirm = ProcessInfo.processInfo.arguments.contains("--yes")
+            || ProcessInfo.processInfo.arguments.contains("-y")
+
+        if !skipConfirm {
+            print("Will write OpenCode cmux plugin to \(pluginURL.path):")
+            print(Self.openCodeSessionPluginSource)
+            print("\nProceed? [y/N] ", terminator: "")
+            guard readLine()?.lowercased().hasPrefix("y") == true else {
+                print("Aborted.")
+                return
+            }
+        }
+
+        try fm.createDirectory(at: pluginURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Self.openCodeSessionPluginSource.write(to: pluginURL, atomically: true, encoding: .utf8)
+        print("OpenCode hooks installed at \(pluginURL.path)")
+    }
+
+    private func uninstallOpenCodePluginHooks(_ def: AgentHookDef) throws {
+        let fm = FileManager.default
+        let pluginURL = openCodeSessionPluginURL(for: def)
+        guard fm.fileExists(atPath: pluginURL.path) else {
+            print("No OpenCode cmux plugin found at \(pluginURL.path)")
+            return
+        }
+
+        let existing = (try? String(contentsOf: pluginURL, encoding: .utf8)) ?? ""
+        guard existing.contains(Self.openCodeSessionPluginMarker) else {
+            print("Refusing to remove \(pluginURL.path): missing cmux marker")
+            return
+        }
+
+        try fm.removeItem(at: pluginURL)
+        print("Removed OpenCode cmux plugin from \(pluginURL.path)")
+    }
+
     private func installAgentHooks(_ def: AgentHookDef) throws {
+        if def.name == "opencode" {
+            try installOpenCodePluginHooks(def)
+            return
+        }
+
         let fm = FileManager.default
         let configDir = def.resolvedConfigDir()
         let filePath = "\(configDir)/\(def.configFile)"
@@ -14025,6 +14285,11 @@ struct CMUXCLI {
     }
 
     private func uninstallAgentHooks(_ def: AgentHookDef) throws {
+        if def.name == "opencode" {
+            try uninstallOpenCodePluginHooks(def)
+            return
+        }
+
         let fm = FileManager.default
         let configDir = def.resolvedConfigDir()
         let filePath = "\(configDir)/\(def.configFile)"
@@ -14258,7 +14523,7 @@ struct CMUXCLI {
         for def in Self.agentDefs {
             if let filter = agentFilter, filter.lowercased() != def.name { continue }
             let configDir = def.resolvedConfigDir()
-            if !fm.fileExists(atPath: configDir) {
+            if def.name != "opencode", !fm.fileExists(atPath: configDir) {
                 print("  \(def.name): skipped (not found)")
                 skipped += 1
                 continue
@@ -14664,6 +14929,7 @@ struct CMUXCLI {
           omx [omx-args...]
           omc [omc-args...]
           codex <install-hooks|uninstall-hooks>
+          opencode <install-hooks|uninstall-hooks>
           ping
           version
           capabilities
@@ -14714,6 +14980,7 @@ struct CMUXCLI {
           list-notifications
           clear-notifications
           claude-hook <session-start|stop|notification> [--workspace <id|ref>] [--surface <id|ref>]
+          opencode-hook <session-start|prompt-submit|stop|session-end> [--workspace <id|ref>] [--surface <id|ref>]
           set-app-focus <active|inactive|clear>
           simulate-app-active
 

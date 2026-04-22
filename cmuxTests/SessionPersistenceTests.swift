@@ -1188,6 +1188,32 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
     }
 
     func testOpenCodeWrapperResumeCommandAndUnsupportedOhMyLaunchers() {
+        let direct = SessionRestorableAgentSnapshot(
+            kind: .opencode,
+            sessionId: "direct-opencode-session-456",
+            workingDirectory: "/tmp/direct opencode repo",
+            launchCommand: AgentLaunchCommandSnapshot(
+                launcher: "opencode",
+                executablePath: "/opt/homebrew/bin/opencode",
+                arguments: [
+                    "/opt/homebrew/bin/opencode",
+                    "--model",
+                    "anthropic/claude-sonnet-4-6",
+                    "--session",
+                    "old-session",
+                    "--prompt",
+                    "old prompt",
+                    "--port",
+                    "4096",
+                    "/tmp/direct opencode repo",
+                    "initial prompt"
+                ],
+                workingDirectory: "/tmp/direct opencode repo",
+                environment: ["OPENCODE_CONFIG_DIR": "/tmp/opencode config"],
+                capturedAt: 123,
+                source: "environment"
+            )
+        )
         let omo = SessionRestorableAgentSnapshot(
             kind: .opencode,
             sessionId: "opencode-session-123",
@@ -1239,6 +1265,10 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
         )
 
         XCTAssertEqual(
+            direct.resumeCommand,
+            "cd '/tmp/direct opencode repo' && 'env' 'OPENCODE_CONFIG_DIR=/tmp/opencode config' '/opt/homebrew/bin/opencode' '--session' 'direct-opencode-session-456' '--model' 'anthropic/claude-sonnet-4-6' '--port' '4096' '/tmp/direct opencode repo'"
+        )
+        XCTAssertEqual(
             omo.resumeCommand,
             "cd '/tmp/opencode repo' && 'env' 'OPENCODE_CONFIG_DIR=/tmp/opencode config' '/usr/local/bin/cmux' 'omo' '--session' 'opencode-session-123' '--model' 'anthropic/claude-sonnet-4-6' '/tmp/opencode repo'"
         )
@@ -1288,9 +1318,39 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
                 source: nil
             )
         )
+        let opencodeRun = SessionRestorableAgentSnapshot(
+            kind: .opencode,
+            sessionId: "opencode-session-123",
+            workingDirectory: nil,
+            launchCommand: AgentLaunchCommandSnapshot(
+                launcher: "opencode",
+                executablePath: "opencode",
+                arguments: ["opencode", "run", "fix this"],
+                workingDirectory: nil,
+                environment: nil,
+                capturedAt: nil,
+                source: nil
+            )
+        )
+        let opencodePR = SessionRestorableAgentSnapshot(
+            kind: .opencode,
+            sessionId: "opencode-pr-session-123",
+            workingDirectory: nil,
+            launchCommand: AgentLaunchCommandSnapshot(
+                launcher: "opencode",
+                executablePath: "opencode",
+                arguments: ["opencode", "pr", "123"],
+                workingDirectory: nil,
+                environment: nil,
+                capturedAt: nil,
+                source: nil
+            )
+        )
 
         XCTAssertNil(claudePrint.resumeCommand)
         XCTAssertNil(codexExec.resumeCommand)
+        XCTAssertNil(opencodeRun.resumeCommand)
+        XCTAssertNil(opencodePR.resumeCommand)
     }
 
     func testRestorableAgentIndexLoadsLaunchCommandFromHookStore() throws {
