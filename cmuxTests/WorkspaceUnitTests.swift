@@ -93,7 +93,7 @@ final class SidebarSelectedWorkspaceColorTests: XCTestCase {
     }
 
     @MainActor
-    func testSetTabColorFeedsSelectedDefaultSidebarBackground() {
+    func testLeftRailKeepsSelectedBackgroundForActiveCustomColoredWorkspaceRow() {
         let manager = TabManager()
         guard let workspace = manager.tabs.first else {
             XCTFail("Expected TabManager to initialise with a workspace")
@@ -119,7 +119,10 @@ final class SidebarSelectedWorkspaceColorTests: XCTestCase {
             sidebarSelectionColorHex: nil
         )
 
-        XCTAssertEqual(background.color?.hexString(), "#C0392B")
+        XCTAssertEqual(
+            background.color?.hexString(),
+            sidebarSelectedWorkspaceBackgroundNSColor(for: .light).hexString()
+        )
         XCTAssertEqual(background.opacity, 1.0, accuracy: 0.001)
         withExtendedLifetime(cancellable) {}
     }
@@ -145,6 +148,26 @@ final class SidebarSelectedWorkspaceColorTests: XCTestCase {
 
         XCTAssertNil(background.color)
         XCTAssertEqual(background.opacity, 0, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testLeftRailResolvesExplicitRailColorForCustomColoredWorkspaceRow() {
+        let manager = TabManager()
+        guard let workspace = manager.tabs.first else {
+            XCTFail("Expected TabManager to initialise with a workspace")
+            return
+        }
+
+        manager.setTabColor(tabId: workspace.id, color: "#C0392B")
+
+        let railColor = sidebarWorkspaceRowExplicitRailNSColor(
+            activeTabIndicatorStyle: .leftRail,
+            customColorHex: workspace.customColor,
+            colorScheme: .light
+        )
+
+        XCTAssertNotNil(railColor)
+        XCTAssertEqual(railColor?.hexString(), "#C0392B")
     }
 
     @MainActor
