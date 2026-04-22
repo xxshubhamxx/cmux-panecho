@@ -1902,10 +1902,23 @@ final class BrowserPanel: Panel, ObservableObject {
     private var suppressWebViewFocusUntil: Date?
     private var suppressWebViewFocusForAddressBar: Bool = false
     private var webContentFocusRestoreGeneration: UInt64 = 0
+    private var lastCapturedWebContentFocusStateJSON: String?
     private let blankURLString = "about:blank"
     private static let webContentFocusCaptureScript = """
     (() => {
       try {
+        const result = (status, state) => {
+          let stateJSON = null;
+          if (state && typeof state.id === "string" && state.id) {
+            try {
+              stateJSON = JSON.stringify(state);
+            } catch (_) {
+              stateJSON = null;
+            }
+          }
+          return { status, stateJSON };
+        };
+
         const syncState = (state) => {
           window.__cmuxAddressBarFocusState = state;
           try {
@@ -1966,15 +1979,17 @@ final class BrowserPanel: Panel, ObservableObject {
 
         const active = document.activeElement;
         if (!active) {
-          if (storedTargetExists()) return "retained:none";
+          const state = readState();
+          if (storedTargetExists()) return result("retained:none", state);
           syncState(null);
-          return "cleared:none";
+          return result("cleared:none", null);
         }
 
         if (!isEditable(active)) {
-          if (storedTargetExists()) return "retained:noneditable";
+          const state = readState();
+          if (storedTargetExists()) return result("retained:noneditable", state);
           syncState(null);
-          return "cleared:noneditable";
+          return result("cleared:noneditable", null);
         }
 
         let id = active.getAttribute("data-cmux-addressbar-focus-id");
@@ -1990,9 +2005,9 @@ final class BrowserPanel: Panel, ObservableObject {
           state.selectionEnd = active.selectionEnd;
         }
         syncState(state);
-        return "captured:" + id;
+        return result("captured:" + id, state);
       } catch (_) {
-        return "error";
+        return { status: "error", stateJSON: null };
       }
     })();
     """
@@ -2084,17 +2099,35 @@ final class BrowserPanel: Panel, ObservableObject {
       }
     })();
     """
-    private static let webContentFocusRestoreScript = """
+    private static func webContentFocusRestoreScript(fallbackStateJSON: String?) -> String {
+        let fallbackStateLiteral = fallbackStateJSON ?? "null"
+        return """
     (() => {
       try {
+        const nativeFallbackState = \(fallbackStateLiteral);
+        const stateIsValid = (state) => !!state && typeof state.id === "string" && !!state.id;
+        const syncState = (state) => {
+          window.__cmuxAddressBarFocusState = state;
+          try {
+            if (window.top && window.top !== window) {
+              window.top.postMessage({ cmuxAddressBarFocusState: state }, "*");
+            } else if (window.top) {
+              window.top.__cmuxAddressBarFocusState = state;
+            }
+          } catch (_) {}
+        };
+
         const readState = () => {
           let state = window.__cmuxAddressBarFocusState;
           try {
-            if ((!state || typeof state.id !== "string" || !state.id) &&
-                window.top && window.top.__cmuxAddressBarFocusState) {
+            if (!stateIsValid(state) && window.top && window.top.__cmuxAddressBarFocusState) {
               state = window.top.__cmuxAddressBarFocusState;
             }
           } catch (_) {}
+          if (!stateIsValid(state) && stateIsValid(nativeFallbackState)) {
+            state = nativeFallbackState;
+            syncState(state);
+          }
           return state;
         };
 
@@ -2184,9 +2217,10 @@ final class BrowserPanel: Panel, ObservableObject {
       }
     })();
     """
+    }
 #if DEBUG
     static var webContentFocusRestoreScriptForTesting: String {
-        webContentFocusRestoreScript
+        webContentFocusRestoreScript(fallbackStateJSON: nil)
     }
 #endif
     /// Published URL being displayed
@@ -2931,6 +2965,13 @@ final class BrowserPanel: Panel, ObservableObject {
         let boundWebViewInstanceID = webViewInstanceID
         let boundHistoryStore = historyStore
 
+        navigationDelegate.didStartNavigation = { [weak self] webView in
+            Task { @MainActor [weak self] in
+                guard let self, self.isCurrentWebView(webView, instanceID: boundWebViewInstanceID) else { return }
+                self.lastCapturedWebContentFocusStateJSON = nil
+                (webView as? CmuxWebView)?.setRestoredWebContentTextInputFocusFallbackJSON(nil)
+            }
+        }
         navigationDelegate.didFinish = { [weak self] webView in
             Task { @MainActor [weak self] in
                 guard let self, self.isCurrentWebView(webView, instanceID: boundWebViewInstanceID) else { return }
@@ -5334,9 +5375,13 @@ extension BrowserPanel {
             shouldRestoreWebContent: true,
             webViewInstanceID: webViewInstanceID
         )
-        if let cmuxWebView = webView as? CmuxWebView,
-           cmuxWebView.hasRestorableWebContentTextInputFocus() {
-            cmuxWebView.armRestoredWebContentTextInputRepair(reason: "findDismiss.\(reason).pending")
+        if let cmuxWebView = webView as? CmuxWebView {
+            cmuxWebView.setRestoredWebContentTextInputFocusFallbackJSON(
+                Self.validatedWebContentFocusStateJSON(lastCapturedWebContentFocusStateJSON)
+            )
+            if cmuxWebView.hasRestorableWebContentTextInputFocus() {
+                cmuxWebView.armRestoredWebContentTextInputRepair(reason: "findDismiss.\(reason).pending")
+            }
         }
         updateSubfocusState(.webView)
         searchState = nil
@@ -5864,6 +5909,9 @@ extension BrowserPanel {
                 self.noteWebViewFocused()
             }
             let cmuxWebView = self.webView as? CmuxWebView
+            cmuxWebView?.setRestoredWebContentTextInputFocusFallbackJSON(
+                Self.validatedWebContentFocusStateJSON(self.lastCapturedWebContentFocusStateJSON)
+            )
             let hasRestorableTextInput = cmuxWebView?.hasRestorableWebContentTextInputFocus() ?? false
             let shouldBridgeRestoredTextInput = hasWebViewResponder &&
                 (restored || reason.hasPrefix("findDismiss.") || hasRestorableTextInput)
@@ -6028,13 +6076,45 @@ extension BrowserPanel {
             BrowserWindowPortalRegistry.searchOverlayPanelId(for: firstResponder, in: window) == id
     }
 
+    private static func webContentFocusCaptureStatusAndStateJSON(from result: Any?) -> (status: String, stateJSON: String?) {
+        guard let payload = result as? [String: Any] else {
+            return ((result as? String) ?? "unknown", nil)
+        }
+        return ((payload["status"] as? String) ?? "unknown", payload["stateJSON"] as? String)
+    }
+
+    private static func validatedWebContentFocusStateJSON(_ stateJSON: String?) -> String? {
+        guard let stateJSON,
+              let data = stateJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = object["id"] as? String,
+              !id.isEmpty else {
+            return nil
+        }
+        return stateJSON
+    }
+
+    private func updateLastCapturedWebContentFocusState(result: Any?, error: Error?) -> String {
+        guard error == nil else { return "error" }
+        let parsed = Self.webContentFocusCaptureStatusAndStateJSON(from: result)
+        if let stateJSON = Self.validatedWebContentFocusStateJSON(parsed.stateJSON) {
+            lastCapturedWebContentFocusStateJSON = stateJSON
+        } else if parsed.status.hasPrefix("cleared") {
+            lastCapturedWebContentFocusStateJSON = nil
+        }
+        return parsed.status
+    }
+
     private func captureWebContentFocusSnapshotIfNeeded(reason: String) {
         if let cmuxWebView = webView as? CmuxWebView {
             let evaluation = cmuxWebView.captureWebContentFocusSnapshotSynchronously(
                 script: Self.webContentFocusCaptureScript
             )
+            let resultValue = updateLastCapturedWebContentFocusState(
+                result: evaluation.result,
+                error: evaluation.error
+            )
 #if DEBUG
-            let resultValue = (evaluation.result as? String) ?? "unknown"
             if let error = evaluation.error {
                 dlog(
                     "browser.focus.webContent.capture panel=\(id.uuidString.prefix(5)) " +
@@ -6057,6 +6137,7 @@ extension BrowserPanel {
             }
         }
         webView.evaluateJavaScript(Self.webContentFocusCaptureScript) { [weak self] result, error in
+            let resultValue = self?.updateLastCapturedWebContentFocusState(result: result, error: error) ?? "unknown"
 #if DEBUG
             guard let self else { return }
             if let error {
@@ -6066,7 +6147,6 @@ extension BrowserPanel {
                 )
                 return
             }
-            let resultValue = (result as? String) ?? "unknown"
             dlog(
                 "browser.focus.webContent.capture panel=\(self.id.uuidString.prefix(5)) " +
                 "reason=\(reason) result=\(resultValue)"
@@ -6108,7 +6188,9 @@ extension BrowserPanel {
 
     func restoreStoredWebContentFocusIfNeeded(completion: @escaping (Bool) -> Void) {
         restoreStoredTrackedWebContentFocusIfNeeded(
-            script: Self.webContentFocusRestoreScript,
+            script: Self.webContentFocusRestoreScript(
+                fallbackStateJSON: Self.validatedWebContentFocusStateJSON(lastCapturedWebContentFocusStateJSON)
+            ),
             logPrefix: "browser.focus.webContent.restore",
             completion: completion
         )
@@ -6731,6 +6813,7 @@ func browserNavigationShouldFallbackNilTargetToNewTab(
 }
 
 private class BrowserNavigationDelegate: NSObject, WKNavigationDelegate {
+    var didStartNavigation: ((WKWebView) -> Void)?
     var didFinish: ((WKWebView) -> Void)?
     var didFailNavigation: ((WKWebView, String) -> Void)?
     var didTerminateWebContentProcess: ((WKWebView) -> Void)?
@@ -6745,6 +6828,7 @@ private class BrowserNavigationDelegate: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         lastAttemptedURL = webView.url
+        didStartNavigation?(webView)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

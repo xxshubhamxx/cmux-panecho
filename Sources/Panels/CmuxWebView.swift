@@ -366,6 +366,7 @@ final class CmuxWebView: WKWebView {
     private var programmaticFocusAllowanceDepth: Int = 0
     private var restoredWebContentTextInputRepairArmed = false
     private var restoredWebContentTextInputRepairLastReason = ""
+    private var restoredWebContentTextInputFocusFallbackJSON: String?
     private var pasteAsPlainTextTargetAvailable = false
     private var lastPasteAsPlainTextPerformKeyEventTimestamp: TimeInterval?
     var allowsFirstResponderAcquisitionEffective: Bool {
@@ -541,8 +542,13 @@ final class CmuxWebView: WKWebView {
 #endif
     }
 
+    func setRestoredWebContentTextInputFocusFallbackJSON(_ stateJSON: String?) {
+        restoredWebContentTextInputFocusFallbackJSON = stateJSON
+    }
+
     func disarmRestoredWebContentTextInputRepair(reason: String) {
         restoredWebContentTextInputRepairLastReason = "disarm.\(reason)"
+        restoredWebContentTextInputFocusFallbackJSON = nil
         guard restoredWebContentTextInputRepairArmed else { return }
         restoredWebContentTextInputRepairArmed = false
 #if DEBUG
@@ -702,9 +708,23 @@ final class CmuxWebView: WKWebView {
     })();
     """
 
-    private static let restorableTextInputFocusScript = """
+    private static func restorableTextInputFocusScript(fallbackStateJSON: String?) -> String {
+        let fallbackStateLiteral = fallbackStateJSON ?? "null"
+        return """
     (() => {
       try {
+        const nativeFallbackState = \(fallbackStateLiteral);
+        const stateIsValid = (state) => !!state && typeof state.id === "string" && !!state.id;
+        const syncState = (state) => {
+          window.__cmuxAddressBarFocusState = state;
+          try {
+            if (window.top && window.top !== window) {
+              window.top.postMessage({ cmuxAddressBarFocusState: state }, "*");
+            } else if (window.top) {
+              window.top.__cmuxAddressBarFocusState = state;
+            }
+          } catch (_) {}
+        };
         const isEditable = (el) => {
           if (!el) return false;
           const tag = (el.tagName || "").toLowerCase();
@@ -727,11 +747,14 @@ final class CmuxWebView: WKWebView {
         const readState = () => {
           let state = window.__cmuxAddressBarFocusState;
           try {
-            if ((!state || typeof state.id !== "string" || !state.id) &&
-                window.top && window.top.__cmuxAddressBarFocusState) {
+            if (!stateIsValid(state) && window.top && window.top.__cmuxAddressBarFocusState) {
               state = window.top.__cmuxAddressBarFocusState;
             }
           } catch (_) {}
+          if (!stateIsValid(state) && stateIsValid(nativeFallbackState)) {
+            state = nativeFallbackState;
+            syncState(state);
+          }
           return state;
         };
         const targetFromStoredState = (doc) => {
@@ -774,16 +797,30 @@ final class CmuxWebView: WKWebView {
       }
     })();
     """
+    }
 
-    private static func restoredTextInputInsertScript(text: String) -> String? {
+    private static func restoredTextInputInsertScript(text: String, fallbackStateJSON: String?) -> String? {
         guard let data = try? JSONSerialization.data(withJSONObject: [text], options: []),
               let arrayLiteral = String(data: data, encoding: .utf8) else {
             return nil
         }
+        let fallbackStateLiteral = fallbackStateJSON ?? "null"
         return """
         (() => {
           const text = \(arrayLiteral)[0];
           try {
+            const nativeFallbackState = \(fallbackStateLiteral);
+            const stateIsValid = (state) => !!state && typeof state.id === "string" && !!state.id;
+            const syncState = (state) => {
+              window.__cmuxAddressBarFocusState = state;
+              try {
+                if (window.top && window.top !== window) {
+                  window.top.postMessage({ cmuxAddressBarFocusState: state }, "*");
+                } else if (window.top) {
+                  window.top.__cmuxAddressBarFocusState = state;
+                }
+              } catch (_) {}
+            };
             const isTextInput = (el) => {
               if (!el) return false;
               const tag = (el.tagName || "").toLowerCase();
@@ -807,11 +844,14 @@ final class CmuxWebView: WKWebView {
             const readState = () => {
               let state = window.__cmuxAddressBarFocusState;
               try {
-                if ((!state || typeof state.id !== "string" || !state.id) &&
-                    window.top && window.top.__cmuxAddressBarFocusState) {
+                if (!stateIsValid(state) && window.top && window.top.__cmuxAddressBarFocusState) {
                   state = window.top.__cmuxAddressBarFocusState;
                 }
               } catch (_) {}
+              if (!stateIsValid(state) && stateIsValid(nativeFallbackState)) {
+                state = nativeFallbackState;
+                syncState(state);
+              }
               return state;
             };
             const targetFromStoredState = (doc) => {
@@ -942,7 +982,11 @@ final class CmuxWebView: WKWebView {
     }
 
     func hasRestorableWebContentTextInputFocus() -> Bool {
-        let evaluation = evaluateJavaScriptSynchronously(Self.restorableTextInputFocusScript)
+        let evaluation = evaluateJavaScriptSynchronously(
+            Self.restorableTextInputFocusScript(
+                fallbackStateJSON: restoredWebContentTextInputFocusFallbackJSON
+            )
+        )
         let payload = evaluation.result as? [String: Any]
         let payloadOK = (payload?["ok"] as? Bool) ??
             (payload?["ok"] as? NSNumber)?.boolValue ??
@@ -988,7 +1032,10 @@ final class CmuxWebView: WKWebView {
             return "focusRepairNative"
         }
 
-        guard let script = Self.restoredTextInputInsertScript(text: text) else {
+        guard let script = Self.restoredTextInputInsertScript(
+            text: text,
+            fallbackStateJSON: restoredWebContentTextInputFocusFallbackJSON
+        ) else {
             disarmRestoredWebContentTextInputRepair(reason: "scriptBuildFailed")
             return "focusRepairNativeOnly"
         }
@@ -1010,7 +1057,10 @@ final class CmuxWebView: WKWebView {
     }
 
     private func bridgeRestoredTextInputRepairToActiveElement(text: String) -> String? {
-        guard let script = Self.restoredTextInputInsertScript(text: text) else {
+        guard let script = Self.restoredTextInputInsertScript(
+            text: text,
+            fallbackStateJSON: restoredWebContentTextInputFocusFallbackJSON
+        ) else {
             disarmRestoredWebContentTextInputRepair(reason: "bridgeScriptBuildFailed")
             return nil
         }
