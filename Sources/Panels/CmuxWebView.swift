@@ -906,29 +906,26 @@ final class CmuxWebView: WKWebView {
             "inserted=\(inserted ? 1 : 0) reason=\(reason) error=\(errorDescription)"
         )
 #endif
-        if !insert.completed || insert.error != nil {
+        if !insert.completed || insert.error != nil || !inserted {
             let webIdentifier = ObjectIdentifier(self)
             evaluateJavaScript(script) { [weak self] result, error in
                 let inserted = error == nil &&
                     ((result as? [String: Any])?["inserted"] as? Bool == true)
-#if DEBUG
                 let reason = ((result as? [String: Any])?["reason"] as? String) ?? "nil"
+#if DEBUG
                 let errorDescription = error?.localizedDescription ?? "nil"
                 dlog(
                     "browser.focus.textRepair.bridgeAsync web=\(webIdentifier) " +
                     "inserted=\(inserted ? 1 : 0) reason=\(reason) error=\(errorDescription)"
                 )
 #endif
-                if inserted {
-                    self?.disarmRestoredWebContentTextInputRepair(reason: "bridgeAsyncInserted")
+                if !inserted {
+                    self?.disarmRestoredWebContentTextInputRepair(reason: "bridgeAsyncInsertFailed.\(reason)")
                 }
             }
             return "focusRepairBridgeScheduled"
         }
-        if !inserted {
-            disarmRestoredWebContentTextInputRepair(reason: "bridgeInsertFailed")
-        }
-        return inserted ? "focusRepairBridgeInserted" : nil
+        return "focusRepairBridgeInserted"
     }
 
     private func bridgeRestoredTextInputRepairIfWrapperIsFirstResponder(text: String) -> String? {

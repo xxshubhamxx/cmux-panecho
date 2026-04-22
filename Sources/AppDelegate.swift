@@ -12303,7 +12303,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// through the same app-level shortcut handler used by the local key monitor.
     @discardableResult
     func handleBrowserSurfaceKeyEquivalent(_ event: NSEvent) -> Bool {
-        handleCustomShortcut(event: event)
+        if handlePaneFocusNavigationCommandEvent(
+            event,
+            preferredWindow: event.window ?? NSApp.keyWindow ?? NSApp.mainWindow,
+            source: "browserSurface"
+        ) {
+            return true
+        }
+        return handleCustomShortcut(event: event)
     }
 
     /// AppKit text controls can consume Cmd+Ctrl pane-focus chords before the normal
@@ -12321,10 +12328,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
               preferredWindow?.attachedSheet == nil else {
             return false
         }
-        return handlePaneFocusNavigationShortcut(
+        if handlePaneFocusNavigationShortcut(
             event: event,
             preferredWindow: preferredWindow,
             source: source
+        ) {
+            return true
+        }
+        guard let direction = paneFocusNavigationDirectionIgnoringChordPrefix(event: event) else {
+            return false
+        }
+        return movePaneFocusForShortcut(
+            direction: direction,
+            preferredWindow: preferredWindow,
+            source: "\(source).direct"
         )
     }
 
@@ -12601,6 +12618,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
     }
 
+    private func matchDirectionalShortcutIgnoringChordPrefix(
+        event: NSEvent,
+        action: KeyboardShortcutSettings.Action,
+        arrowGlyph: String,
+        arrowKeyCode: UInt16
+    ) -> Bool {
+        let shortcut = KeyboardShortcutSettings.shortcut(for: action)
+        guard !shortcut.hasChord else { return false }
+        return matchDirectionalShortcut(
+            event: event,
+            stroke: shortcut.firstStroke,
+            arrowGlyph: arrowGlyph,
+            arrowKeyCode: arrowKeyCode
+        )
+    }
+
     @discardableResult
     private func handlePaneFocusNavigationShortcut(
         event: NSEvent,
@@ -12666,6 +12699,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
         }
         return false
+    }
+
+    private func paneFocusNavigationDirectionIgnoringChordPrefix(event: NSEvent) -> NavigationDirection? {
+        if matchDirectionalShortcutIgnoringChordPrefix(
+            event: event,
+            action: .focusLeft,
+            arrowGlyph: "←",
+            arrowKeyCode: 123
+        ) || (ghosttyGotoSplitLeftShortcut.map {
+            matchDirectionalShortcut(event: event, shortcut: $0, arrowGlyph: "←", arrowKeyCode: 123)
+        } ?? false) {
+            return .left
+        }
+        if matchDirectionalShortcutIgnoringChordPrefix(
+            event: event,
+            action: .focusRight,
+            arrowGlyph: "→",
+            arrowKeyCode: 124
+        ) || (ghosttyGotoSplitRightShortcut.map {
+            matchDirectionalShortcut(event: event, shortcut: $0, arrowGlyph: "→", arrowKeyCode: 124)
+        } ?? false) {
+            return .right
+        }
+        if matchDirectionalShortcutIgnoringChordPrefix(
+            event: event,
+            action: .focusUp,
+            arrowGlyph: "↑",
+            arrowKeyCode: 126
+        ) || (ghosttyGotoSplitUpShortcut.map {
+            matchDirectionalShortcut(event: event, shortcut: $0, arrowGlyph: "↑", arrowKeyCode: 126)
+        } ?? false) {
+            return .up
+        }
+        if matchDirectionalShortcutIgnoringChordPrefix(
+            event: event,
+            action: .focusDown,
+            arrowGlyph: "↓",
+            arrowKeyCode: 125
+        ) || (ghosttyGotoSplitDownShortcut.map {
+            matchDirectionalShortcut(event: event, shortcut: $0, arrowGlyph: "↓", arrowKeyCode: 125)
+        } ?? false) {
+            return .down
+        }
+        return nil
     }
 
     @discardableResult

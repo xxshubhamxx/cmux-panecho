@@ -251,6 +251,13 @@ private final class BrowserSearchNativeTextField: NSTextField {
             .intersection(.deviceIndependentFlagsMask)
             .subtracting([.numericPad, .function, .capsLock])
         if flags.contains(.command) {
+            if AppDelegate.shared?.handlePaneFocusNavigationCommandEvent(
+                event,
+                preferredWindow: window,
+                source: "browserFindTextField"
+            ) == true {
+                return true
+            }
             if AppDelegate.shared?.handleBrowserSearchOverlayCommandEvent(
                 event,
                 preferredWindow: window
@@ -357,6 +364,13 @@ private struct BrowserSearchTextFieldRepresentable: NSViewRepresentable {
             if let event = NSApp.currentEvent,
                event.type == .keyDown,
                event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) {
+                if AppDelegate.shared?.handlePaneFocusNavigationCommandEvent(
+                    event,
+                    preferredWindow: textView.window,
+                    source: "browserFindFieldEditor"
+                ) == true {
+                    return true
+                }
                 if AppDelegate.shared?.handleBrowserSearchOverlayCommandEvent(
                     event,
                     preferredWindow: textView.window
