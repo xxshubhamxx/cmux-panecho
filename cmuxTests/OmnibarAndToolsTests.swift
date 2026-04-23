@@ -417,6 +417,24 @@ final class OmnibarStateMachineTests: XCTestCase {
         XCTAssertTrue(effects.shouldBlurToWebView)
     }
 
+    func testEscapeBlursWhenFocusedWithoutEditingEvenIfSuggestionsAreOpen() throws {
+        var state = OmnibarState()
+
+        _ = omnibarReduce(state: &state, event: .focusGained(currentURLString: "https://example.com/"))
+        _ = omnibarReduce(
+            state: &state,
+            event: .suggestionsUpdated([.history(url: "https://example.com/", title: "Example")])
+        )
+        XCTAssertFalse(state.isUserEditing)
+        XCTAssertEqual(state.suggestions.count, 1)
+
+        let effects = omnibarReduce(state: &state, event: .escape)
+
+        XCTAssertTrue(effects.shouldBlurToWebView)
+        XCTAssertFalse(effects.shouldSelectAll)
+        XCTAssertTrue(state.suggestions.isEmpty)
+    }
+
     func testPanelURLChangeDoesNotClobberUserBufferWhileEditing() throws {
         var state = OmnibarState()
         _ = omnibarReduce(state: &state, event: .focusGained(currentURLString: "https://a.test/"))

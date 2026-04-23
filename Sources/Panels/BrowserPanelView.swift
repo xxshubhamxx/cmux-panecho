@@ -3310,10 +3310,9 @@ func omnibarReduce(state: inout OmnibarState, event: OmnibarEvent) -> OmnibarEff
 
     case .escape:
         guard state.isFocused else { break }
-        // Chrome semantics:
-        // - If user input is in progress OR the popup is open: revert to the page URL and select-all.
-        // - Otherwise: exit omnibar focus.
-        if state.isUserEditing || !state.suggestions.isEmpty {
+        // Chrome semantics: Escape exits a Cmd+L focus immediately. It only
+        // stays in the omnibar to revert when the user has edited the buffer.
+        if state.isUserEditing {
             state.isUserEditing = false
             state.buffer = state.currentURLString
             state.suggestions = []
@@ -3321,6 +3320,9 @@ func omnibarReduce(state: inout OmnibarState, event: OmnibarEvent) -> OmnibarEff
             state.selectedSuggestionID = nil
             effects.shouldSelectAll = true
         } else {
+            state.suggestions = []
+            state.selectedSuggestionIndex = 0
+            state.selectedSuggestionID = nil
             effects.shouldBlurToWebView = true
         }
     }
