@@ -2094,17 +2094,52 @@ class TabManager: ObservableObject {
         var resolved = false
         var panelsCancellable: AnyCancellable?
         var readyToken: UUID?
+        var readyPanelId: UUID?
+        var focusObserver: NSObjectProtocol?
+
+        func cancelReadyCallback() {
+            if let readyPanelId,
+               let terminalPanel = workspace.terminalPanel(for: readyPanelId) {
+                terminalPanel.surface.cancelRuntimeReadyCallback(readyToken)
+            }
+            readyToken = nil
+            readyPanelId = nil
+        }
+
+        func cleanupObservers() {
+            cancelReadyCallback()
+            panelsCancellable?.cancel()
+            if let focusObserver {
+                NotificationCenter.default.removeObserver(focusObserver)
+            }
+            focusObserver = nil
+        }
+
+        func armFocusedTerminalReadiness() {
+            guard !resolved else { return }
+            guard let terminalPanel = workspace.focusedTerminalPanel else {
+                cancelReadyCallback()
+                return
+            }
+            guard readyPanelId != terminalPanel.id else { return }
+
+            cancelReadyCallback()
+            readyPanelId = terminalPanel.id
+            terminalPanel.surface.requestBackgroundSurfaceStartIfNeeded()
+            readyToken = terminalPanel.surface.onRuntimeReady {
+                finishIfReady()
+            }
+        }
 
         func finishIfReady() {
             guard !resolved,
                   let terminalPanel = workspace.focusedTerminalPanel,
-                  terminalPanel.surface.surface != nil else { return }
-            resolved = true
-            if let terminalPanel = workspace.focusedTerminalPanel {
-                terminalPanel.surface.cancelRuntimeReadyCallback(readyToken)
+                  terminalPanel.surface.surface != nil else {
+                armFocusedTerminalReadiness()
+                return
             }
-            readyToken = nil
-            panelsCancellable?.cancel()
+            resolved = true
+            cleanupObservers()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 UserDefaults.standard.set(true, forKey: WelcomeSettings.shownKey)
                 terminalPanel.sendText("cmux welcome\n")
@@ -2115,23 +2150,27 @@ class TabManager: ObservableObject {
             .map { _ in () }
             .sink { _ in
                 Task { @MainActor in
+                    armFocusedTerminalReadiness()
                     finishIfReady()
                 }
             }
-        if let terminalPanel = workspace.focusedTerminalPanel {
-            terminalPanel.surface.requestBackgroundSurfaceStartIfNeeded()
-            readyToken = terminalPanel.surface.onRuntimeReady {
+        focusObserver = NotificationCenter.default.addObserver(
+            forName: .ghosttyDidFocusSurface,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let tabId = note.userInfo?[GhosttyNotificationKey.tabId] as? UUID,
+                  tabId == workspace.id else { return }
+            Task { @MainActor in
+                armFocusedTerminalReadiness()
                 finishIfReady()
             }
         }
+        armFocusedTerminalReadiness()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             Task { @MainActor in
-                if let terminalPanel = workspace.focusedTerminalPanel, !resolved {
-                    terminalPanel.surface.cancelRuntimeReadyCallback(readyToken)
-                }
-                readyToken = nil
                 if !resolved {
-                    panelsCancellable?.cancel()
+                    cleanupObservers()
                 }
             }
         }

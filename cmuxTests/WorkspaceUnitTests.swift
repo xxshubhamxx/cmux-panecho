@@ -2623,6 +2623,110 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         }
     }
 
+    func testHiddenWorkspaceRenderSnapshotKeepsMarkdownViewport() throws {
+        let workspace = Workspace()
+        let fileURL = try temporaryMarkdownFile()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        guard let paneId = workspace.paneIds.first else {
+            XCTFail("Expected initial pane")
+            return
+        }
+
+        let result = workspace.performLayoutCommand(
+            .createMarkdown(inPane: paneId, filePath: fileURL.path, focus: true)
+        )
+        guard let markdownPanel = result.markdownPanel else {
+            XCTFail("Expected markdown panel")
+            return
+        }
+
+        let context = WorkspaceLayoutRenderContext(
+            notificationStore: nil,
+            isWorkspaceVisible: false,
+            isWorkspaceInputActive: false,
+            isMinimalMode: false,
+            appearance: PanelAppearance(
+                dividerColor: .clear,
+                unfocusedOverlayNSColor: .clear,
+                unfocusedOverlayOpacity: 0
+            ),
+            workspacePortalPriority: 0,
+            usesWorkspacePaneOverlay: false,
+            showSplitButtons: true
+        )
+
+        let snapshot = workspace.makeLayoutRenderSnapshot(context: context)
+        guard let markdownViewport = viewport(in: snapshot, for: paneId) else {
+            XCTFail("Expected hidden workspace to keep the selected markdown viewport mounted")
+            return
+        }
+
+        XCTAssertEqual(markdownViewport.contentId, markdownPanel.id)
+        if case .markdown = markdownViewport.content {
+        } else {
+            XCTFail("Expected selected markdown viewport content")
+        }
+    }
+
+    func testUnreadPaneRingSettingGatesTerminalContentDescriptor() {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: NotificationPaneRingSettings.enabledKey)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: NotificationPaneRingSettings.enabledKey)
+            } else {
+                defaults.removeObject(forKey: NotificationPaneRingSettings.enabledKey)
+            }
+        }
+
+        let workspace = Workspace()
+        guard let panelId = workspace.focusedPanelId else {
+            XCTFail("Expected focused terminal")
+            return
+        }
+
+        let notificationStore = TerminalNotificationStore.shared
+        notificationStore.replaceNotificationsForTesting([])
+        notificationStore.configureNotificationDeliveryHandlerForTesting { _, _ in }
+        defer {
+            notificationStore.replaceNotificationsForTesting([])
+            notificationStore.resetNotificationDeliveryHandlerForTesting()
+        }
+        notificationStore.addNotification(
+            tabId: workspace.id,
+            surfaceId: panelId,
+            title: "Unread",
+            subtitle: "",
+            body: "Unread terminal"
+        )
+
+        func terminalContentWhenRingSetting(enabled: Bool) -> WorkspaceTerminalPaneContent? {
+            defaults.set(enabled, forKey: NotificationPaneRingSettings.enabledKey)
+            let context = WorkspaceLayoutRenderContext(
+                notificationStore: notificationStore,
+                isWorkspaceVisible: true,
+                isWorkspaceInputActive: true,
+                isMinimalMode: false,
+                appearance: PanelAppearance(
+                    dividerColor: .clear,
+                    unfocusedOverlayNSColor: .clear,
+                    unfocusedOverlayOpacity: 0
+                ),
+                workspacePortalPriority: 0,
+                usesWorkspacePaneOverlay: false,
+                showSplitButtons: true
+            )
+            guard let pane = firstPaneSnapshot(from: workspace.makeLayoutRenderSnapshot(context: context)),
+                  case .terminal(let content) = pane.content else {
+                return nil
+            }
+            return content
+        }
+
+        XCTAssertTrue(terminalContentWhenRingSetting(enabled: true)?.hasUnreadNotification == true)
+        XCTAssertTrue(terminalContentWhenRingSetting(enabled: false)?.hasUnreadNotification == false)
+    }
+
     func testSelectedBrowserRenderSnapshotOmitsViewportAndUsesDirectPaneContent() {
         let workspace = Workspace()
         guard let paneId = workspace.paneIds.first,
@@ -3349,6 +3453,23 @@ final class WorkspaceLayoutSimplificationTests: XCTestCase {
         XCTAssertEqual(controller.tabIds(inPane: paneId), [TabID(id: existingTabId)])
     }
 
+    func testLayoutControllerClosePaneReturnsFalseForUnknownPaneId() throws {
+        let leftPane = PaneState(tabIds: [UUID()])
+        let rightPane = PaneState(tabIds: [UUID()])
+        let controller = WorkspaceLayoutController(
+            rootNode: .split(
+                SplitState(
+                    orientation: .horizontal,
+                    first: .pane(leftPane),
+                    second: .pane(rightPane)
+                )
+            )
+        )
+
+        XCTAssertFalse(controller.closePane(PaneID(id: UUID())))
+        XCTAssertEqual(Set(controller.allPaneIds), Set([leftPane.id, rightPane.id]))
+    }
+
     func testLayoutControllerStartsWithGenuinelyEmptyPane() throws {
         let controller = WorkspaceLayoutController()
         let paneId = try XCTUnwrap(controller.allPaneIds.first, "Expected initial pane")
@@ -4018,6 +4139,43 @@ final class WorkspaceSurfaceRegistryTests: XCTestCase {
         )
 
         XCTAssertTrue(slotView.subviews.isEmpty)
+    }
+
+    func testPlaceholderStaleUnmountDoesNotDiscardMovedHost() {
+        let workspace = Workspace()
+        let paneId = PaneID()
+        let descriptor = placeholderDescriptor(paneId: paneId)
+        let content = WorkspacePaneContent.placeholder(descriptor)
+        let contentId = paneId.id
+        let oldSlotView = WorkspaceLayoutPaneContentSlotView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 220)
+        )
+        let newSlotView = WorkspaceLayoutPaneContentSlotView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 220)
+        )
+
+        workspace.surfaceRegistry.mountContent(
+            content,
+            contentId: contentId,
+            in: oldSlotView,
+            activeDropZone: nil
+        )
+        let hostedView = oldSlotView.subviews.first
+
+        workspace.surfaceRegistry.mountContent(
+            content,
+            contentId: contentId,
+            in: newSlotView,
+            activeDropZone: nil
+        )
+        workspace.surfaceRegistry.unmountContent(
+            content,
+            contentId: contentId,
+            from: oldSlotView
+        )
+
+        XCTAssertTrue(hostedView?.superview === newSlotView)
+        XCTAssertEqual(newSlotView.subviews.count, 1)
     }
 
     func testBrowserMountReusesRetainedContentViewAndUnmountClearsIt() throws {
@@ -5281,6 +5439,15 @@ final class WorkspacePanelGitBranchTests: XCTestCase {
         wait(for: [expectation], timeout: 1.0)
     }
 
+    private func temporaryMarkdownFile() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-panel-git-branch-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let fileURL = root.appendingPathComponent("note.md")
+        try "# workspace\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        return fileURL
+    }
+
     func testBrowserSplitWithFocusFalsePreservesOriginalFocusedPanel() {
         let workspace = Workspace()
         guard let originalFocusedPanelId = workspace.focusedPanelId else {
@@ -5658,6 +5825,51 @@ final class WorkspacePanelGitBranchTests: XCTestCase {
         XCTAssertNotEqual(replacementPanelId, browserPanel.id)
         XCTAssertEqual(replacementBrowser.profileID, browserPanel.profileID)
         XCTAssertTrue(replacementBrowser.shouldRenderWebView)
+        XCTAssertEqual(workspace.selectedSurfaceId(inPane: sourcePaneId), replacementPanelId)
+    }
+
+    func testSplitPaneMovingTabHandlerSelfSplitLastMarkdownCreatesReplacementMarkdown() throws {
+        let workspace = Workspace()
+        let fileURL = try temporaryMarkdownFile()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        guard let sourcePaneId = workspace.focusedPaneId,
+              let originalTerminalId = workspace.focusedPanelId,
+              let markdownPanel = workspace.createMarkdownPanel(
+                inPane: sourcePaneId,
+                filePath: fileURL.path,
+                focus: true
+              ) else {
+            XCTFail("Expected initial pane and markdown surface")
+            return
+        }
+
+        XCTAssertTrue(workspace.closePanel(originalTerminalId, force: true), "Expected bootstrap terminal to close")
+        drainMainQueue()
+        drainMainQueue()
+
+        guard let newPaneId = workspace.layoutInteractionHandlers.splitPaneMovingTabHandler(
+            sourcePaneId,
+            .vertical,
+            TabID(id: markdownPanel.id),
+            false,
+            true
+        ) else {
+            XCTFail("Expected markdown drag self-split to create a new pane")
+            return
+        }
+
+        let sourcePaneSurfaces = workspace.surfaceIds(inPane: sourcePaneId)
+        XCTAssertEqual(sourcePaneSurfaces.count, 1, "Expected source pane to keep a replacement markdown panel")
+        XCTAssertEqual(workspace.surfaceIds(inPane: newPaneId), [markdownPanel.id], "Expected moved markdown in the new pane")
+
+        guard let replacementPanelId = sourcePaneSurfaces.first,
+              let replacementMarkdown = workspace.markdownPanel(for: replacementPanelId) else {
+            XCTFail("Expected replacement markdown panel")
+            return
+        }
+
+        XCTAssertNotEqual(replacementPanelId, markdownPanel.id)
+        XCTAssertEqual(replacementMarkdown.filePath, markdownPanel.filePath)
         XCTAssertEqual(workspace.selectedSurfaceId(inPane: sourcePaneId), replacementPanelId)
     }
 

@@ -270,8 +270,8 @@ final class WorkspaceSurfaceRegistry {
         from slotView: WorkspaceLayoutPaneContentSlotView
     ) {
         let identity = content.mountIdentity(contentId: contentId)
-        retainedHosts[identity]?.unmount(from: slotView)
-        if case .placeholder = identity {
+        let didUnmount = retainedHosts[identity]?.unmount(from: slotView) ?? false
+        if case .placeholder = identity, didUnmount {
             discardRetainedHost(identity)
         }
     }
@@ -370,7 +370,8 @@ private protocol WorkspaceRetainedSurfaceHost: AnyObject {
         onPresentationChange: (() -> Void)?
     )
 
-    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView)
+    @discardableResult
+    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) -> Bool
 
     func reconcileViewportLifecycle(
         content: WorkspacePaneContent,
@@ -461,20 +462,23 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
         lastMountedState = desiredState
     }
 
-    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) {
-        clearHostedView(detachingFrom: slotView)
+    @discardableResult
+    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) -> Bool {
+        let didUnmount = clearHostedView(detachingFrom: slotView)
         slotView.clearContentView()
+        return didUnmount
     }
 
     func prepareForSurfaceRemoval() {
         clearHostedView()
     }
 
-    private func clearHostedView(detachingFrom ownerView: NSView? = nil) {
-        guard let panel = workspace.panels[surfaceId] as? TerminalPanel else { return }
+    @discardableResult
+    private func clearHostedView(detachingFrom ownerView: NSView? = nil) -> Bool {
+        guard let panel = workspace.panels[surfaceId] as? TerminalPanel else { return false }
         let hostedView = panel.hostedView
         if let ownerView, hostedView.superview !== ownerView {
-            return
+            return false
         }
         applyStateTransition(
             on: hostedView,
@@ -492,6 +496,7 @@ private final class WorkspaceTerminalRetainedSurfaceHost: WorkspaceRetainedSurfa
         hostedView.setTriggerFlashHandler(nil)
         hostedView.setPresentationChangeHandler(nil)
         hostedView.removeFromSuperview()
+        return true
     }
 
     private func applyStateTransition(
@@ -578,12 +583,15 @@ private final class WorkspaceBrowserRetainedSurfaceHost: WorkspaceRetainedSurfac
         slotView.installContentView(hostView)
     }
 
-    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) {
-        if hostView.superview === slotView {
+    @discardableResult
+    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) -> Bool {
+        let didUnmount = hostView.superview === slotView
+        if didUnmount {
             hostView.prepareForRemoval(reason: "workspaceHostRemoval")
             hostView.removeFromSuperview()
         }
         slotView.clearContentView()
+        return didUnmount
     }
 
     func prepareForSurfaceRemoval() {
@@ -647,11 +655,14 @@ private final class WorkspaceMarkdownRetainedSurfaceHost: WorkspaceRetainedSurfa
         slotView.installContentView(hostingController.view)
     }
 
-    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) {
-        if hostingController.view.superview === slotView {
+    @discardableResult
+    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) -> Bool {
+        let didUnmount = hostingController.view.superview === slotView
+        if didUnmount {
             hostingController.view.removeFromSuperview()
         }
         slotView.clearContentView()
+        return didUnmount
     }
 
     func prepareForSurfaceRemoval() {
@@ -708,11 +719,14 @@ private final class WorkspacePlaceholderRetainedSurfaceHost: WorkspaceRetainedSu
         slotView.installContentView(hostingController.view)
     }
 
-    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) {
-        if hostingController.view.superview === slotView {
+    @discardableResult
+    func unmount(from slotView: WorkspaceLayoutPaneContentSlotView) -> Bool {
+        let didUnmount = hostingController.view.superview === slotView
+        if didUnmount {
             hostingController.view.removeFromSuperview()
         }
         slotView.clearContentView()
+        return didUnmount
     }
 
     func prepareForSurfaceRemoval() {
@@ -8014,6 +8028,10 @@ final class Workspace: Identifiable, ObservableObject {
         panel.panelType
     }
 
+    private var localizedFallbackPanelTitle: String {
+        String(localized: "panel.displayName.fallback", defaultValue: "Tab")
+    }
+
     private func buildExternalTreeSnapshot(
         from node: SplitNode,
         containerFrame: CGRect,
@@ -8029,7 +8047,7 @@ final class Workspace: Identifiable, ObservableObject {
             )
             let tabs = paneState.tabIds.map { tabId in
                 let resolvedTabId = TabID(id: tabId)
-                let title = layoutTabSnapshot(for: resolvedTabId)?.title ?? "Tab"
+                let title = layoutTabSnapshot(for: resolvedTabId)?.title ?? localizedFallbackPanelTitle
                 return ExternalTab(id: tabId.uuidString, title: title)
             }
             return .pane(
@@ -8128,7 +8146,7 @@ final class Workspace: Identifiable, ObservableObject {
 
     private func resolvedPanelTitle(panelId: UUID, fallback: String) -> String {
         let trimmedFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallbackTitle = trimmedFallback.isEmpty ? "Tab" : trimmedFallback
+        let fallbackTitle = trimmedFallback.isEmpty ? localizedFallbackPanelTitle : trimmedFallback
         if let custom = surfaceStateSnapshot(panelId: panelId).customTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
            !custom.isEmpty {
             return custom
@@ -8332,7 +8350,7 @@ final class Workspace: Identifiable, ObservableObject {
             isSelectedInPane: isSelectedInPane,
             isFocused: context.isWorkspaceInputActive && focusedPanelId == panel.id
         )
-        let showsNotificationRing = Self.shouldShowUnreadIndicator(
+        let showsNotificationRing = NotificationPaneRingSettings.isEnabled() && Self.shouldShowUnreadIndicator(
             hasUnreadNotification: context.notificationStore?.hasVisibleNotificationIndicator(
                 forTabId: id,
                 surfaceId: panel.id
@@ -8433,7 +8451,7 @@ final class Workspace: Identifiable, ObservableObject {
         let paneId = pane.id
         let renderedTabs = pane.tabIds.map { surfaceId in
             let baseTab = layoutTabSnapshot(for: TabID(id: surfaceId))
-                ?? WorkspaceLayout.Tab(id: TabID(id: surfaceId), title: "Tab")
+                ?? WorkspaceLayout.Tab(id: TabID(id: surfaceId), title: localizedFallbackPanelTitle)
             return renderTabChrome(for: baseTab, using: projectionState)
         }
         let actionFacts = WorkspacePaneActionEligibilityFacts(
@@ -8614,17 +8632,12 @@ final class Workspace: Identifiable, ObservableObject {
             from: geometrySnapshot,
             tabBarHeight: splitController.configuration.appearance.tabBarHeight
         )
-        let viewportSnapshots: [WorkspaceLayoutViewportSnapshot]
-        if context.isWorkspaceVisible {
-            viewportSnapshots = makeViewportSnapshots(
-                node: splitController.renderRootNode,
-                projectionState: projectionState,
-                context: context,
-                paneFramesById: viewportFrames
-            )
-        } else {
-            viewportSnapshots = []
-        }
+        let viewportSnapshots = makeViewportSnapshots(
+            node: splitController.renderRootNode,
+            projectionState: projectionState,
+            context: context,
+            paneFramesById: viewportFrames
+        )
         return WorkspaceLayoutRenderSnapshot(
             presentation: WorkspaceLayoutPresentationSnapshot(
                 appearance: splitController.configuration.appearance,
@@ -11210,6 +11223,14 @@ final class Workspace: Identifiable, ObservableObject {
                 url: URL(string: "about:blank"),
                 focus: false,
                 preferredProfileID: browser.profileID
+            )?.id
+        }
+
+        if let markdown = markdownPanel(for: panelId) {
+            return createMarkdownPanel(
+                inPane: sourcePaneId,
+                filePath: markdown.filePath,
+                focus: false
             )?.id
         }
 

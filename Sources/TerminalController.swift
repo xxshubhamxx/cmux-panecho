@@ -3217,11 +3217,15 @@ class TerminalController {
 
     private func resolvedWorkspaceOwner(
         workspaceId: UUID,
-        preferredTabManager: TabManager? = nil
+        preferredTabManager: TabManager? = nil,
+        allowFallbackOutsidePreferred: Bool = true
     ) -> (tabManager: TabManager, workspace: Workspace)? {
         if let preferredTabManager,
            let workspace = preferredTabManager.tabs.first(where: { $0.id == workspaceId }) {
             return (preferredTabManager, workspace)
+        }
+        if preferredTabManager != nil, !allowFallbackOutsidePreferred {
+            return nil
         }
         if let tabManager,
            preferredTabManager !== tabManager,
@@ -4785,13 +4789,18 @@ class TerminalController {
 
     private func v2ResolveWorkspace(params: [String: Any], tabManager: TabManager) -> Workspace? {
         if let wsId = v2UUID(params, "workspace_id") {
-            return resolvedWorkspaceOwner(workspaceId: wsId, preferredTabManager: tabManager)?.workspace
+            return resolvedWorkspaceOwner(
+                workspaceId: wsId,
+                preferredTabManager: tabManager,
+                allowFallbackOutsidePreferred: false
+            )?.workspace
         }
         if let surfaceId = v2UUID(params, "surface_id") ?? v2UUID(params, "tab_id") {
             if let workspace = tabManager.tabs.first(where: { $0.panels[surfaceId] != nil }) {
                 return workspace
             }
-            if let located = AppDelegate.shared?.locateSurface(surfaceId: surfaceId) {
+            if let located = AppDelegate.shared?.locateSurface(surfaceId: surfaceId),
+               located.tabManager === tabManager {
                 return located.tabManager.tabs.first(where: { $0.id == located.workspaceId })
             }
             return nil

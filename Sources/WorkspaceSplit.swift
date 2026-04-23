@@ -446,9 +446,8 @@ struct WorkspaceLayoutRenderContext {
     let showSplitButtons: Bool
 
     func panelVisibleInUI(isSelectedInPane: Bool, isFocused: Bool) -> Bool {
-        _ = isFocused
         guard isWorkspaceVisible else { return false }
-        return isSelectedInPane
+        return isSelectedInPane || isFocused
     }
 
     func panelPresentationFacts(
@@ -478,7 +477,7 @@ struct WorkspacePanelPresentationFacts: Equatable, Sendable {
 
     var isVisibleInUI: Bool {
         guard isWorkspaceVisible else { return false }
-        return isSelectedInPane
+        return isSelectedInPane || isFocused
     }
 
     var wantsFirstResponder: Bool {
@@ -2306,6 +2305,11 @@ final class WorkspaceLayoutController {
     /// - Returns: true if the pane was closed, false if vetoed by delegate
     @discardableResult
     func closePane(_ paneId: PaneID) -> Bool {
+        let paneId = PaneID(id: paneId.id)
+        guard rootNode.findPane(paneId) != nil else {
+            return false
+        }
+
         // Don't close if it's the last pane and not allowed
         if !configuration.allowCloseLastPane && rootNode.allPaneIds.count <= 1 {
             return false
@@ -2316,7 +2320,10 @@ final class WorkspaceLayoutController {
             return false
         }
 
-        performClosePane(PaneID(id: paneId.id))
+        performClosePane(paneId)
+        guard rootNode.findPane(paneId) == nil else {
+            return false
+        }
 
         // Notify delegate
         delegate?.workspaceSplit(didClosePane: paneId)
