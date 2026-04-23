@@ -13,7 +13,7 @@ import {
 } from "./types";
 import { withVmSpan } from "../telemetry";
 
-const DEFAULT_WS_TEMPLATE = "cmuxd-ws:sudofix";
+export const DEFAULT_E2B_WS_TEMPLATE = "cmuxd-ws:sudofix";
 const CMUXD_WS_PORT = 7777;
 const CMUXD_WS_LEASE_PATH = "/tmp/cmux/attach-lease.json";
 const CMUXD_WS_LEASE_TTL_SECONDS = 5 * 60;
@@ -23,7 +23,7 @@ const DEFAULT_SANDBOX_ENVS = { LANG: "C.UTF-8" };
 // E2B does not expose raw TCP, so interactive attach requires the cmuxd-remote WS image.
 const DEFAULT_TEMPLATE =
   process.env.E2B_CMUXD_WS_TEMPLATE ??
-  DEFAULT_WS_TEMPLATE;
+  DEFAULT_E2B_WS_TEMPLATE;
 
 export class E2BProvider implements VMProvider {
   readonly id = "e2b" as const;

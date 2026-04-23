@@ -1,9 +1,9 @@
-import { E2BProvider } from "./e2b";
-import { FreestyleProvider } from "./freestyle";
+import { E2BProvider, DEFAULT_E2B_WS_TEMPLATE } from "./e2b";
+import { FreestyleProvider, DEFAULT_FREESTYLE_SNAPSHOT_ID } from "./freestyle";
 import type { ProviderId, VMProvider } from "./types";
 
 export * from "./types";
-export { E2BProvider, FreestyleProvider };
+export { DEFAULT_E2B_WS_TEMPLATE, DEFAULT_FREESTYLE_SNAPSHOT_ID, E2BProvider, FreestyleProvider };
 
 let registry: Map<ProviderId, VMProvider> | null = null;
 

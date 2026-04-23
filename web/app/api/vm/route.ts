@@ -2,7 +2,12 @@
 // route exists so curl + tests can exercise the service without speaking the full RivetKit
 // protocol. Swift clients talk to /api/rivet/* directly and skip this file.
 
-import { defaultProviderId, type ProviderId } from "../../../services/vms/drivers";
+import {
+  DEFAULT_E2B_WS_TEMPLATE,
+  DEFAULT_FREESTYLE_SNAPSHOT_ID,
+  defaultProviderId,
+  type ProviderId,
+} from "../../../services/vms/drivers";
 import {
   jsonResponse,
   withAuthedVmApiRoute,
@@ -115,8 +120,7 @@ export async function POST(request: Request): Promise<Response> {
 function defaultImageFor(provider: ProviderId): string {
   if (provider === "e2b") {
     return process.env.E2B_CMUXD_WS_TEMPLATE ??
-      "cmuxd-ws:sudofix";
+      DEFAULT_E2B_WS_TEMPLATE;
   }
-  // Freestyle default populated when its snapshot lands.
-  return process.env.FREESTYLE_SANDBOX_SNAPSHOT ?? "";
+  return process.env.FREESTYLE_SANDBOX_SNAPSHOT?.trim() || DEFAULT_FREESTYLE_SNAPSHOT_ID;
 }

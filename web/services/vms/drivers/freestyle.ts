@@ -18,7 +18,11 @@ import {
 
 // Default cmux-sandbox snapshot. Produced by scratch/vm-experiments/images/build-freestyle.ts.
 // Override via FREESTYLE_SANDBOX_SNAPSHOT. Image bakes sshd + cmuxd-remote + mutagen-agent.
-const DEFAULT_SNAPSHOT_ID = () => process.env.FREESTYLE_SANDBOX_SNAPSHOT ?? "";
+export const DEFAULT_FREESTYLE_SNAPSHOT_ID = "sc-4t27vve1xgwyewhxtbzj";
+
+function defaultSnapshotId(): string {
+  return process.env.FREESTYLE_SANDBOX_SNAPSHOT?.trim() || DEFAULT_FREESTYLE_SNAPSHOT_ID;
+}
 
 // Freestyle VMs reach the outside world only via their SSH gateway, which terminates on
 // `vm-ssh.freestyle.sh:22`. `ssh <vmId>+<user>@vm-ssh.freestyle.sh` authenticates against
@@ -66,7 +70,7 @@ export class FreestyleProvider implements VMProvider {
   readonly id = "freestyle" as const;
 
   async create(options: CreateOptions): Promise<VMHandle> {
-    const image = options.image || DEFAULT_SNAPSHOT_ID();
+    const image = options.image || defaultSnapshotId();
     return withVmSpan(
       "cmux.vm.provider.create",
       {
