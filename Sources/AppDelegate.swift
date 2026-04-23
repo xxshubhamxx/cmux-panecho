@@ -9087,8 +9087,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         updates["browserPageTitle"] = browserPanel.webView.title?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         updates["browserPageURL"] = browserPanel.preferredURLStringForOmnibar() ?? ""
-        updates["webViewRestoredTextRepairArmed"] = "false"
-        updates["webViewRestoredTextRepairLastReason"] = "native-only"
         if let firstResponder = browserPanel.webView.window?.firstResponder {
             updates["webViewFirstResponderType"] = String(describing: type(of: firstResponder))
             if let firstResponderView = firstResponder as? NSView {
@@ -9316,12 +9314,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
               secondaryCenterY: -1,
               activeId: active && typeof active.id === "string" ? active.id : "",
               activeTag: active && active.tagName ? active.tagName.toLowerCase() : "",
-              trackerInstalled: window.__cmuxAddressBarFocusTrackerInstalled === true,
-              trackedStateId:
-                window.__cmuxAddressBarFocusState &&
-                typeof window.__cmuxAddressBarFocusState.id === "string"
-                  ? window.__cmuxAddressBarFocusState.id
-                  : "",
               readyState: String(document.readyState || "")
             };
           };
@@ -9397,26 +9389,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
               input.setSelectionRange(end, end);
             }
 
-            let trackedFocusId = input.getAttribute("data-cmux-addressbar-focus-id");
-            if (!trackedFocusId) {
-              trackedFocusId = "cmux-ui-test-focus-input-tracked";
-              input.setAttribute("data-cmux-addressbar-focus-id", trackedFocusId);
-            }
-            const selectionStart = typeof input.selectionStart === "number" ? input.selectionStart : null;
-            const selectionEnd = typeof input.selectionEnd === "number" ? input.selectionEnd : null;
-            if (
-              !window.__cmuxAddressBarFocusState ||
-              typeof window.__cmuxAddressBarFocusState.id !== "string" ||
-              window.__cmuxAddressBarFocusState.id !== trackedFocusId
-            ) {
-              window.__cmuxAddressBarFocusState = {
-                id: trackedFocusId,
-                elementId: input.id || null,
-                selectionStart,
-                selectionEnd
-              };
-            }
-
             const secondaryRect = secondaryInput.getBoundingClientRect();
             const viewportWidth = Math.max(Number(window.innerWidth) || 0, 1);
             const viewportHeight = Math.max(Number(window.innerHeight) || 0, 1);
@@ -9437,12 +9409,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
               secondaryCenterY,
               activeId: active && typeof active.id === "string" ? active.id : "",
               activeTag: active && active.tagName ? active.tagName.toLowerCase() : "",
-              trackerInstalled: window.__cmuxAddressBarFocusTrackerInstalled === true,
-              trackedStateId:
-                window.__cmuxAddressBarFocusState &&
-                typeof window.__cmuxAddressBarFocusState.id === "string"
-                  ? window.__cmuxAddressBarFocusState.id
-                  : "",
               readyState: String(document.readyState || "")
             };
           };
@@ -9510,8 +9476,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let secondaryCenterX = (payload?["secondaryCenterX"] as? NSNumber)?.doubleValue ?? -1
             let secondaryCenterY = (payload?["secondaryCenterY"] as? NSNumber)?.doubleValue ?? -1
             let activeId = (payload?["activeId"] as? String) ?? ""
-            let trackerInstalled = (payload?["trackerInstalled"] as? Bool) ?? false
-            let trackedStateId = (payload?["trackedStateId"] as? String) ?? ""
             let readyState = (payload?["readyState"] as? String) ?? ""
             var secondaryClickOffsetX = -1.0
             var secondaryClickOffsetY = -1.0
@@ -9538,7 +9502,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                !inputId.isEmpty,
                !secondaryInputId.isEmpty,
                inputId == activeId,
-               !trackedStateId.isEmpty,
                secondaryCenterX > 0,
                secondaryCenterX < 1,
                secondaryCenterY > 0,
@@ -9554,8 +9517,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     "webInputFocusSecondaryClickOffsetX": "\(secondaryClickOffsetX)",
                     "webInputFocusSecondaryClickOffsetY": "\(secondaryClickOffsetY)",
                     "webInputFocusActiveElementId": activeId,
-                    "webInputFocusTrackerInstalled": trackerInstalled ? "true" : "false",
-                    "webInputFocusTrackedStateId": trackedStateId,
                     "webInputFocusReadyState": readyState
                 ])
                 return
@@ -9586,9 +9547,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     "\(keyPrefix)ActiveElementId": snapshot["id"] ?? "",
                     "\(keyPrefix)ActiveElementTag": snapshot["tag"] ?? "",
                     "\(keyPrefix)ActiveElementType": snapshot["type"] ?? "",
-                    "\(keyPrefix)ActiveElementEditable": snapshot["editable"] ?? "false",
-                    "\(keyPrefix)TrackedFocusStateId": snapshot["trackedFocusStateId"] ?? "",
-                    "\(keyPrefix)FocusTrackerInstalled": snapshot["focusTrackerInstalled"] ?? "false"
+                    "\(keyPrefix)ActiveElementEditable": snapshot["editable"] ?? "false"
                 ])
             }
         }
@@ -9619,9 +9578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                   id: "",
                   tag: "",
                   type: "",
-                  editable: "false",
-                  trackedFocusStateId: "",
-                  focusTrackerInstalled: window.__cmuxAddressBarFocusTrackerInstalled === true ? "true" : "false"
+                  editable: "false"
                 };
               }
               const tag = (active.tagName || "").toLowerCase();
@@ -9634,23 +9591,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 id: typeof active.id === "string" ? active.id : "",
                 tag,
                 type,
-                editable: editable ? "true" : "false",
-                trackedFocusStateId:
-                  window.__cmuxAddressBarFocusState &&
-                  typeof window.__cmuxAddressBarFocusState.id === "string"
-                    ? window.__cmuxAddressBarFocusState.id
-                    : "",
-                focusTrackerInstalled:
-                  window.__cmuxAddressBarFocusTrackerInstalled === true ? "true" : "false"
+                editable: editable ? "true" : "false"
               };
             } catch (_) {
               return {
                 id: "",
                 tag: "",
                 type: "",
-                editable: "false",
-                trackedFocusStateId: "",
-                focusTrackerInstalled: "false"
+                editable: "false"
               };
             }
           };
@@ -9714,9 +9662,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 "id": (payload?["id"] as? String) ?? "",
                 "tag": (payload?["tag"] as? String) ?? "",
                 "type": (payload?["type"] as? String) ?? "",
-                "editable": (payload?["editable"] as? String) ?? "false",
-                "trackedFocusStateId": (payload?["trackedFocusStateId"] as? String) ?? "",
-                "focusTrackerInstalled": (payload?["focusTrackerInstalled"] as? String) ?? "false"
+                "editable": (payload?["editable"] as? String) ?? "false"
             ])
         }
     }
@@ -11470,7 +11416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         if matchConfiguredShortcut(event: event, action: .renameTab) {
             // Keep Cmd+R browser reload behavior when a browser panel is focused.
-            if tabManager?.focusedBrowserPanel != nil {
+            if focusedBrowserPanelForShortcutEvent(event) != nil {
                 return false
             }
             let targetWindow = commandPaletteTargetWindow ?? event.window ?? NSApp.keyWindow ?? NSApp.mainWindow
@@ -11588,7 +11534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if matchConfiguredShortcut(event: event, action: .focusBrowserAddressBar) {
-            if let focusedPanel = tabManager?.focusedBrowserPanel {
+            if let focusedPanel = focusedBrowserPanelForShortcutEvent(event) {
                 focusBrowserAddressBar(in: focusedPanel)
                 return true
             }
@@ -11604,7 +11550,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if matchConfiguredShortcut(event: event, action: .browserBack) {
-            guard let focusedBrowserPanel = tabManager?.focusedBrowserPanel else {
+            guard let focusedBrowserPanel = focusedBrowserPanelForShortcutEvent(event) else {
                 return false
             }
             focusedBrowserPanel.goBack()
@@ -11612,7 +11558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if matchConfiguredShortcut(event: event, action: .browserForward) {
-            guard let focusedBrowserPanel = tabManager?.focusedBrowserPanel else {
+            guard let focusedBrowserPanel = focusedBrowserPanelForShortcutEvent(event) else {
                 return false
             }
             focusedBrowserPanel.goForward()
@@ -11620,7 +11566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if matchConfiguredShortcut(event: event, action: .browserReload) {
-            guard let focusedBrowserPanel = tabManager?.focusedBrowserPanel else {
+            guard let focusedBrowserPanel = focusedBrowserPanelForShortcutEvent(event) else {
                 return false
             }
             focusedBrowserPanel.reload()
@@ -11634,7 +11580,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #if DEBUG
             logDeveloperToolsShortcutSnapshot(phase: "toggle.pre", event: event)
 #endif
-            let didHandle = tabManager?.toggleDeveloperToolsFocusedBrowser() ?? false
+            let didHandle = focusedBrowserPanelForShortcutEvent(event)?.toggleDeveloperTools() ?? false
 #if DEBUG
             logDeveloperToolsShortcutSnapshot(phase: "toggle.post", event: event, didHandle: didHandle)
             DispatchQueue.main.async { [weak self] in
@@ -11649,7 +11595,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #if DEBUG
             logDeveloperToolsShortcutSnapshot(phase: "console.pre", event: event)
 #endif
-            let didHandle = tabManager?.showJavaScriptConsoleFocusedBrowser() ?? false
+            let didHandle = focusedBrowserPanelForShortcutEvent(event)?.showDeveloperToolsConsole() ?? false
 #if DEBUG
             logDeveloperToolsShortcutSnapshot(phase: "console.post", event: event, didHandle: didHandle)
             DispatchQueue.main.async { [weak self] in
@@ -11667,15 +11613,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if matchConfiguredShortcut(event: event, action: .browserZoomIn) {
-            return tabManager?.zoomInFocusedBrowser() ?? false
+            return focusedBrowserPanelForShortcutEvent(event)?.zoomIn() ?? false
         }
 
         if matchConfiguredShortcut(event: event, action: .browserZoomOut) {
-            return tabManager?.zoomOutFocusedBrowser() ?? false
+            return focusedBrowserPanelForShortcutEvent(event)?.zoomOut() ?? false
         }
 
         if matchConfiguredShortcut(event: event, action: .browserZoomReset) {
-            return tabManager?.resetZoomFocusedBrowser() ?? false
+            return focusedBrowserPanelForShortcutEvent(event)?.resetZoom() ?? false
         }
 
         if matchConfiguredShortcut(event: event, action: .find) {
@@ -11711,6 +11657,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         if matchConfiguredShortcut(event: event, action: .useSelectionForFind) {
+            guard !shouldLetFocusedBrowserOwnFindShortcut(event) else {
+                return false
+            }
             tabManager?.searchSelection()
             return true
         }
@@ -13414,10 +13363,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         browserPanelOwning(webView)?.searchState != nil
     }
 
+    private func focusedBrowserPanelForShortcutEvent(_ event: NSEvent) -> BrowserPanel? {
+        let shortcutWindow = resolvedShortcutEventWindow(event) ?? NSApp.keyWindow ?? NSApp.mainWindow
+        if let shortcutWindow,
+           let responder = shortcutWindow.firstResponder,
+           let responderWebView = NSWindow.cmuxOwningWebView(for: responder, in: shortcutWindow, event: event),
+           let responderPanel = browserPanelOwning(responderWebView) {
+            return responderPanel
+        }
+
+        guard let context = preferredMainWindowContextForShortcutRouting(event: event),
+              let workspace = context.tabManager.selectedWorkspace,
+              let panelId = workspace.focusedPanelId else {
+            return nil
+        }
+        return workspace.browserPanel(for: panelId)
+    }
+
     private func shouldLetFocusedBrowserOwnFindShortcut(_ event: NSEvent) -> Bool {
         let shortcutWindow = resolvedShortcutEventWindow(event) ?? NSApp.keyWindow ?? NSApp.mainWindow
         let shortcutResponder = shortcutWindow?.firstResponder
-        guard let focusedBrowserPanel = tabManager?.focusedBrowserPanel,
+        guard let focusedBrowserPanel = focusedBrowserPanelForShortcutEvent(event),
               let owningWebView = focusedBrowserPanel.webView as? CmuxWebView else {
             return false
         }
@@ -15145,7 +15111,7 @@ private extension NSWindow {
         return parts.joined(separator: "+")
     }
 
-    private static func cmuxOwningWebView(for responder: NSResponder) -> CmuxWebView? {
+    static func cmuxOwningWebView(for responder: NSResponder) -> CmuxWebView? {
         if let webView = responder as? CmuxWebView {
             return webView
         }
@@ -15172,7 +15138,7 @@ private extension NSWindow {
         return nil
     }
 
-    private static func cmuxOwningWebView(
+    static func cmuxOwningWebView(
         for responder: NSResponder,
         in window: NSWindow,
         event: NSEvent?
@@ -15201,7 +15167,7 @@ private extension NSWindow {
         return cmuxTrackedOwningWebView(for: textView)
     }
 
-    private static func cmuxOwningWebView(for view: NSView) -> CmuxWebView? {
+    static func cmuxOwningWebView(for view: NSView) -> CmuxWebView? {
         if let webView = view as? CmuxWebView {
             return webView
         }
