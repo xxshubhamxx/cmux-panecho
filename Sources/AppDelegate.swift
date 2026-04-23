@@ -9133,7 +9133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard gotoSplitUITestObservers.isEmpty else { return }
 
         gotoSplitUITestObservers.append(NotificationCenter.default.addObserver(
-            forName: .browserFocusAddressBar,
+            forName: .browserDidFocusAddressBar,
             object: nil,
             queue: .main
         ) { [weak self] notification in
