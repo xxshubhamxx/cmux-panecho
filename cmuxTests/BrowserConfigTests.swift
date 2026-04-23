@@ -245,6 +245,25 @@ final class CmuxWebViewKeyEquivalentTests: XCTestCase {
         XCTAssertTrue(forwardedToWebKit)
     }
 
+    func testSpaceKeyEquivalentBypassesNativeWebKitPathWhenWebViewIsFirstResponder() throws {
+        installCmuxUnitTestWKWebViewPerformKeyEquivalentOverride()
+        defer { cmuxUnitTestWKWebViewPerformKeyEquivalentHook = nil }
+        let webView = CmuxWebView(frame: .zero, configuration: WKWebViewConfiguration())
+
+        for modifiers in [NSEvent.ModifierFlags(), NSEvent.ModifierFlags.shift] {
+            let event = try XCTUnwrap(makeKeyDownEvent(key: " ", modifiers: modifiers, keyCode: 49))
+            var forwardedToWebKit = false
+            cmuxUnitTestWKWebViewPerformKeyEquivalentHook = { currentWebView, currentEvent in
+                guard currentWebView === webView, currentEvent === event else { return nil }
+                forwardedToWebKit = true
+                return true
+            }
+
+            XCTAssertFalse(webView.performKeyEquivalent(with: event))
+            XCTAssertFalse(forwardedToWebKit, "Space should proceed to keyDown, not WebKit key-equivalent handling")
+        }
+    }
+
     func testCmdReturnDoesNotRouteToMainMenuWhenWebViewIsFirstResponder() {
         let spy = ActionSpy()
         installMenu(spy: spy, key: "\r", modifiers: [.command])
