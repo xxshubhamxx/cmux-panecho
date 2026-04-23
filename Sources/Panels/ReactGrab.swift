@@ -186,7 +186,9 @@ enum ReactGrabPastebackContentExtractor {
                 }
             }
             if (element.tagName === 'A' && !hasBlockChild(element)) {
-                var href = element.getAttribute('href') || element.href || '';
+                var href = element.hasAttribute('href')
+                    ? (element.getAttribute('href') || '')
+                    : (element.href || '');
                 var linkText = joinInlineParts(Array.prototype.map.call(element.childNodes, renderInline)) || textFromNode(element);
                 if (!href) return linkText;
                 return '[' + (linkText || href) + '](' + href + ')';

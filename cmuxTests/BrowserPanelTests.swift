@@ -468,6 +468,37 @@ final class BrowserPanelReactGrabBridgeTests: XCTestCase {
             """
         )
     }
+
+    func testPastebackExtractorTreatsEmptyAnchorHrefAsPlainText() async throws {
+        let panel = BrowserPanel(workspaceId: UUID())
+        let html = """
+        <div id="target">
+          <p><a href="">Start Deploying</a></p>
+          <p><a>Plain Anchor</a></p>
+        </div>
+        """
+        let htmlLiteral = try XCTUnwrap(cmuxJavaScriptStringLiteral(html))
+        let fallbackLiteral = try XCTUnwrap(cmuxJavaScriptStringLiteral("fallback"))
+
+        let result = try await panel.evaluateJavaScript(
+            """
+            document.body.innerHTML = \(htmlLiteral);
+            \(ReactGrabPastebackContentExtractor.invocationScript(
+                elementsExpression: "[document.getElementById('target')]",
+                fallbackContentLiteral: fallbackLiteral
+            ))
+            """
+        ) as? String
+
+        XCTAssertEqual(
+            result,
+            """
+            Start Deploying
+
+            Plain Anchor
+            """
+        )
+    }
 }
 
 
