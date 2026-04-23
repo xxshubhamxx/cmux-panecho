@@ -16,6 +16,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(webRoot, "..");
 const buildRoot = path.join(webRoot, ".cmux-cloud-build");
+const UTF8_LOCALE = "C.UTF-8";
+const CLOUD_SHELL_PACKAGES = ["bash", "ca-certificates", "curl", "git", "sudo"];
+const PRIMARY_LINUX_USER = "cmux";
 
 function argValue(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -79,16 +82,13 @@ async function buildE2BTemplate(tag: string, daemonPath: string, skipCache: bool
   const fileContextPath = path.dirname(daemonPath);
   const template = Template({ fileContextPath })
     .fromUbuntuImage("24.04")
-    .aptInstall(["bash", "ca-certificates", "curl", "git"], { noInstallRecommends: true })
-    .setEnvs({ LANG: "C.UTF-8" })
+    .aptInstall(CLOUD_SHELL_PACKAGES, { noInstallRecommends: true })
+    .setEnvs({ LANG: UTF8_LOCALE })
     .copy(path.basename(daemonPath), "/usr/local/bin/cmuxd-remote", {
       forceUpload: true,
       mode: 0o755,
     })
-    .runCmd([
-      "useradd -m -s /bin/bash cmux || true",
-      "install -d -m 0700 /tmp/cmux",
-    ], { user: "root" })
+    .runCmd(cloudRootSetupCommands(), { user: "root" })
     .setStartCmd(
       "/usr/local/bin/cmuxd-remote serve --ws --listen 0.0.0.0:7777 --auth-lease-file /tmp/cmux/attach-lease.json --shell /bin/bash",
       waitForURL("http://127.0.0.1:7777/healthz", 200),
@@ -115,14 +115,7 @@ async function buildFreestyleSnapshot(tag: string, daemonPath: string, skipCache
     name,
     template: {
       baseImage: {
-        dockerfileContent: [
-          "FROM ubuntu:24.04",
-          "ENV LANG=C.UTF-8",
-          "RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bash ca-certificates curl git && rm -rf /var/lib/apt/lists/*",
-          `RUN curl -fsSL ${shellQuote(daemonURL)} -o /usr/local/bin/cmuxd-remote && chmod 0755 /usr/local/bin/cmuxd-remote`,
-          "RUN useradd -m -s /bin/bash cmux || true",
-          "RUN install -d -m 0700 /tmp/cmux",
-        ].join("\n"),
+        dockerfileContent: freestyleBaseDockerfileContent(daemonURL),
       },
       ports: [{ port: 443, targetPort: 7777 }],
       systemd: {
@@ -146,6 +139,26 @@ async function buildFreestyleSnapshot(tag: string, daemonPath: string, skipCache
     daemonURL: daemonURL.includes("X-Amz-") ? "<presigned-r2-url>" : daemonURL,
     result,
   };
+}
+
+function cloudRootSetupCommands(): string[] {
+  return [
+    `useradd -m -s /bin/bash ${PRIMARY_LINUX_USER} || true`,
+    `printf '${PRIMARY_LINUX_USER} ALL=(ALL) NOPASSWD:ALL\\n' > /etc/sudoers.d/90-${PRIMARY_LINUX_USER}-nopasswd`,
+    `chmod 0440 /etc/sudoers.d/90-${PRIMARY_LINUX_USER}-nopasswd`,
+    "if id -u user >/dev/null 2>&1; then printf 'user ALL=(ALL) NOPASSWD:ALL\\n' > /etc/sudoers.d/91-user-nopasswd && chmod 0440 /etc/sudoers.d/91-user-nopasswd; fi",
+    "install -d -m 0700 /tmp/cmux",
+  ];
+}
+
+function freestyleBaseDockerfileContent(daemonURL: string): string {
+  return [
+    "FROM ubuntu:24.04",
+    `ENV LANG=${UTF8_LOCALE}`,
+    `RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${CLOUD_SHELL_PACKAGES.join(" ")} && rm -rf /var/lib/apt/lists/*`,
+    `RUN curl -fsSL ${shellQuote(daemonURL)} -o /usr/local/bin/cmuxd-remote && chmod 0755 /usr/local/bin/cmuxd-remote`,
+    ...cloudRootSetupCommands().map((command) => `RUN ${command}`),
+  ].join("\n");
 }
 
 async function remoteDaemonBuildURL(tag: string, daemonPath: string): Promise<string> {

@@ -13,7 +13,7 @@ import {
 } from "./types";
 import { withVmSpan } from "../telemetry";
 
-const DEFAULT_WS_TEMPLATE = "cmuxd-ws:utf8fix";
+const DEFAULT_WS_TEMPLATE = "cmuxd-ws:sudofix";
 const CMUXD_WS_PORT = 7777;
 const CMUXD_WS_LEASE_PATH = "/tmp/cmux/attach-lease.json";
 const CMUXD_WS_LEASE_TTL_SECONDS = 5 * 60;
