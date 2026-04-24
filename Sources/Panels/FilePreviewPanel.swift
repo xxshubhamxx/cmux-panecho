@@ -11,8 +11,9 @@ import UniformTypeIdentifiers
 private enum FilePreviewInteraction {
     static let zoomStep: CGFloat = 1.25
 
-    static func hasCommandModifier(_ event: NSEvent) -> Bool {
-        event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
+    static func hasZoomModifier(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return flags.contains(.option) || flags.contains(.command)
     }
 
     static func zoomFactor(forScroll event: NSEvent) -> CGFloat {
@@ -267,6 +268,7 @@ final class FilePreviewPanel: Panel, ObservableObject {
 
     let previewMode: FilePreviewMode
     private var originalTextContent = ""
+    private var textEncoding: String.Encoding = .utf8
     private weak var textView: NSTextView?
 
     var fileURL: URL {
@@ -333,8 +335,9 @@ final class FilePreviewPanel: Panel, ObservableObject {
                 isFileUnavailable = true
                 return
             }
-            textContent = decoded
-            originalTextContent = decoded
+            textContent = decoded.content
+            originalTextContent = decoded.content
+            textEncoding = decoded.encoding
             isDirty = false
             isFileUnavailable = false
         } catch {
@@ -345,7 +348,9 @@ final class FilePreviewPanel: Panel, ObservableObject {
     func saveTextContent() {
         guard previewMode == .text else { return }
         do {
-            try textContent.write(to: fileURL, atomically: true, encoding: .utf8)
+            let currentContent = textView?.string ?? textContent
+            textContent = currentContent
+            try currentContent.write(to: fileURL, atomically: true, encoding: textEncoding)
             originalTextContent = textContent
             isDirty = false
             isFileUnavailable = false
@@ -354,14 +359,17 @@ final class FilePreviewPanel: Panel, ObservableObject {
         }
     }
 
-    private static func decodeText(_ data: Data) -> String? {
+    private static func decodeText(_ data: Data) -> (content: String, encoding: String.Encoding)? {
         if let decoded = String(data: data, encoding: .utf8) {
-            return decoded
+            return (decoded, .utf8)
         }
         if let decoded = String(data: data, encoding: .utf16) {
-            return decoded
+            return (decoded, .utf16)
         }
-        return String(data: data, encoding: .isoLatin1)
+        if let decoded = String(data: data, encoding: .isoLatin1) {
+            return (decoded, .isoLatin1)
+        }
+        return nil
     }
 }
 
@@ -377,8 +385,10 @@ struct FilePreviewPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
+            if panel.previewMode != .pdf {
+                header
+                Divider()
+            }
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -603,7 +613,7 @@ private final class SavingTextView: NSTextView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard FilePreviewInteraction.hasCommandModifier(event) else {
+        guard FilePreviewInteraction.hasZoomModifier(event) else {
             super.scrollWheel(with: event)
             return
         }
@@ -646,12 +656,38 @@ private struct FilePreviewPDFView: NSViewRepresentable {
     }
 }
 
-private final class FilePreviewPDFContainerView: NSView {
+private enum FilePreviewPDFSidebarMode {
+    case thumbnails
+    case tableOfContents
+}
+
+private enum FilePreviewPDFDisplayMode {
+    case continuousScroll
+    case singlePage
+    case twoPages
+}
+
+private final class FilePreviewPDFContainerView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
+    private let splitView = NSSplitView()
+    private let sidebarHost = NSVisualEffectView()
+    private let contentHost = NSView()
     private let pdfView = FilePreviewMagnifyingPDFView()
+    private let thumbnailView = PDFThumbnailView()
+    private let outlineScrollView = NSScrollView()
+    private let outlineView = NSOutlineView()
+    private let outlinePlaceholder = NSTextField(wrappingLabelWithString: "")
+    private let sidebarMenuButton = NSButton(title: "", target: nil, action: nil)
+    private let leftFloatingChrome = NSVisualEffectView()
+    private let rightFloatingChrome = NSVisualEffectView()
+    private let zoomControl = NSSegmentedControl()
+    private let titleLabel = NSTextField(labelWithString: "")
     private let pageLabel = NSTextField(labelWithString: "")
+    private var sidebarWidthConstraint: NSLayoutConstraint?
     private var currentURL: URL?
-    private var previousButton: NSButton!
-    private var nextButton: NSButton!
+    private var outlineRoot: PDFOutline?
+    private var sidebarMode: FilePreviewPDFSidebarMode = .thumbnails
+    private var displayMode: FilePreviewPDFDisplayMode = .continuousScroll
+    private var isSidebarVisible = true
     private var rotationAccumulator: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
@@ -670,84 +706,24 @@ private final class FilePreviewPDFContainerView: NSView {
     func setURL(_ url: URL) {
         guard currentURL != url else { return }
         currentURL = url
-        pdfView.document = PDFDocument(url: url)
+        let document = PDFDocument(url: url)
+        pdfView.document = document
+        outlineRoot = document?.outlineRoot
+        titleLabel.stringValue = url.lastPathComponent
+        rotationAccumulator = 0
         pdfView.autoScales = true
+        applyDisplayMode()
+        outlineView.reloadData()
+        updateSidebarContent()
         updatePageControls()
     }
 
     private func setupView() {
         translatesAutoresizingMaskIntoConstraints = false
-
-        previousButton = makeToolbarButton(
-            systemSymbolName: "chevron.left",
-            fallbackTitle: "<",
-            label: String(localized: "filePreview.pdf.previousPage", defaultValue: "Previous Page"),
-            action: #selector(previousPage)
-        )
-        nextButton = makeToolbarButton(
-            systemSymbolName: "chevron.right",
-            fallbackTitle: ">",
-            label: String(localized: "filePreview.pdf.nextPage", defaultValue: "Next Page"),
-            action: #selector(nextPage)
-        )
-        let zoomOutButton = makeToolbarButton(
-            systemSymbolName: "minus.magnifyingglass",
-            fallbackTitle: "-",
-            label: String(localized: "filePreview.pdf.zoomOut", defaultValue: "Zoom Out"),
-            action: #selector(zoomOut)
-        )
-        let zoomInButton = makeToolbarButton(
-            systemSymbolName: "plus.magnifyingglass",
-            fallbackTitle: "+",
-            label: String(localized: "filePreview.pdf.zoomIn", defaultValue: "Zoom In"),
-            action: #selector(zoomIn)
-        )
-        let fitButton = makeToolbarButton(
-            systemSymbolName: "arrow.up.left.and.arrow.down.right",
-            fallbackTitle: "Fit",
-            label: String(localized: "filePreview.pdf.zoomToFit", defaultValue: "Zoom to Fit"),
-            action: #selector(zoomToFit)
-        )
-        let actualSizeButton = makeToolbarButton(
-            systemSymbolName: "1.magnifyingglass",
-            fallbackTitle: "1x",
-            label: String(localized: "filePreview.pdf.actualSize", defaultValue: "Actual Size"),
-            action: #selector(actualSize)
-        )
-        let rotateLeftButton = makeToolbarButton(
-            systemSymbolName: "rotate.left",
-            fallbackTitle: "L",
-            label: String(localized: "filePreview.pdf.rotateLeft", defaultValue: "Rotate Left"),
-            action: #selector(rotateLeft)
-        )
-        let rotateRightButton = makeToolbarButton(
-            systemSymbolName: "rotate.right",
-            fallbackTitle: "R",
-            label: String(localized: "filePreview.pdf.rotateRight", defaultValue: "Rotate Right"),
-            action: #selector(rotateRight)
-        )
-
-        pageLabel.font = .systemFont(ofSize: 11)
-        pageLabel.textColor = .secondaryLabelColor
-        pageLabel.alignment = .center
-        pageLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        let toolbar = NSStackView(views: [
-            previousButton,
-            nextButton,
-            pageLabel,
-            zoomOutButton,
-            zoomInButton,
-            fitButton,
-            actualSizeButton,
-            rotateLeftButton,
-            rotateRightButton,
-        ])
-        toolbar.orientation = .horizontal
-        toolbar.alignment = .centerY
-        toolbar.spacing = 6
-        toolbar.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        setupSplitView()
+        setupSidebar()
+        setupPDFView()
+        setupFloatingChrome()
 
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
@@ -771,20 +747,6 @@ private final class FilePreviewPDFContainerView: NSView {
         pdfView.onSwipe = { [weak self] event in
             self?.swipePDF(with: event)
         }
-        pdfView.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(toolbar)
-        addSubview(pdfView)
-        NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: topAnchor),
-            toolbar.leadingAnchor.constraint(equalTo: leadingAnchor),
-            toolbar.trailingAnchor.constraint(equalTo: trailingAnchor),
-            toolbar.heightAnchor.constraint(equalToConstant: 34),
-            pdfView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
-            pdfView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            pdfView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            pdfView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
 
         NotificationCenter.default.addObserver(
             self,
@@ -794,39 +756,202 @@ private final class FilePreviewPDFContainerView: NSView {
         )
     }
 
-    private func makeToolbarButton(
-        systemSymbolName: String,
-        fallbackTitle: String,
-        label: String,
-        action: Selector
-    ) -> NSButton {
-        let button = NSButton(title: "", target: self, action: action)
-        if let image = NSImage(systemSymbolName: systemSymbolName, accessibilityDescription: label) {
-            button.image = image
-            button.imagePosition = .imageOnly
-        } else {
-            button.title = fallbackTitle
-        }
-        button.bezelStyle = .texturedRounded
-        button.controlSize = .small
-        button.toolTip = label
-        button.setAccessibilityLabel(label)
-        button.translatesAutoresizingMaskIntoConstraints = false
+    private func setupSplitView() {
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.translatesAutoresizingMaskIntoConstraints = false
+        splitView.addArrangedSubview(sidebarHost)
+        splitView.addArrangedSubview(contentHost)
+        addSubview(splitView)
+
+        sidebarWidthConstraint = sidebarHost.widthAnchor.constraint(equalToConstant: 220)
+        sidebarWidthConstraint?.priority = .defaultHigh
+        sidebarWidthConstraint?.isActive = true
+
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 28),
-            button.heightAnchor.constraint(equalToConstant: 24),
+            splitView.topAnchor.constraint(equalTo: topAnchor),
+            splitView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            splitView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            splitView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        return button
     }
 
-    @objc private func previousPage() {
-        pdfView.goToPreviousPage(nil)
-        updatePageControls()
+    private func setupSidebar() {
+        sidebarHost.material = .sidebar
+        sidebarHost.blendingMode = .withinWindow
+        sidebarHost.state = .active
+
+        thumbnailView.pdfView = pdfView
+        thumbnailView.thumbnailSize = NSSize(width: 150, height: 104)
+        thumbnailView.maximumNumberOfColumns = 1
+        thumbnailView.backgroundColor = .clear
+        thumbnailView.labelFont = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        thumbnailView.translatesAutoresizingMaskIntoConstraints = false
+
+        let outlineColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("filePreviewPDFOutline"))
+        outlineColumn.title = String(localized: "filePreview.pdf.tableOfContents", defaultValue: "Table of Contents")
+        outlineView.addTableColumn(outlineColumn)
+        outlineView.outlineTableColumn = outlineColumn
+        outlineView.headerView = nil
+        outlineView.rowSizeStyle = .medium
+        outlineView.dataSource = self
+        outlineView.delegate = self
+        outlineView.translatesAutoresizingMaskIntoConstraints = false
+
+        outlineScrollView.hasVerticalScroller = true
+        outlineScrollView.autohidesScrollers = true
+        outlineScrollView.borderType = .noBorder
+        outlineScrollView.drawsBackground = false
+        outlineScrollView.documentView = outlineView
+        outlineScrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        outlinePlaceholder.stringValue = String(
+            localized: "filePreview.pdf.noTableOfContents",
+            defaultValue: "No table of contents"
+        )
+        outlinePlaceholder.alignment = .center
+        outlinePlaceholder.textColor = .secondaryLabelColor
+        outlinePlaceholder.translatesAutoresizingMaskIntoConstraints = false
+
+        sidebarHost.addSubview(thumbnailView)
+        sidebarHost.addSubview(outlineScrollView)
+        sidebarHost.addSubview(outlinePlaceholder)
+
+        NSLayoutConstraint.activate([
+            thumbnailView.topAnchor.constraint(equalTo: sidebarHost.topAnchor),
+            thumbnailView.leadingAnchor.constraint(equalTo: sidebarHost.leadingAnchor),
+            thumbnailView.trailingAnchor.constraint(equalTo: sidebarHost.trailingAnchor),
+            thumbnailView.bottomAnchor.constraint(equalTo: sidebarHost.bottomAnchor),
+            outlineScrollView.topAnchor.constraint(equalTo: sidebarHost.topAnchor),
+            outlineScrollView.leadingAnchor.constraint(equalTo: sidebarHost.leadingAnchor),
+            outlineScrollView.trailingAnchor.constraint(equalTo: sidebarHost.trailingAnchor),
+            outlineScrollView.bottomAnchor.constraint(equalTo: sidebarHost.bottomAnchor),
+            outlinePlaceholder.centerXAnchor.constraint(equalTo: sidebarHost.centerXAnchor),
+            outlinePlaceholder.centerYAnchor.constraint(equalTo: sidebarHost.centerYAnchor),
+            outlinePlaceholder.leadingAnchor.constraint(greaterThanOrEqualTo: sidebarHost.leadingAnchor, constant: 16),
+            outlinePlaceholder.trailingAnchor.constraint(lessThanOrEqualTo: sidebarHost.trailingAnchor, constant: -16),
+        ])
     }
 
-    @objc private func nextPage() {
-        pdfView.goToNextPage(nil)
-        updatePageControls()
+    private func setupPDFView() {
+        contentHost.wantsLayer = true
+        contentHost.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+        pdfView.translatesAutoresizingMaskIntoConstraints = false
+        contentHost.addSubview(pdfView)
+        NSLayoutConstraint.activate([
+            pdfView.topAnchor.constraint(equalTo: contentHost.topAnchor),
+            pdfView.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor),
+            pdfView.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor),
+            pdfView.bottomAnchor.constraint(equalTo: contentHost.bottomAnchor),
+        ])
+    }
+
+    private func setupFloatingChrome() {
+        configureFloatingChrome(leftFloatingChrome)
+        configureFloatingChrome(rightFloatingChrome)
+
+        sidebarMenuButton.target = self
+        sidebarMenuButton.action = #selector(showSidebarMenu)
+        sidebarMenuButton.bezelStyle = .texturedRounded
+        sidebarMenuButton.controlSize = .regular
+        sidebarMenuButton.image = NSImage(
+            systemSymbolName: "sidebar.left",
+            accessibilityDescription: String(localized: "filePreview.pdf.sidebarOptions", defaultValue: "Sidebar Options")
+        )
+        sidebarMenuButton.imagePosition = .imageOnly
+        sidebarMenuButton.toolTip = String(localized: "filePreview.pdf.sidebarOptions", defaultValue: "Sidebar Options")
+        sidebarMenuButton.setAccessibilityLabel(
+            String(localized: "filePreview.pdf.sidebarOptions", defaultValue: "Sidebar Options")
+        )
+        sidebarMenuButton.translatesAutoresizingMaskIntoConstraints = false
+
+        leftFloatingChrome.addSubview(sidebarMenuButton)
+        contentHost.addSubview(leftFloatingChrome)
+
+        zoomControl.segmentCount = 3
+        zoomControl.trackingMode = .momentary
+        zoomControl.segmentStyle = .rounded
+        zoomControl.target = self
+        zoomControl.action = #selector(zoomSegmentChanged)
+        configureZoomSegment(
+            0,
+            symbolName: "minus.magnifyingglass",
+            label: String(localized: "filePreview.pdf.zoomOut", defaultValue: "Zoom Out")
+        )
+        configureZoomSegment(
+            1,
+            symbolName: "1.magnifyingglass",
+            label: String(localized: "filePreview.pdf.actualSize", defaultValue: "Actual Size")
+        )
+        configureZoomSegment(
+            2,
+            symbolName: "plus.magnifyingglass",
+            label: String(localized: "filePreview.pdf.zoomIn", defaultValue: "Zoom In")
+        )
+        zoomControl.translatesAutoresizingMaskIntoConstraints = false
+
+        rightFloatingChrome.addSubview(zoomControl)
+        contentHost.addSubview(rightFloatingChrome)
+
+        titleLabel.font = .boldSystemFont(ofSize: 15)
+        titleLabel.textColor = .labelColor
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        pageLabel.font = .systemFont(ofSize: 12)
+        pageLabel.textColor = .secondaryLabelColor
+        pageLabel.lineBreakMode = .byTruncatingTail
+
+        let titleStack = NSStackView(views: [titleLabel, pageLabel])
+        titleStack.orientation = .vertical
+        titleStack.alignment = .leading
+        titleStack.spacing = 1
+        titleStack.translatesAutoresizingMaskIntoConstraints = false
+        contentHost.addSubview(titleStack)
+
+        NSLayoutConstraint.activate([
+            leftFloatingChrome.topAnchor.constraint(equalTo: contentHost.topAnchor, constant: 8),
+            leftFloatingChrome.leadingAnchor.constraint(equalTo: contentHost.leadingAnchor, constant: 8),
+            leftFloatingChrome.widthAnchor.constraint(equalToConstant: 48),
+            leftFloatingChrome.heightAnchor.constraint(equalToConstant: 38),
+            sidebarMenuButton.topAnchor.constraint(equalTo: leftFloatingChrome.topAnchor, constant: 4),
+            sidebarMenuButton.leadingAnchor.constraint(equalTo: leftFloatingChrome.leadingAnchor, constant: 4),
+            sidebarMenuButton.trailingAnchor.constraint(equalTo: leftFloatingChrome.trailingAnchor, constant: -4),
+            sidebarMenuButton.bottomAnchor.constraint(equalTo: leftFloatingChrome.bottomAnchor, constant: -4),
+
+            rightFloatingChrome.topAnchor.constraint(equalTo: contentHost.topAnchor, constant: 8),
+            rightFloatingChrome.trailingAnchor.constraint(equalTo: contentHost.trailingAnchor, constant: -8),
+            rightFloatingChrome.heightAnchor.constraint(equalToConstant: 38),
+            zoomControl.topAnchor.constraint(equalTo: rightFloatingChrome.topAnchor, constant: 4),
+            zoomControl.leadingAnchor.constraint(equalTo: rightFloatingChrome.leadingAnchor, constant: 4),
+            zoomControl.trailingAnchor.constraint(equalTo: rightFloatingChrome.trailingAnchor, constant: -4),
+            zoomControl.bottomAnchor.constraint(equalTo: rightFloatingChrome.bottomAnchor, constant: -4),
+
+            titleStack.leadingAnchor.constraint(equalTo: leftFloatingChrome.trailingAnchor, constant: 12),
+            titleStack.centerYAnchor.constraint(equalTo: leftFloatingChrome.centerYAnchor),
+            titleStack.trailingAnchor.constraint(lessThanOrEqualTo: rightFloatingChrome.leadingAnchor, constant: -12),
+        ])
+    }
+
+    private func configureFloatingChrome(_ effectView: NSVisualEffectView) {
+        effectView.material = .hudWindow
+        effectView.blendingMode = .withinWindow
+        effectView.state = .active
+        effectView.wantsLayer = true
+        effectView.layer?.cornerRadius = 19
+        effectView.layer?.masksToBounds = true
+        effectView.translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    private func configureZoomSegment(
+        _ index: Int,
+        symbolName: String,
+        label: String
+    ) {
+        zoomControl.setImage(NSImage(systemSymbolName: symbolName, accessibilityDescription: label), forSegment: index)
+        zoomControl.setLabel("", forSegment: index)
+        zoomControl.setToolTip(label, forSegment: index)
+        zoomControl.setWidth(34, forSegment: index)
     }
 
     @objc private func zoomOut() {
@@ -848,12 +973,56 @@ private final class FilePreviewPDFContainerView: NSView {
         setPDFScaleFactor(1.0)
     }
 
-    @objc private func rotateLeft() {
-        rotateCurrentPDFPage(by: -90)
+    @objc private func zoomSegmentChanged(_ sender: NSSegmentedControl) {
+        switch sender.selectedSegment {
+        case 0:
+            zoomOut()
+        case 1:
+            actualSize()
+        case 2:
+            zoomIn()
+        default:
+            break
+        }
     }
 
-    @objc private func rotateRight() {
-        rotateCurrentPDFPage(by: 90)
+    @objc private func showSidebarMenu(_ sender: NSButton) {
+        let menu = makeSidebarMenu()
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY - 4), in: sender)
+    }
+
+    @objc private func toggleSidebar() {
+        isSidebarVisible.toggle()
+        updateSidebarVisibility()
+    }
+
+    @objc private func selectThumbnailSidebar() {
+        sidebarMode = .thumbnails
+        isSidebarVisible = true
+        updateSidebarVisibility()
+        updateSidebarContent()
+    }
+
+    @objc private func selectTableOfContentsSidebar() {
+        sidebarMode = .tableOfContents
+        isSidebarVisible = true
+        updateSidebarVisibility()
+        updateSidebarContent()
+    }
+
+    @objc private func selectContinuousScroll() {
+        displayMode = .continuousScroll
+        applyDisplayMode()
+    }
+
+    @objc private func selectSinglePage() {
+        displayMode = .singlePage
+        applyDisplayMode()
+    }
+
+    @objc private func selectTwoPages() {
+        displayMode = .twoPages
+        applyDisplayMode()
     }
 
     @objc private func pdfPageChanged() {
@@ -863,8 +1032,6 @@ private final class FilePreviewPDFContainerView: NSView {
     private func updatePageControls() {
         guard let document = pdfView.document, document.pageCount > 0 else {
             pageLabel.stringValue = ""
-            previousButton.isEnabled = false
-            nextButton.isEnabled = false
             return
         }
 
@@ -876,8 +1043,85 @@ private final class FilePreviewPDFContainerView: NSView {
         }
         let format = String(localized: "filePreview.pdf.pageCount", defaultValue: "Page %d of %d")
         pageLabel.stringValue = String(format: format, pageIndex + 1, document.pageCount)
-        previousButton.isEnabled = pageIndex > 0
-        nextButton.isEnabled = pageIndex < document.pageCount - 1
+    }
+
+    private func makeSidebarMenu() -> NSMenu {
+        let menu = NSMenu()
+        let sidebarVisibilityTitle = isSidebarVisible
+            ? String(localized: "filePreview.pdf.hideSidebar", defaultValue: "Hide Sidebar")
+            : String(localized: "filePreview.pdf.showSidebar", defaultValue: "Show Sidebar")
+        menu.addItem(makeMenuItem(
+            title: sidebarVisibilityTitle,
+            action: #selector(toggleSidebar)
+        ))
+        menu.addItem(makeMenuItem(
+            title: String(localized: "filePreview.pdf.thumbnails", defaultValue: "Thumbnails"),
+            action: #selector(selectThumbnailSidebar),
+            state: sidebarMode == .thumbnails ? .on : .off
+        ))
+        menu.addItem(makeMenuItem(
+            title: String(localized: "filePreview.pdf.tableOfContents", defaultValue: "Table of Contents"),
+            action: #selector(selectTableOfContentsSidebar),
+            state: sidebarMode == .tableOfContents ? .on : .off
+        ))
+        menu.addItem(.separator())
+        menu.addItem(makeMenuItem(
+            title: String(localized: "filePreview.pdf.continuousScroll", defaultValue: "Continuous Scroll"),
+            action: #selector(selectContinuousScroll),
+            state: displayMode == .continuousScroll ? .on : .off
+        ))
+        menu.addItem(makeMenuItem(
+            title: String(localized: "filePreview.pdf.singlePage", defaultValue: "Single Page"),
+            action: #selector(selectSinglePage),
+            state: displayMode == .singlePage ? .on : .off
+        ))
+        menu.addItem(makeMenuItem(
+            title: String(localized: "filePreview.pdf.twoPages", defaultValue: "Two Pages"),
+            action: #selector(selectTwoPages),
+            state: displayMode == .twoPages ? .on : .off
+        ))
+        return menu
+    }
+
+    private func makeMenuItem(
+        title: String,
+        action: Selector,
+        state: NSControl.StateValue = .off
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.state = state
+        return item
+    }
+
+    private func updateSidebarVisibility() {
+        sidebarHost.isHidden = !isSidebarVisible
+        sidebarWidthConstraint?.constant = isSidebarVisible ? 220 : 0
+        splitView.adjustSubviews()
+    }
+
+    private func updateSidebarContent() {
+        let showingThumbnails = sidebarMode == .thumbnails
+        let showingTableOfContents = sidebarMode == .tableOfContents
+        let hasOutline = (outlineRoot?.numberOfChildren ?? 0) > 0
+        thumbnailView.isHidden = !showingThumbnails
+        outlineScrollView.isHidden = !showingTableOfContents || !hasOutline
+        outlinePlaceholder.isHidden = !showingTableOfContents || hasOutline
+    }
+
+    private func applyDisplayMode() {
+        switch displayMode {
+        case .continuousScroll:
+            pdfView.displayMode = .singlePageContinuous
+            pdfView.displayDirection = .vertical
+        case .singlePage:
+            pdfView.displayMode = .singlePage
+            pdfView.displayDirection = .vertical
+        case .twoPages:
+            pdfView.displayMode = .twoUp
+            pdfView.displayDirection = .horizontal
+        }
+        pdfView.autoScales = true
     }
 
     private func zoomPDF(with event: NSEvent, factor: CGFloat) {
@@ -908,9 +1152,11 @@ private final class FilePreviewPDFContainerView: NSView {
 
     private func swipePDF(with event: NSEvent) {
         if event.deltaX < 0 {
-            nextPage()
+            pdfView.goToNextPage(nil)
+            updatePageControls()
         } else if event.deltaX > 0 {
-            previousPage()
+            pdfView.goToPreviousPage(nil)
+            updatePageControls()
         }
     }
 
@@ -929,6 +1175,59 @@ private final class FilePreviewPDFContainerView: NSView {
 
     private func normalizedRotation(_ degrees: Int) -> Int {
         ((degrees % 360) + 360) % 360
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        let outline = item as? PDFOutline ?? outlineRoot
+        return outline?.numberOfChildren ?? 0
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
+        guard let outline = item as? PDFOutline else { return false }
+        return outline.numberOfChildren > 0
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        let outline = item as? PDFOutline ?? outlineRoot
+        return outline?.child(at: index) ?? NSNull()
+    }
+
+    func outlineView(
+        _ outlineView: NSOutlineView,
+        viewFor tableColumn: NSTableColumn?,
+        item: Any
+    ) -> NSView? {
+        guard let outline = item as? PDFOutline else { return nil }
+        let identifier = NSUserInterfaceItemIdentifier("filePreviewPDFOutlineCell")
+        let cell = outlineView.makeView(withIdentifier: identifier, owner: self) as? NSTableCellView
+            ?? makeOutlineCell(identifier: identifier)
+        cell.textField?.stringValue = outline.label ?? ""
+        return cell
+    }
+
+    func outlineViewSelectionDidChange(_ notification: Notification) {
+        let selectedRow = outlineView.selectedRow
+        guard selectedRow >= 0,
+              let outline = outlineView.item(atRow: selectedRow) as? PDFOutline,
+              let destination = outline.destination else { return }
+        pdfView.go(to: destination)
+        updatePageControls()
+    }
+
+    private func makeOutlineCell(identifier: NSUserInterfaceItemIdentifier) -> NSTableCellView {
+        let cell = NSTableCellView()
+        cell.identifier = identifier
+        let textField = NSTextField(labelWithString: "")
+        textField.lineBreakMode = .byTruncatingMiddle
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(textField)
+        cell.textField = textField
+        NSLayoutConstraint.activate([
+            textField.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+            textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
+        return cell
     }
 }
 
@@ -950,7 +1249,7 @@ private final class FilePreviewMagnifyingPDFView: PDFView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        if FilePreviewInteraction.hasCommandModifier(event), let onScrollZoom {
+        if FilePreviewInteraction.hasZoomModifier(event), let onScrollZoom {
             onScrollZoom(event)
         } else {
             super.scrollWheel(with: event)
@@ -1354,7 +1653,7 @@ private final class FilePreviewImageScrollView: NSScrollView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        if FilePreviewInteraction.hasCommandModifier(event), let onScrollZoom {
+        if FilePreviewInteraction.hasZoomModifier(event), let onScrollZoom {
             onScrollZoom(event)
         } else {
             super.scrollWheel(with: event)

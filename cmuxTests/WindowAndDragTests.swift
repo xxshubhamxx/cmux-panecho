@@ -1026,6 +1026,47 @@ final class WindowMoveSuppressionHitPathTests: XCTestCase {
 
 
 @MainActor
+final class FilePreviewPanelTextSavingTests: XCTestCase {
+    func testSaveTextContentWritesLiveTextViewContent() throws {
+        let url = try temporaryTextFile(contents: "original", encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let panel = FilePreviewPanel(workspaceId: UUID(), filePath: url.path)
+        let textView = NSTextView()
+        textView.string = "edited from text view"
+        panel.attachTextView(textView)
+
+        panel.saveTextContent()
+
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "edited from text view")
+        XCTAssertEqual(panel.textContent, "edited from text view")
+        XCTAssertFalse(panel.isDirty)
+    }
+
+    func testSaveTextContentPreservesLoadedEncoding() throws {
+        let url = try temporaryTextFile(contents: "original", encoding: .utf16)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let panel = FilePreviewPanel(workspaceId: UUID(), filePath: url.path)
+        panel.updateTextContent("edited")
+        panel.saveTextContent()
+
+        let data = try Data(contentsOf: url)
+        XCTAssertEqual(String(data: data, encoding: .utf16), "edited")
+        XCTAssertFalse(panel.isDirty)
+    }
+
+    private func temporaryTextFile(contents: String, encoding: String.Encoding) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("txt")
+        try contents.write(to: url, atomically: true, encoding: encoding)
+        return url
+    }
+}
+
+
+@MainActor
 final class FileDropOverlayViewTests: XCTestCase {
     private func makeContentViewWindow(windowId: UUID = UUID()) -> NSWindow {
         _ = NSApplication.shared
