@@ -25,18 +25,24 @@ export const RIVET_INTERNAL_HEADER = "x-cmux-rivet-internal";
  * is loaded. In production we require the caller to set it explicitly so we don't degrade
  * into "any authenticated request is trusted".
  */
+const globalForRivetSecret = globalThis as typeof globalThis & {
+  __cmuxRivetInternalSecret?: string;
+};
+
 /**
- * Process-local fallback secret. Generated once at module load so local dev doesn't
- * require setting CMUX_RIVET_INTERNAL_SECRET, but unpredictable across restarts and per
- * process — an attacker with source-read can no longer spoof the header via a hardcoded
- * string on a shared staging box. Replaced by the real env value as soon as one is set.
+ * Process-local fallback secret. Local dev route handlers can be compiled as separate
+ * Turbopack bundles, so a module-level constant is not enough. Store the fallback on
+ * globalThis so `/api/vm` and `/api/rivet` agree inside the same Next dev process.
  */
-const DEV_FALLBACK_SECRET: string = (() => {
-  // Lazy import so we don't pay the crypto cost on cold boot when the env is already set.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
-  return `cmux-dev-${randomBytes(24).toString("hex")}`;
-})();
+function devFallbackSecret(): string {
+  if (!globalForRivetSecret.__cmuxRivetInternalSecret) {
+    // Lazy import so we don't pay the crypto cost on cold boot when the env is already set.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
+    globalForRivetSecret.__cmuxRivetInternalSecret = `cmux-dev-${randomBytes(24).toString("hex")}`;
+  }
+  return globalForRivetSecret.__cmuxRivetInternalSecret;
+}
 
 function rivetInternalSecret(): string {
   const value = process.env.CMUX_RIVET_INTERNAL_SECRET?.trim();
@@ -58,9 +64,7 @@ function rivetInternalSecret(): string {
         "the per-process dev fallback is incompatible with multi-worker setups.",
     );
   }
-  // Per-process random fallback. Read via the module constant so every caller in this
-  // process agrees on the same value (REST route + catch-all gate would otherwise drift).
-  return DEV_FALLBACK_SECRET;
+  return devFallbackSecret();
 }
 
 export function assertRivetInternal(request: Request): boolean {
@@ -127,6 +131,21 @@ function rivetBaseURL(): string {
   return local?.origin ?? "http://localhost:3777";
 }
 
+function rivetInternalClientEndpoint(): string {
+  const base = rivetBaseURL();
+  try {
+    const url = new URL(base);
+    const host = url.hostname.toLowerCase();
+    if (host === "localhost" || host === "0.0.0.0" || host === "::1") {
+      url.hostname = "127.0.0.1";
+    }
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/api/rivet`;
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return `${base}/api/rivet`;
+  }
+}
+
 export function parseBearer(request: Request): StackBearer | null {
   const auth = request.headers.get("authorization");
   const refresh = request.headers.get("x-stack-refresh-token");
@@ -169,14 +188,13 @@ export function rivetClient(creds: ForwardedCreds): Client<Registry> {
   if (creds.cookie) {
     headers.cookie = creds.cookie;
   }
+  // RivetKit needs metadata lookup in local dev so `/api/rivet/metadata` can point the
+  // client at the spawned local manager that serves `/actors`. Prefer 127.0.0.1 for the
+  // server-side client so it does not reuse a stale localhost metadata retry cache.
+  const endpoint = rivetInternalClientEndpoint();
   return createClient<Registry>({
-    endpoint: `${rivetBaseURL()}/api/rivet`,
+    endpoint,
     headers,
-    // This client only serves our own REST facade. It already has a fixed endpoint and the
-    // internal auth header, so RivetKit's background `/metadata` bootstrap adds no value and
-    // can spin forever on 401s if a stale or unauthenticated client ever poisons the shared
-    // endpoint-level metadata cache.
-    disableMetadataLookup: true,
   });
 }
 
