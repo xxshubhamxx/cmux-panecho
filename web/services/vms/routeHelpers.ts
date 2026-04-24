@@ -172,6 +172,11 @@ export function rivetClient(creds: ForwardedCreds): Client<Registry> {
   return createClient<Registry>({
     endpoint: `${rivetBaseURL()}/api/rivet`,
     headers,
+    // This client only serves our own REST facade. It already has a fixed endpoint and the
+    // internal auth header, so RivetKit's background `/metadata` bootstrap adds no value and
+    // can spin forever on 401s if a stale or unauthenticated client ever poisons the shared
+    // endpoint-level metadata cache.
+    disableMetadataLookup: true,
   });
 }
 
