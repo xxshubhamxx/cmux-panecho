@@ -13,17 +13,22 @@ The Swift verifier expects a Chromium build with:
 - `fresh_owl/owl_fresh_bridge.*`, exposing a C ABI that launches Content Shell
   through Mojo and forwards `OwlFreshHost` events into Swift callbacks.
 - `content/shell/browser/owl_fresh_host_mac.mm`, implementing the host-side
-  Mojo service and publishing compositor context ids.
+  Mojo service, input forwarding, capture diagnostics, and compositor context
+  publication.
 - `ui/accelerated_widget_mac/owl_fresh_context.*`, storing the latest
-  browser-process relay `CAContext` id for the shell host to publish.
-- `ui/accelerated_widget_mac/display_ca_layer_tree.*`, creating a
-  browser-process relay `CAContext` that wraps Chromium's GPU-process
-  compositor `CAContext`.
+  browser-process portal `CAContext` id for the shell host to publish.
+- `ui/accelerated_widget_mac/display_ca_layer_tree.*`, exporting Chromium's
+  browser-process display layer subtree through that portal.
 
-The relay is important. Publishing the GPU-process context id directly produced
-blank Swift `CALayerHost` windows. The passing path publishes the browser-process
-relay context id and lets Swift retarget its `CALayerHost.contextId` when Mojo
-reports a newer id.
+The portal is important. Publishing the GPU-process context id directly produced
+blank Swift `CALayerHost` windows. The passing path publishes a browser-process
+portal context id and keeps that portal pointed at Chromium's display layer
+subtree, then Swift hosts the portal id in `CALayerHost`.
+
+The verified gate now includes input. `run-layer-host-verifier-gui.sh` can run
+the real Chromium compositor input fixture with `OWL_LAYER_HOST_INPUT_CHECK=1`;
+the passing output shows `OWL_INPUT_READY` turning into `OWL_INPUT_CLICKED`
+through Mojo mouse/key forwarding, with no DevTools or remote debugging path.
 
 The AWS build used for the current screenshots was rebuilt with:
 

@@ -12,6 +12,8 @@ private struct Options {
     var timeout: TimeInterval
     var includeCanvas: Bool
     var includeExample: Bool
+    var includeInput: Bool
+    var inputDiagnosticCapture: Bool
 }
 
 private struct RenderTarget {
@@ -19,6 +21,14 @@ private struct RenderTarget {
     let url: String
     let screenshotName: String
     let expected: Set<ExpectedPixel>
+    let preInputScreenshotName: String?
+    let preInputExpected: Set<ExpectedPixel>?
+    let inputClick: MouseClick?
+}
+
+private struct MouseClick {
+    let x: Float
+    let y: Float
 }
 
 private struct PixelStats: Codable {
@@ -41,9 +51,17 @@ private struct CaptureResult: Codable {
     let contextID: UInt32
     let swiftWindowID: UInt32
     let screenshotPath: String
+    let preInputScreenshotPath: String?
     let stats: PixelStats
     let profileHadDevToolsActivePort: Bool
     let sessionEvents: SessionEventSnapshot
+}
+
+private struct MojoSurfaceCapture {
+    let path: String
+    let mode: String
+    let width: UInt32
+    let height: UInt32
 }
 
 private struct Summary: Codable {
@@ -223,6 +241,8 @@ struct OwlLayerHostVerifier {
         var timeout: TimeInterval = 30
         var includeCanvas = true
         var includeExample = true
+        var includeInput = false
+        var inputDiagnosticCapture = false
 
         var index = 0
         while index < arguments.count {
@@ -256,9 +276,13 @@ struct OwlLayerHostVerifier {
                 includeExample = false
             case "--skip-canvas":
                 includeCanvas = false
+            case "--input-check":
+                includeInput = true
+            case "--input-diagnostic-capture":
+                inputDiagnosticCapture = true
             case "--help":
                 print("""
-                Usage: OwlLayerHostVerifier --chromium-host <path> --bridge <path> [--output-dir <dir>] [--timeout <seconds>] [--skip-canvas] [--skip-example]
+                Usage: OwlLayerHostVerifier --chromium-host <path> --bridge <path> [--output-dir <dir>] [--timeout <seconds>] [--skip-canvas] [--skip-example] [--input-check] [--input-diagnostic-capture]
                 """)
                 exit(0)
             default:
@@ -280,7 +304,9 @@ struct OwlLayerHostVerifier {
             outputDirectory: outputDirectory,
             timeout: timeout,
             includeCanvas: includeCanvas,
-            includeExample: includeExample
+            includeExample: includeExample,
+            includeInput: includeInput,
+            inputDiagnosticCapture: inputDiagnosticCapture
         )
     }
 }
@@ -311,13 +337,21 @@ private final class LayerHostRunner {
             html: Fixtures.canvasFixture,
             directory: fixtureDirectory
         )
+        let inputFixture = try writeFixture(
+            name: "input-fixture",
+            html: Fixtures.inputFixture,
+            directory: fixtureDirectory
+        )
         var targets: [RenderTarget] = []
         if options.includeCanvas {
             targets.append(RenderTarget(
                 name: "canvas-fixture",
                 url: canvasFixture.absoluteString,
                 screenshotName: "canvas-fixture-layer-host.png",
-                expected: [.red, .green, .blue, .dark]
+                expected: [.red, .green, .blue, .dark],
+                preInputScreenshotName: nil,
+                preInputExpected: nil,
+                inputClick: nil
             ))
         }
         if options.includeExample {
@@ -326,7 +360,23 @@ private final class LayerHostRunner {
                     name: "example-com",
                     url: "https://example.com/",
                     screenshotName: "example-com-layer-host.png",
-                    expected: [.dark, .light, .nonWhite]
+                    expected: [.dark, .light, .nonWhite],
+                    preInputScreenshotName: nil,
+                    preInputExpected: nil,
+                    inputClick: nil
+                )
+            )
+        }
+        if options.includeInput {
+            targets.append(
+                RenderTarget(
+                    name: "input-fixture",
+                    url: inputFixture.absoluteString,
+                    screenshotName: "input-fixture-after-click.png",
+                    expected: [.yellow, .dark],
+                    preInputScreenshotName: "input-fixture-before-click.png",
+                    preInputExpected: [.red, .dark],
+                    inputClick: MouseClick(x: 170, y: 180)
                 )
             )
         }
@@ -448,14 +498,21 @@ private final class LayerHostRunner {
         pumpApp(app, for: 0.2)
 
         let screenshotURL = options.outputDirectory.appendingPathComponent(target.screenshotName)
+        let preInputScreenshotURL = target.preInputScreenshotName.map {
+            options.outputDirectory.appendingPathComponent($0)
+        }
         let deadline = Date().addingTimeInterval(options.timeout)
         var lastError = "no capture attempted"
         var lastWindowID: UInt32?
         var lastStats: PixelStats?
+        var inputSent = target.inputClick == nil
+        var currentExpected = target.preInputExpected ?? target.expected
+        var capturedPreInputPath: String?
 
         while Date() < deadline {
             bridge.pollEvents(milliseconds: 50)
             pumpApp(app, for: 0.05)
+            window.flushHostedLayer()
 
             let snapshot = sessionEvents.snapshot()
             if snapshot.contextID != 0, snapshot.contextID != contextID {
@@ -471,10 +528,71 @@ private final class LayerHostRunner {
             lastWindowID = windowID
 
             do {
-                let capture = try captureWindow(windowID: windowID, to: screenshotURL)
+                let captureURL = inputSent ? screenshotURL : (preInputScreenshotURL ?? screenshotURL)
+                let capture = try captureWindow(windowID: windowID, to: captureURL)
                 let stats = analyze(image: capture.image)
                 lastStats = stats
-                if target.expected.isSatisfied(by: stats) {
+                if currentExpected.isSatisfied(by: stats) {
+                    if !inputSent, let click = target.inputClick {
+                        capturedPreInputPath = captureURL.path
+                        bridge.setFocus(session, focused: true)
+                        if ProcessInfo.processInfo.environment["OWL_LAYER_HOST_KEY_ONLY"] != "1" {
+                            bridge.sendMouse(session, kind: 2, x: click.x, y: click.y, button: 0, clickCount: 0)
+                            bridge.pollEvents(milliseconds: 10)
+                            bridge.sendMouse(session, kind: 0, x: click.x, y: click.y, button: 0, clickCount: 1)
+                            bridge.pollEvents(milliseconds: 10)
+                            bridge.sendMouse(session, kind: 1, x: click.x, y: click.y, button: 0, clickCount: 1)
+                            bridge.pollEvents(milliseconds: 10)
+                        }
+                        bridge.sendKey(session, keyDown: true, keyCode: 88, text: "x")
+                        bridge.pollEvents(milliseconds: 10)
+                        bridge.sendKey(session, keyDown: false, keyCode: 88, text: "")
+                        bridge.pollEvents(milliseconds: 10)
+                        pumpApp(app, for: 0.05)
+                        if options.inputDiagnosticCapture {
+                            let stateURL = options.outputDirectory.appendingPathComponent(
+                                "\(target.name)-mojo-dom-state.json"
+                            )
+                            do {
+                                let domState = try bridge.executeJavaScript(
+                                    session,
+                                    script: "({className: document.body.className, status: document.getElementById('status')?.textContent || ''})"
+                                )
+                                try domState.write(to: stateURL, atomically: true, encoding: .utf8)
+                            } catch {
+                                try? String(describing: error).write(
+                                    to: stateURL,
+                                    atomically: true,
+                                    encoding: .utf8
+                                )
+                            }
+                            let diagnosticURL = options.outputDirectory.appendingPathComponent(
+                                "\(target.name)-mojo-after-click.png"
+                            )
+                            do {
+                                let diagnostic = try bridge.captureSurfacePNG(session, to: diagnosticURL)
+                                let infoURL = options.outputDirectory.appendingPathComponent(
+                                    "\(target.name)-mojo-after-click.json"
+                                )
+                                let payload = [
+                                    "path": diagnostic.path,
+                                    "mode": diagnostic.mode,
+                                    "width": String(diagnostic.width),
+                                    "height": String(diagnostic.height),
+                                ]
+                                try JSONEncoder.pretty.encode(payload).write(to: infoURL)
+                            } catch {
+                                let errorURL = options.outputDirectory.appendingPathComponent(
+                                    "\(target.name)-mojo-after-click-error.txt"
+                                )
+                                try? String(describing: error).write(to: errorURL, atomically: true, encoding: .utf8)
+                            }
+                        }
+                        inputSent = true
+                        currentExpected = target.expected
+                        lastError = "input sent through Mojo; waiting for post-input pixels"
+                        continue
+                    }
                     let hostCommand = processCommandLine(pid: hostPID)
                     try rejectForbiddenRuntimePaths(
                         processCommand: hostCommand,
@@ -489,12 +607,13 @@ private final class LayerHostRunner {
                         contextID: contextID,
                         swiftWindowID: windowID,
                         screenshotPath: screenshotURL.path,
+                        preInputScreenshotPath: capturedPreInputPath,
                         stats: stats,
                         profileHadDevToolsActivePort: hasDevToolsActivePort(profileDirectory: profileDirectory),
                         sessionEvents: sessionEvents.snapshot()
                     )
                 }
-                lastError = "pixel stats did not match expected set \(target.expected): \(stats)"
+                lastError = "pixel stats did not match expected set \(currentExpected): \(stats)"
             } catch let error as VerifierError {
                 lastError = error.description
             } catch {
@@ -632,7 +751,13 @@ private final class LayerHostWindow {
 
     func update(contextID: UInt32) {
         hostLayer.setValue(NSNumber(value: contextID), forKey: "contextId")
+        flushHostedLayer()
+    }
+
+    func flushHostedLayer() {
         hostLayer.setNeedsDisplay()
+        hostLayer.displayIfNeeded()
+        CATransaction.flush()
     }
 
 }
@@ -650,6 +775,7 @@ private func makeCALayerHost(contextID: UInt32) throws -> CALayer {
     }
     layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 1.0
     layer.setValue(NSNumber(value: contextID), forKey: "contextId")
+    layer.setValue(true, forKey: "inheritsSecurity")
     return layer
 }
 
@@ -667,7 +793,41 @@ private final class OwlFreshBridge {
     private typealias Navigate = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?) -> Void
     private typealias Resize = @convention(c) (OpaquePointer?, UInt32, UInt32, Float) -> Void
     private typealias SetFocus = @convention(c) (OpaquePointer?, Bool) -> Void
+    private typealias SendMouse = @convention(c) (
+        OpaquePointer?,
+        UInt32,
+        Float,
+        Float,
+        UInt32,
+        UInt32,
+        Float,
+        Float,
+        UInt32
+    ) -> Void
+    private typealias SendKey = @convention(c) (
+        OpaquePointer?,
+        Bool,
+        UInt32,
+        UnsafePointer<CChar>?,
+        UInt32
+    ) -> Void
+    private typealias CaptureSurfacePNG = @convention(c) (
+        OpaquePointer?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?,
+        UnsafeMutablePointer<UInt32>?,
+        UnsafeMutablePointer<UInt32>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+    ) -> Int32
+    private typealias ExecuteJavaScript = @convention(c) (
+        OpaquePointer?,
+        UnsafePointer<CChar>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+    ) -> Int32
     private typealias PollEvents = @convention(c) (UInt32) -> Void
+    private typealias FreeBuffer = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
     private let handle: UnsafeMutableRawPointer
     private let globalInit: GlobalInit
@@ -677,7 +837,12 @@ private final class OwlFreshBridge {
     private let sessionNavigate: Navigate
     private let sessionResize: Resize
     private let sessionSetFocus: SetFocus
+    private let sessionSendMouse: SendMouse
+    private let sessionSendKey: SendKey
+    private let sessionCaptureSurfacePNG: CaptureSurfacePNG
+    private let sessionExecuteJavaScript: ExecuteJavaScript
     private let eventPoll: PollEvents
+    private let freeBuffer: FreeBuffer
 
     init(path: String) throws {
         guard let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) else {
@@ -691,7 +856,20 @@ private final class OwlFreshBridge {
         self.sessionNavigate = try loadSymbol(handle, "owl_fresh_navigate", as: Navigate.self)
         self.sessionResize = try loadSymbol(handle, "owl_fresh_resize", as: Resize.self)
         self.sessionSetFocus = try loadSymbol(handle, "owl_fresh_set_focus", as: SetFocus.self)
+        self.sessionSendMouse = try loadSymbol(handle, "owl_fresh_send_mouse", as: SendMouse.self)
+        self.sessionSendKey = try loadSymbol(handle, "owl_fresh_send_key", as: SendKey.self)
+        self.sessionCaptureSurfacePNG = try loadSymbol(
+            handle,
+            "owl_fresh_capture_surface_png",
+            as: CaptureSurfacePNG.self
+        )
+        self.sessionExecuteJavaScript = try loadSymbol(
+            handle,
+            "owl_fresh_execute_javascript",
+            as: ExecuteJavaScript.self
+        )
         self.eventPoll = try loadSymbol(handle, "owl_fresh_poll_events", as: PollEvents.self)
+        self.freeBuffer = try loadSymbol(handle, "owl_fresh_free_buffer", as: FreeBuffer.self)
     }
 
     deinit {
@@ -747,8 +925,87 @@ private final class OwlFreshBridge {
         sessionSetFocus(session, focused)
     }
 
+    func sendMouse(
+        _ session: OpaquePointer?,
+        kind: UInt32,
+        x: Float,
+        y: Float,
+        button: UInt32,
+        clickCount: UInt32
+    ) {
+        sessionSendMouse(session, kind, x, y, button, clickCount, 0, 0, 0)
+    }
+
+    func sendKey(_ session: OpaquePointer?, keyDown: Bool, keyCode: UInt32, text: String) {
+        text.withCString { textPointer in
+            sessionSendKey(session, keyDown, keyCode, textPointer, 0)
+        }
+    }
+
     func pollEvents(milliseconds: UInt32) {
         eventPoll(milliseconds)
+    }
+
+    func captureSurfacePNG(_ session: OpaquePointer?, to url: URL) throws -> MojoSurfaceCapture {
+        var bytes: UnsafeMutablePointer<UInt8>?
+        var length: UInt = 0
+        var width: UInt32 = 0
+        var height: UInt32 = 0
+        var modePointer: UnsafeMutablePointer<CChar>?
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let status = sessionCaptureSurfacePNG(
+            session,
+            &bytes,
+            &length,
+            &width,
+            &height,
+            &modePointer,
+            &errorPointer
+        )
+        defer {
+            if let bytes {
+                freeBuffer(UnsafeMutableRawPointer(bytes))
+            }
+            if let modePointer {
+                freeBuffer(UnsafeMutableRawPointer(modePointer))
+            }
+            if let errorPointer {
+                freeBuffer(UnsafeMutableRawPointer(errorPointer))
+            }
+        }
+
+        let mode = modePointer.map { String(cString: $0) } ?? ""
+        if status != 0 {
+            let message = errorPointer.map { String(cString: $0) } ?? "unknown CaptureSurface error"
+            throw VerifierError.capture("CaptureSurface failed: \(message)")
+        }
+        guard let bytes, length > 0 else {
+            throw VerifierError.capture("CaptureSurface returned no PNG bytes")
+        }
+        let data = Data(bytes: bytes, count: Int(length))
+        try data.write(to: url)
+        return MojoSurfaceCapture(path: url.path, mode: mode, width: width, height: height)
+    }
+
+    func executeJavaScript(_ session: OpaquePointer?, script: String) throws -> String {
+        var resultPointer: UnsafeMutablePointer<CChar>?
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let status = script.withCString { scriptPointer in
+            sessionExecuteJavaScript(session, scriptPointer, &resultPointer, &errorPointer)
+        }
+        defer {
+            if let resultPointer {
+                freeBuffer(UnsafeMutableRawPointer(resultPointer))
+            }
+            if let errorPointer {
+                freeBuffer(UnsafeMutableRawPointer(errorPointer))
+            }
+        }
+        if status != 0 {
+            let message = errorPointer.map { String(cString: $0) } ?? "unknown ExecuteJavaScript error"
+            throw VerifierError.bridge("ExecuteJavaScript failed: \(message)")
+        }
+        return resultPointer.map { String(cString: $0) } ?? "null"
     }
 }
 
@@ -872,6 +1129,7 @@ private enum ExpectedPixel: Hashable {
     case red
     case green
     case blue
+    case yellow
     case dark
     case light
     case nonWhite
@@ -887,6 +1145,8 @@ private extension Set where Element == ExpectedPixel {
                 stats.greenPixels > 12_000
             case .blue:
                 stats.bluePixels > 8_000
+            case .yellow:
+                stats.yellowPixels > 20_000
             case .dark:
                 stats.darkPixels > 1_000
             case .light:
@@ -1050,6 +1310,57 @@ private enum Fixtures {
         context.fillStyle = "rgb(20,20,20)";
         context.font = "40px -apple-system, BlinkMacSystemFont, sans-serif";
         context.fillText("OWL_LAYER_HOST_SENTINEL", 48, 292);
+      </script>
+    </body>
+    </html>
+    """
+
+    static let inputFixture = """
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>OWL LayerHost input fixture</title>
+      <style>
+        html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: rgb(248,248,248); }
+        #target {
+          position: absolute;
+          left: 48px;
+          top: 56px;
+          width: 244px;
+          height: 148px;
+          background: rgb(180, 180, 180);
+        }
+        #status {
+          position: absolute;
+          left: 48px;
+          top: 260px;
+          font: 42px -apple-system, BlinkMacSystemFont, sans-serif;
+          color: rgb(20,20,20);
+        }
+        body.ready #target {
+          background: rgb(255, 0, 0);
+        }
+        body.ready.clicked #target {
+          background: rgb(255, 210, 0);
+        }
+      </style>
+    </head>
+    <body>
+      <button id="target" aria-label="OWL input target"></button>
+      <div id="status">OWL_INPUT_BOOTING</div>
+      <script>
+        const status = document.getElementById("status");
+        const markInput = () => {
+          document.body.classList.add("clicked");
+          status.textContent = "OWL_INPUT_CLICKED";
+        };
+        for (const eventName of ["pointermove", "pointerdown", "pointerup", "mousemove", "mousedown", "mouseup", "click"]) {
+          document.addEventListener(eventName, markInput);
+        }
+        document.addEventListener("keydown", markInput);
+        document.body.classList.add("ready");
+        status.textContent = "OWL_INPUT_READY";
       </script>
     </body>
     </html>

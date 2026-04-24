@@ -52,6 +52,24 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>LSEnvironment</key>
   <dict>
     <key>DYLD_LIBRARY_PATH</key><string>$CHROMIUM_OUT</string>
+PLIST
+
+for env_name in \
+  OWL_FRESH_DISABLE_GPU \
+  OWL_FRESH_LAYER_FIXTURE \
+  OWL_FRESH_NO_EMBED \
+  OWL_FRESH_NO_IN_PROCESS_GPU \
+  OWL_FRESH_WINDOW_SNAPSHOT \
+  OWL_LAYER_HOST_KEY_ONLY; do
+  env_value="${!env_name:-}"
+  if [ -n "$env_value" ]; then
+    cat >> "$APP_DIR/Contents/Info.plist" <<PLIST
+    <key>$env_name</key><string>$env_value</string>
+PLIST
+  fi
+done
+
+cat >> "$APP_DIR/Contents/Info.plist" <<PLIST
   </dict>
 </dict>
 </plist>
@@ -87,6 +105,16 @@ fi
 if [ "${OWL_LAYER_HOST_SKIP_CANVAS:-}" = "1" ]; then
   cat >> "$PLIST" <<PLIST
     <string>--skip-canvas</string>
+PLIST
+fi
+if [ "${OWL_LAYER_HOST_INPUT_CHECK:-}" = "1" ]; then
+  cat >> "$PLIST" <<PLIST
+    <string>--input-check</string>
+PLIST
+fi
+if [ "${OWL_LAYER_HOST_INPUT_DIAGNOSTIC_CAPTURE:-}" = "1" ]; then
+  cat >> "$PLIST" <<PLIST
+    <string>--input-diagnostic-capture</string>
 PLIST
 fi
 
