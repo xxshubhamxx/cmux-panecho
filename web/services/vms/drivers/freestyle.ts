@@ -5,6 +5,7 @@ import {
   type ExecResult,
   type AttachEndpoint,
   type SSHEndpoint,
+  type WebSocketPtyEndpoint,
   type SnapshotRef,
   type VMHandle,
   type VMProvider,
@@ -15,6 +16,15 @@ import {
   setSpanAttributes,
   withVmSpan,
 } from "../telemetry";
+import {
+  isReusableRpcLease,
+  leaseClientMetadata,
+  makeWebSocketLease,
+  parentDirectory,
+  shellArgValue,
+  shellQuote,
+  type ReusableRpcLease,
+} from "./wsLease";
 
 // Default cmux-sandbox snapshot. Produced by scratch/vm-experiments/images/build-freestyle.ts.
 // Override via FREESTYLE_SANDBOX_SNAPSHOT. Image bakes sshd + cmuxd-remote + mutagen-agent.
@@ -30,6 +40,13 @@ function defaultSnapshotId(): string {
 const SSH_HOST = "vm-ssh.freestyle.sh";
 const SSH_PORT = 22;
 const CMUX_LINUX_USER = "cmux"; // must match Resources/install.sh in scratch/vm-experiments
+const CMUXD_WS_PTY_LEASE_PATH = "/tmp/cmux/attach-pty-lease.json";
+const CMUXD_WS_LEGACY_PTY_LEASE_PATH = "/tmp/cmux/attach-lease.json";
+const CMUXD_WS_RPC_CLIENT_PATH = "/tmp/cmux/attach-rpc-client.json";
+const CMUXD_WS_PTY_LEASE_TTL_SECONDS = 5 * 60;
+const CMUXD_WS_RPC_LEASE_TTL_SECONDS = 12 * 60 * 60;
+const CMUXD_WS_RPC_RENEW_BEFORE_SECONDS = 60;
+const FREESTYLE_WS_PORTS = [{ port: 443, targetPort: 7777 }];
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const CREATE_TIMEOUT_MS = 15 * 60 * 1000;
@@ -88,6 +105,7 @@ export class FreestyleProvider implements VMProvider {
           // Build images can take several minutes if the snapshot cache misses.
           const created = await fs.vms.create({
             ...body,
+            ports: FREESTYLE_WS_PORTS,
             readySignalTimeoutSeconds: 600,
           });
           setSpanAttributes(span, { "cmux.vm.id": created.vmId });
@@ -254,7 +272,11 @@ export class FreestyleProvider implements VMProvider {
       async (span) => {
         try {
           const fs = client(CREATE_TIMEOUT_MS);
-          const created = await fs.vms.create({ snapshotId });
+          const created = await fs.vms.create({
+            snapshotId,
+            ports: FREESTYLE_WS_PORTS,
+            readySignalTimeoutSeconds: 600,
+          });
           setSpanAttributes(span, { "cmux.vm.id": created.vmId });
           return {
             provider: "freestyle",
@@ -271,14 +293,108 @@ export class FreestyleProvider implements VMProvider {
   }
 
   /**
+   * Prefer the baked cmuxd WebSocket daemon. Older VMs without an exposed 443 -> 7777 port
+   * still fall back to Freestyle SSH, but the mac client must treat that as shell-only.
+   */
+  async openAttach(vmId: string): Promise<AttachEndpoint> {
+    try {
+      return await this.openWebSocketPty(vmId);
+    } catch (err) {
+      return await withVmSpan(
+        "cmux.vm.provider.open_attach_ssh_fallback",
+        {
+          "cmux.vm.provider": "freestyle",
+          "cmux.vm.operation": "open_attach_ssh_fallback",
+          "cmux.vm.id": vmId,
+        },
+        async (span) => {
+          recordSpanError(span, err);
+          setSpanAttributes(span, { "cmux.vm.attach.fallback": "ssh" });
+          return await this.openSSH(vmId);
+        },
+      );
+    }
+  }
+
+  async openWebSocketPty(vmId: string): Promise<WebSocketPtyEndpoint> {
+    return withVmSpan(
+      "cmux.vm.provider.open_websocket_pty",
+      {
+        "cmux.vm.provider": "freestyle",
+        "cmux.vm.operation": "open_websocket_pty",
+        "cmux.vm.id": vmId,
+      },
+      async (span) => {
+        try {
+          const fs = client();
+          const vm = fs.vms.ref({ vmId });
+          const domain = `${vmId}.vm.freestyle.sh`;
+          const service = await readFreestyleWebSocketService(vm);
+          await ensureFreestyleWebSocketHealthy(domain);
+
+          const pty = makeWebSocketLease("freestyle", "pty", true, CMUXD_WS_PTY_LEASE_TTL_SECONDS);
+          const encodedPTY = Buffer.from(JSON.stringify(pty.lease)).toString("base64");
+          const commands = [
+            `install -d -m 0700 ${shellQuote(parentDirectory(service.ptyLeasePath))}`,
+            `printf '%s' '${encodedPTY}' | base64 -d > ${shellQuote(service.ptyLeasePath)}`,
+            `chmod 600 ${shellQuote(service.ptyLeasePath)}`,
+          ];
+          let daemon: ReusableRpcLease | null = null;
+          let daemonReused = false;
+          if (service.rpcLeasePath) {
+            const existingDaemon = await readReusableRpcLease(vm, service.rpcLeasePath);
+            const newDaemon = existingDaemon
+              ? null
+              : makeWebSocketLease("freestyle", "rpc", false, CMUXD_WS_RPC_LEASE_TTL_SECONDS);
+            daemon = existingDaemon ?? newDaemon!;
+            daemonReused = !!existingDaemon;
+            if (newDaemon) {
+              const encodedDaemon = Buffer.from(JSON.stringify(newDaemon.lease)).toString("base64");
+              const encodedDaemonClient = Buffer.from(JSON.stringify(leaseClientMetadata(newDaemon))).toString("base64");
+              commands.push(
+                `install -d -m 0700 ${shellQuote(parentDirectory(service.rpcLeasePath))}`,
+                `printf '%s' '${encodedDaemon}' | base64 -d > ${shellQuote(service.rpcLeasePath)}`,
+                `chmod 600 ${shellQuote(service.rpcLeasePath)}`,
+                `printf '%s' '${encodedDaemonClient}' | base64 -d > ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
+                `chmod 600 ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
+              );
+            }
+          }
+          await execFreestyleOrThrow(vm, commands.join(" && "));
+          span.setAttribute("cmux.vm.attach.transport", "websocket");
+          span.setAttribute("cmux.vm.attach.expires_at_unix", pty.expiresAtUnix);
+          span.setAttribute("cmux.vm.attach.daemon_available", !!daemon);
+          if (daemon) {
+            span.setAttribute("cmux.vm.attach.daemon_expires_at_unix", daemon.expiresAtUnix);
+            span.setAttribute("cmux.vm.attach.daemon_reused", daemonReused);
+          }
+          return {
+            transport: "websocket",
+            url: `wss://${domain}/terminal`,
+            headers: {},
+            token: pty.token,
+            sessionId: pty.sessionId,
+            expiresAtUnix: pty.expiresAtUnix,
+            daemon: daemon ? {
+              url: `wss://${domain}/rpc`,
+              headers: {},
+              token: daemon.token,
+              sessionId: daemon.sessionId,
+              expiresAtUnix: daemon.expiresAtUnix,
+            } : undefined,
+          };
+        } catch (err) {
+          throw new ProviderError("freestyle", `openWebSocketPty(${vmId})`, err);
+        }
+      },
+    );
+  }
+
+  /**
    * Mint a short-lived SSH token + permission scoped to this VM, return the endpoint the mac
    * client will dial. Freestyle's gateway terminates at `vm-ssh.freestyle.sh:22`, username is
    * `<vmId>+<linuxUser>`, password is the access token we just minted.
    */
-  async openAttach(vmId: string): Promise<AttachEndpoint> {
-    return await this.openSSH(vmId);
-  }
-
   async openSSH(vmId: string): Promise<SSHEndpoint> {
     return withVmSpan(
       "cmux.vm.provider.open_ssh",
@@ -351,4 +467,67 @@ export class FreestyleProvider implements VMProvider {
       },
     );
   }
+}
+
+async function ensureFreestyleWebSocketHealthy(domain: string): Promise<void> {
+  const response = await fetch(`https://${domain}/healthz`, {
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (response.status !== 200) {
+    throw new Error(`Freestyle cmuxd websocket health check returned ${response.status}`);
+  }
+}
+
+async function readFreestyleWebSocketService(vm: FreestyleVmRef): Promise<{
+  ptyLeasePath: string;
+  rpcLeasePath: string | null;
+}> {
+  const result = await execFreestyleOrThrow(
+    vm,
+    "systemctl cat cmuxd-ws 2>/dev/null || true",
+  );
+  const stdout = result.stdout ?? "";
+  const ptyLeasePath =
+    shellArgValue(stdout, "--auth-lease-file")
+    ?? (stdout.includes(CMUXD_WS_LEGACY_PTY_LEASE_PATH)
+      ? CMUXD_WS_LEGACY_PTY_LEASE_PATH
+      : CMUXD_WS_PTY_LEASE_PATH);
+  const rpcLeasePath = shellArgValue(stdout, "--rpc-auth-lease-file");
+  return { ptyLeasePath, rpcLeasePath };
+}
+
+async function readReusableRpcLease(
+  vm: FreestyleVmRef,
+  rpcLeasePath: string,
+): Promise<ReusableRpcLease | null> {
+  const result = await vm.exec({
+    command: [
+      `test -s ${shellQuote(rpcLeasePath)}`,
+      `test -s ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
+      `cat ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
+    ].join(" && "),
+    timeoutMs: 30_000,
+  }).catch(() => null);
+  const raw = result?.stdout?.trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isReusableRpcLease(parsed)) return null;
+    const nowUnix = Math.floor(Date.now() / 1000);
+    if (parsed.expiresAtUnix <= nowUnix + CMUXD_WS_RPC_RENEW_BEFORE_SECONDS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+type FreestyleVmRef = ReturnType<ReturnType<typeof client>["vms"]["ref"]>;
+
+async function execFreestyleOrThrow(vm: FreestyleVmRef, command: string) {
+  const result = await vm.exec({ command, timeoutMs: 30_000 });
+  const exitCode = (result as { statusCode?: number }).statusCode ?? 0;
+  if (exitCode !== 0) {
+    throw new Error(`Freestyle exec failed with status ${exitCode}: ${(result.stderr ?? "").trim()}`);
+  }
+  return result;
 }

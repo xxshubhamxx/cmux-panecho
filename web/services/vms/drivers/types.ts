@@ -79,8 +79,8 @@ export interface VMProvider {
   snapshot(vmId: string, name?: string): Promise<SnapshotRef>;
   restore(snapshotId: string): Promise<VMHandle>;
 
-  // Returns a live attach endpoint the client can dial into. Freestyle uses SSH, E2B uses a
-  // cmuxd-remote WebSocket PTY with a short-lived one-use lease.
+  // Returns a live attach endpoint the client can dial into. Providers prefer cmuxd-remote
+  // WebSocket PTY with a short-lived one-use lease, with provider-specific fallbacks.
   openAttach(vmId: string): Promise<AttachEndpoint>;
 
   // Returns a live SSH endpoint the client can dial into. Drivers are responsible for ensuring

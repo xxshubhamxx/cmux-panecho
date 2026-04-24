@@ -83,7 +83,7 @@ enum VMAttachEndpoint {
 /// All methods are `async throws` and run off the main actor.
 actor VMClient {
     static let shared = VMClient()
-    private static let createTimeoutSeconds: TimeInterval = 300
+    private static let createTimeoutSeconds: TimeInterval = 16 * 60
 
     private let session: URLSession
 

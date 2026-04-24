@@ -1,5 +1,4 @@
 import { Sandbox } from "e2b";
-import { createHash, randomBytes } from "node:crypto";
 import {
   ProviderError,
   type AttachEndpoint,
@@ -12,11 +11,20 @@ import {
   type VMProvider,
 } from "./types";
 import { withVmSpan } from "../telemetry";
+import {
+  isReusableRpcLease,
+  leaseClientMetadata,
+  makeWebSocketLease,
+  parentDirectory,
+  shellArgValue,
+  shellQuote,
+  type ReusableRpcLease,
+} from "./wsLease";
 
 export const DEFAULT_E2B_WS_TEMPLATE = "cmuxd-ws:sudofix";
 const CMUXD_WS_PORT = 7777;
 const CMUXD_WS_PTY_LEASE_PATH = "/tmp/cmux/attach-pty-lease.json";
-const CMUXD_WS_RPC_LEASE_PATH = "/tmp/cmux/attach-rpc-lease.json";
+const CMUXD_WS_LEGACY_PTY_LEASE_PATH = "/tmp/cmux/attach-lease.json";
 const CMUXD_WS_RPC_CLIENT_PATH = "/tmp/cmux/attach-rpc-client.json";
 const CMUXD_WS_PTY_LEASE_TTL_SECONDS = 5 * 60;
 const CMUXD_WS_RPC_LEASE_TTL_SECONDS = 12 * 60 * 60;
@@ -201,31 +209,43 @@ export class E2BProvider implements VMProvider {
           if (!trafficAccessToken) {
             throw new Error("sandbox is missing a traffic access token; recreate it with the cmuxd WebSocket image");
           }
-          const pty = makeLease("pty", true, CMUXD_WS_PTY_LEASE_TTL_SECONDS);
-          const existingDaemon = await readReusableRpcLease(sandbox);
-          const newDaemon = existingDaemon ? null : makeLease("rpc", false, CMUXD_WS_RPC_LEASE_TTL_SECONDS);
-          const daemon = existingDaemon ?? newDaemon!;
+          const service = await readWebSocketService(sandbox);
+          const pty = makeWebSocketLease("e2b", "pty", true, CMUXD_WS_PTY_LEASE_TTL_SECONDS);
           const encodedPTY = Buffer.from(JSON.stringify(pty.lease)).toString("base64");
           const commands = [
-            "install -d -m 0700 /tmp/cmux",
-            `printf '%s' '${encodedPTY}' | base64 -d > ${shellQuote(CMUXD_WS_PTY_LEASE_PATH)}`,
-            `chmod 600 ${shellQuote(CMUXD_WS_PTY_LEASE_PATH)}`,
+            `install -d -m 0700 ${shellQuote(parentDirectory(service.ptyLeasePath))}`,
+            `printf '%s' '${encodedPTY}' | base64 -d > ${shellQuote(service.ptyLeasePath)}`,
+            `chmod 600 ${shellQuote(service.ptyLeasePath)}`,
           ];
-          if (newDaemon) {
-            const encodedDaemon = Buffer.from(JSON.stringify(newDaemon.lease)).toString("base64");
-            const encodedDaemonClient = Buffer.from(JSON.stringify(leaseClientMetadata(newDaemon))).toString("base64");
-            commands.push(
-              `printf '%s' '${encodedDaemon}' | base64 -d > ${shellQuote(CMUXD_WS_RPC_LEASE_PATH)}`,
-              `chmod 600 ${shellQuote(CMUXD_WS_RPC_LEASE_PATH)}`,
-              `printf '%s' '${encodedDaemonClient}' | base64 -d > ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
-              `chmod 600 ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
-            );
+          let daemon: ReusableRpcLease | null = null;
+          let daemonReused = false;
+          if (service.rpcLeasePath) {
+            const existingDaemon = await readReusableRpcLease(sandbox, service.rpcLeasePath);
+            const newDaemon = existingDaemon
+              ? null
+              : makeWebSocketLease("e2b", "rpc", false, CMUXD_WS_RPC_LEASE_TTL_SECONDS);
+            daemon = existingDaemon ?? newDaemon!;
+            daemonReused = !!existingDaemon;
+            if (newDaemon) {
+              const encodedDaemon = Buffer.from(JSON.stringify(newDaemon.lease)).toString("base64");
+              const encodedDaemonClient = Buffer.from(JSON.stringify(leaseClientMetadata(newDaemon))).toString("base64");
+              commands.push(
+                `install -d -m 0700 ${shellQuote(parentDirectory(service.rpcLeasePath))}`,
+                `printf '%s' '${encodedDaemon}' | base64 -d > ${shellQuote(service.rpcLeasePath)}`,
+                `chmod 600 ${shellQuote(service.rpcLeasePath)}`,
+                `printf '%s' '${encodedDaemonClient}' | base64 -d > ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
+                `chmod 600 ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
+              );
+            }
           }
           await sandbox.commands.run(commands.join(" && "), { timeoutMs: 30_000 });
           span.setAttribute("cmux.vm.attach.transport", "websocket");
           span.setAttribute("cmux.vm.attach.expires_at_unix", pty.expiresAtUnix);
-          span.setAttribute("cmux.vm.attach.daemon_expires_at_unix", daemon.expiresAtUnix);
-          span.setAttribute("cmux.vm.attach.daemon_reused", !!existingDaemon);
+          span.setAttribute("cmux.vm.attach.daemon_available", !!daemon);
+          if (daemon) {
+            span.setAttribute("cmux.vm.attach.daemon_expires_at_unix", daemon.expiresAtUnix);
+            span.setAttribute("cmux.vm.attach.daemon_reused", daemonReused);
+          }
           return {
             transport: "websocket",
             url: `wss://${sandbox.getHost(CMUXD_WS_PORT)}/terminal`,
@@ -233,13 +253,13 @@ export class E2BProvider implements VMProvider {
             token: pty.token,
             sessionId: pty.sessionId,
             expiresAtUnix: pty.expiresAtUnix,
-            daemon: {
+            daemon: daemon ? {
               url: `wss://${sandbox.getHost(CMUXD_WS_PORT)}/rpc`,
               headers: { "e2b-traffic-access-token": trafficAccessToken },
               token: daemon.token,
               sessionId: daemon.sessionId,
               expiresAtUnix: daemon.expiresAtUnix,
-            },
+            } : undefined,
           };
         } catch (err) {
           throw new ProviderError("e2b", `openWebSocketPty(${vmId}) failed`, err);
@@ -255,56 +275,32 @@ export class E2BProvider implements VMProvider {
   }
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function makeLease(label: string, singleUse: boolean, ttlSeconds: number) {
-  const token = `cmux-e2b-${label}-${randomBytes(32).toString("hex")}`;
-  const sessionId = randomBytes(16).toString("hex");
-  const expiresAtUnix = Math.floor(Date.now() / 1000) + ttlSeconds;
-  return {
-    token,
-    sessionId,
-    expiresAtUnix,
-    lease: {
-      version: 1,
-      token_sha256: createHash("sha256").update(token).digest("hex"),
-      expires_at_unix: expiresAtUnix,
-      session_id: sessionId,
-      single_use: singleUse,
-    },
-  };
-}
-
-type Lease = ReturnType<typeof makeLease>;
-type ReusableRpcLease = Pick<Lease, "token" | "sessionId" | "expiresAtUnix">;
-
-function leaseClientMetadata(lease: ReusableRpcLease): ReusableRpcLease {
-  return {
-    token: lease.token,
-    sessionId: lease.sessionId,
-    expiresAtUnix: lease.expiresAtUnix,
-  };
-}
-
-function isReusableRpcLease(value: unknown): value is ReusableRpcLease {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<ReusableRpcLease>;
-  return (
-    typeof candidate.token === "string" &&
-    candidate.token.length > 0 &&
-    typeof candidate.sessionId === "string" &&
-    candidate.sessionId.length > 0 &&
-    typeof candidate.expiresAtUnix === "number" &&
-    Number.isFinite(candidate.expiresAtUnix)
+async function readWebSocketService(sandbox: Sandbox): Promise<{
+  ptyLeasePath: string;
+  rpcLeasePath: string | null;
+}> {
+  const result = await sandbox.commands.run(
+    "ps auxww | grep cmuxd-remote | grep -v grep || true",
+    { timeoutMs: 30_000 },
   );
+  const stdout = result.stdout ?? "";
+  return {
+    ptyLeasePath:
+      shellArgValue(stdout, "--auth-lease-file")
+      ?? (stdout.includes(CMUXD_WS_LEGACY_PTY_LEASE_PATH)
+        ? CMUXD_WS_LEGACY_PTY_LEASE_PATH
+        : CMUXD_WS_PTY_LEASE_PATH),
+    rpcLeasePath: shellArgValue(stdout, "--rpc-auth-lease-file"),
+  };
 }
 
-async function readReusableRpcLease(sandbox: Sandbox): Promise<ReusableRpcLease | null> {
+async function readReusableRpcLease(
+  sandbox: Sandbox,
+  rpcLeasePath: string,
+): Promise<ReusableRpcLease | null> {
   const result = await sandbox.commands.run(
     [
-      `test -s ${shellQuote(CMUXD_WS_RPC_LEASE_PATH)}`,
+      `test -s ${shellQuote(rpcLeasePath)}`,
       `test -s ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
       `cat ${shellQuote(CMUXD_WS_RPC_CLIENT_PATH)}`,
     ].join(" && "),

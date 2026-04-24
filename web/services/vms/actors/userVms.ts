@@ -25,12 +25,18 @@ export type UserVmsState = {
   vms: UserVmEntry[];
 };
 
+const VM_CREATE_ACTION_TIMEOUT_MS = 16 * 60 * 1000;
+
 // One coordinator per Stack Auth user. Tracks `{providerVmId, provider, image}` for every VM
 // this user owns. We use the provider's own id everywhere — no cmux UUID layer on top.
 // Rationale: both Freestyle (`ob7ho8876hklod2xizof`) and E2B (`i453t8zwgbo38qqlmsgsl`) mint
 // 20-char alphanumeric ids already; stacking a UUID on top just muddies CLI output and docs.
 export const userVmsActor = actor({
-  options: { name: "UserVMs", icon: "users" },
+  options: {
+    name: "UserVMs",
+    icon: "users",
+    actionTimeout: VM_CREATE_ACTION_TIMEOUT_MS,
+  },
 
   state: { vms: [] } as UserVmsState,
 

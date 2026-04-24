@@ -1594,6 +1594,7 @@ struct CMUXCLI {
 
     private static let debugLastSocketHintPath = "/tmp/cmux-last-socket-path"
     private static let vmCreateIdempotencyTTLSeconds: TimeInterval = 10 * 60
+    private static let vmCreateResponseTimeoutSeconds: TimeInterval = 16 * 60
 
     private struct VMCreateIdempotencyStore: Codable {
         var records: [String: VMCreateIdempotencyRecord] = [:]
@@ -2209,7 +2210,11 @@ struct CMUXCLI {
                 let idempotency = try Self.activeVMCreateIdempotency(image: imageOpt, provider: normalizedProvider)
                 params["idempotency_key"] = idempotency.key
                 let vmCreateStartedAt = Date()
-                let response = try client.sendV2(method: "vm.create", params: params, responseTimeout: 300)
+                let response = try client.sendV2(
+                    method: "vm.create",
+                    params: params,
+                    responseTimeout: Self.vmCreateResponseTimeoutSeconds
+                )
                 logVMTiming(
                     "create",
                     vmID: (response["id"] as? String) ?? "?",

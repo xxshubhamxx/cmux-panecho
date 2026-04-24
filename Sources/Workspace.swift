@@ -4170,11 +4170,11 @@ final class WorkspaceRemoteSessionController {
             recordHeartbeatActivityLocked()
             if configuration.skipDaemonBootstrap {
                 debugLog("remote.relay.skipped reason=vm-baked transport=\(configuration.transport.rawValue)")
-                if configuration.transport == .ssh || configuration.daemonWebSocketEndpoint != nil {
+                if configuration.daemonWebSocketEndpoint != nil {
                     startProxyLocked()
                 } else {
-                    // WebSocket-backed VM workspaces still do not expose a daemon RPC transport.
-                    // Keep the shell connected, but surface that browser/proxy features are off.
+                    // SSH-only cloud VM fallback cannot use ssh-exec or local socket forwarding
+                    // through provider gateways. Keep the shell connected and leave proxy off.
                     let connectedDetailFormat = String(
                         localized: "remote.state.connected.vmNoProxy",
                         defaultValue: "Connected to %@ (VM, proxy disabled)"
