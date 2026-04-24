@@ -5965,7 +5965,6 @@ struct CMUXCLI {
         let splitStartupCommand = "\(shellQuote(executablePath)) vm-pty-attach --id \(shellQuote(id))"
         var params: [String: Any] = [
             "initial_command": initialStartupCommand,
-            "description": "VM WebSocket PTY",
         ]
         if let workspaceName = workspaceName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !workspaceName.isEmpty {
