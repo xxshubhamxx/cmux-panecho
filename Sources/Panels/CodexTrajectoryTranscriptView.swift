@@ -1048,29 +1048,25 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
         var duration: TimeInterval
     }
 
-    private struct TextSelectionEndpoint: Comparable, Equatable {
-        var pageEntryIndex: Int
+    private struct TextSelectionEndpoint: Equatable {
+        var blockID: String
         var utf16Offset: Int
-
-        static func < (lhs: Self, rhs: Self) -> Bool {
-            if lhs.pageEntryIndex != rhs.pageEntryIndex {
-                return lhs.pageEntryIndex < rhs.pageEntryIndex
-            }
-            return lhs.utf16Offset < rhs.utf16Offset
-        }
     }
 
     private struct TextSelection {
         var anchor: TextSelectionEndpoint
         var focus: TextSelectionEndpoint
 
-        var normalized: (lower: TextSelectionEndpoint, upper: TextSelectionEndpoint) {
-            anchor <= focus ? (anchor, focus) : (focus, anchor)
-        }
-
         var isEmpty: Bool {
             anchor == focus
         }
+    }
+
+    private struct NormalizedTextSelection {
+        var lower: TextSelectionEndpoint
+        var upper: TextSelectionEndpoint
+        var lowerBlockIndex: Int
+        var upperBlockIndex: Int
     }
 
     private let layoutEngine = CodexTrajectoryLayoutEngine()
@@ -1346,6 +1342,73 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
         needsDisplay = true
     }
 
+    private func clampSelectionToCurrentText() {
+        guard let selection = textSelection else { return }
+        guard let anchor = clampedEndpoint(selection.anchor),
+              let focus = clampedEndpoint(selection.focus) else {
+            textSelection = nil
+            isSelectingText = false
+            return
+        }
+        textSelection = TextSelection(anchor: anchor, focus: focus)
+    }
+
+    private func clampedEndpoint(_ endpoint: TextSelectionEndpoint) -> TextSelectionEndpoint? {
+        guard let pageEntry = pageEntries.first(where: { pageEntry in
+            pageEntry.page != nil && pageEntry.entry.block.id == endpoint.blockID
+        }) else {
+            return nil
+        }
+        let length = Self.displayText(for: pageEntry.entry.block).utf16.count
+        return TextSelectionEndpoint(
+            blockID: endpoint.blockID,
+            utf16Offset: min(max(endpoint.utf16Offset, 0), length)
+        )
+    }
+
+    private func normalizedSelection(_ selection: TextSelection) -> NormalizedTextSelection? {
+        guard let anchorBounds = pageEntryBounds(forBlockID: selection.anchor.blockID),
+              let focusBounds = pageEntryBounds(forBlockID: selection.focus.blockID) else {
+            return nil
+        }
+
+        let anchorIsLower: Bool
+        if selection.anchor.blockID == selection.focus.blockID {
+            anchorIsLower = selection.anchor.utf16Offset <= selection.focus.utf16Offset
+        } else {
+            anchorIsLower = anchorBounds.first <= focusBounds.first
+        }
+
+        if anchorIsLower {
+            return NormalizedTextSelection(
+                lower: selection.anchor,
+                upper: selection.focus,
+                lowerBlockIndex: anchorBounds.first,
+                upperBlockIndex: focusBounds.last
+            )
+        }
+        return NormalizedTextSelection(
+            lower: selection.focus,
+            upper: selection.anchor,
+            lowerBlockIndex: focusBounds.first,
+            upperBlockIndex: anchorBounds.last
+        )
+    }
+
+    private func pageEntryBounds(forBlockID blockID: String) -> (first: Int, last: Int)? {
+        var first: Int?
+        var last: Int?
+        for (index, pageEntry) in pageEntries.enumerated() {
+            guard pageEntry.page != nil, pageEntry.entry.block.id == blockID else { continue }
+            if first == nil {
+                first = index
+            }
+            last = index
+        }
+        guard let first, let last else { return nil }
+        return (first, last)
+    }
+
     private func rebuildLayout() {
         let theme = Self.theme(for: effectiveAppearance)
         let layoutWidth = max(1, documentWidth - horizontalInset * 2)
@@ -1425,12 +1488,7 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
 
         heightIndex.replaceAll(with: heights)
         setFrameSize(NSSize(width: documentWidth, height: max(1, heightIndex.totalHeight)))
-        if let selection = textSelection,
-           (!pageEntries.indices.contains(selection.anchor.pageEntryIndex)
-               || !pageEntries.indices.contains(selection.focus.pageEntryIndex)) {
-            textSelection = nil
-            isSelectingText = false
-        }
+        clampSelectionToCurrentText()
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
     }
@@ -1555,10 +1613,14 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
         point: CGPoint,
         theme: CodexTrajectoryTheme
     ) -> TextSelectionEndpoint? {
-        let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
+        let pageInfo = Self.pageTextInfo(for: pageEntry.entry.block, page: page)
+        let pageText = pageInfo.text
         let textLength = (pageText as NSString).length
         guard textLength > 0 else {
-            return TextSelectionEndpoint(pageEntryIndex: pageEntryIndex, utf16Offset: 0)
+            return TextSelectionEndpoint(
+                blockID: pageEntry.entry.block.id,
+                utf16Offset: pageInfo.globalUTF16Range.lowerBound
+            )
         }
 
         let frame = textFrame(
@@ -1569,7 +1631,10 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
         )
         let lines = CTFrameGetLines(frame) as? [CTLine] ?? []
         guard !lines.isEmpty else {
-            return TextSelectionEndpoint(pageEntryIndex: pageEntryIndex, utf16Offset: 0)
+            return TextSelectionEndpoint(
+                blockID: pageEntry.entry.block.id,
+                utf16Offset: pageInfo.globalUTF16Range.lowerBound
+            )
         }
         var origins = Array(repeating: CGPoint.zero, count: lines.count)
         CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
@@ -1611,7 +1676,10 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
             offset = linePoint.x <= 0 ? lower : upper
         }
         offset = min(max(offset, lower), upper)
-        return TextSelectionEndpoint(pageEntryIndex: pageEntryIndex, utf16Offset: offset)
+        return TextSelectionEndpoint(
+            blockID: pageEntry.entry.block.id,
+            utf16Offset: pageInfo.globalUTF16Range.lowerBound + offset
+        )
     }
 
     private func drawSelectionIfNeeded(
@@ -1626,6 +1694,8 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
         let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
         guard let range = selectedUTF16Range(
             forPageEntryIndex: pageEntryIndex,
+            pageEntry: pageEntry,
+            page: page,
             pageText: pageText,
             selection: selection
         ) else {
@@ -1657,33 +1727,40 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
 
     private func selectedUTF16Range(
         forPageEntryIndex pageEntryIndex: Int,
+        pageEntry: PageEntry,
+        page: CodexTrajectoryLayoutPage,
         pageText: String,
         selection: TextSelection
     ) -> Range<Int>? {
-        let normalized = selection.normalized
-        guard pageEntryIndex >= normalized.lower.pageEntryIndex,
-              pageEntryIndex <= normalized.upper.pageEntryIndex else {
+        guard let normalized = normalizedSelection(selection) else { return nil }
+        let pageInfo = Self.pageTextInfo(for: pageEntry.entry.block, page: page)
+        let pageRange = pageInfo.globalUTF16Range
+        let textLength = (pageText as NSString).length
+        guard textLength > 0 else { return nil }
+
+        let lowerGlobal: Int
+        let upperGlobal: Int
+        if normalized.lower.blockID == normalized.upper.blockID {
+            guard pageEntry.entry.block.id == normalized.lower.blockID else { return nil }
+            lowerGlobal = max(normalized.lower.utf16Offset, pageRange.lowerBound)
+            upperGlobal = min(normalized.upper.utf16Offset, pageRange.upperBound)
+        } else if pageEntry.entry.block.id == normalized.lower.blockID {
+            lowerGlobal = max(normalized.lower.utf16Offset, pageRange.lowerBound)
+            upperGlobal = pageRange.upperBound
+        } else if pageEntry.entry.block.id == normalized.upper.blockID {
+            lowerGlobal = pageRange.lowerBound
+            upperGlobal = min(normalized.upper.utf16Offset, pageRange.upperBound)
+        } else if pageEntryIndex > normalized.lowerBlockIndex,
+                  pageEntryIndex < normalized.upperBlockIndex {
+            lowerGlobal = pageRange.lowerBound
+            upperGlobal = pageRange.upperBound
+        } else {
             return nil
         }
 
-        let textLength = (pageText as NSString).length
-        let lower: Int
-        let upper: Int
-        if normalized.lower.pageEntryIndex == normalized.upper.pageEntryIndex {
-            lower = min(max(normalized.lower.utf16Offset, 0), textLength)
-            upper = min(max(normalized.upper.utf16Offset, 0), textLength)
-        } else if pageEntryIndex == normalized.lower.pageEntryIndex {
-            lower = min(max(normalized.lower.utf16Offset, 0), textLength)
-            upper = textLength
-        } else if pageEntryIndex == normalized.upper.pageEntryIndex {
-            lower = 0
-            upper = min(max(normalized.upper.utf16Offset, 0), textLength)
-        } else {
-            lower = 0
-            upper = textLength
-        }
-        guard upper > lower else { return nil }
-        return lower..<upper
+        let lower = min(max(lowerGlobal - pageRange.lowerBound, 0), textLength)
+        let upper = min(max(upperGlobal - pageRange.lowerBound, 0), textLength)
+        return upper > lower ? lower..<upper : nil
     }
 
     private func selectionRects(
@@ -1759,14 +1836,10 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
 
     private var selectedTranscriptText: String? {
         guard let selection = textSelection, !selection.isEmpty else { return nil }
-        let normalized = selection.normalized
-        guard pageEntries.indices.contains(normalized.lower.pageEntryIndex),
-              pageEntries.indices.contains(normalized.upper.pageEntryIndex) else {
-            return nil
-        }
+        guard let normalized = normalizedSelection(selection) else { return nil }
 
         var chunks: [String] = []
-        for index in normalized.lower.pageEntryIndex...normalized.upper.pageEntryIndex {
+        for index in normalized.lowerBlockIndex...normalized.upperBlockIndex {
             guard pageEntries.indices.contains(index),
                   let page = pageEntries[index].page else {
                 continue
@@ -1781,6 +1854,8 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
             let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
             guard let range = selectedUTF16Range(
                 forPageEntryIndex: index,
+                pageEntry: pageEntry,
+                page: page,
                 pageText: pageText,
                 selection: selection
             ) else {
@@ -1798,13 +1873,16 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
     }
 
     private func firstTextEndpoint() -> TextSelectionEndpoint? {
-        for (index, pageEntry) in pageEntries.enumerated() {
+        for pageEntry in pageEntries {
             guard let page = pageEntry.page else { continue }
             switch pageEntry.chrome {
             case .plain, .accordionContent:
-                let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
-                if (pageText as NSString).length > 0 {
-                    return TextSelectionEndpoint(pageEntryIndex: index, utf16Offset: 0)
+                let pageInfo = Self.pageTextInfo(for: pageEntry.entry.block, page: page)
+                if (pageInfo.text as NSString).length > 0 {
+                    return TextSelectionEndpoint(
+                        blockID: pageEntry.entry.block.id,
+                        utf16Offset: pageInfo.globalUTF16Range.lowerBound
+                    )
                 }
             case .accordionHeader, .compaction:
                 continue
@@ -1814,14 +1892,17 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
     }
 
     private func lastTextEndpoint() -> TextSelectionEndpoint? {
-        for (index, pageEntry) in pageEntries.enumerated().reversed() {
+        for pageEntry in pageEntries.reversed() {
             guard let page = pageEntry.page else { continue }
             switch pageEntry.chrome {
             case .plain, .accordionContent:
-                let pageText = Self.pageText(for: pageEntry.entry.block, page: page)
-                let length = (pageText as NSString).length
+                let pageInfo = Self.pageTextInfo(for: pageEntry.entry.block, page: page)
+                let length = (pageInfo.text as NSString).length
                 if length > 0 {
-                    return TextSelectionEndpoint(pageEntryIndex: index, utf16Offset: length)
+                    return TextSelectionEndpoint(
+                        blockID: pageEntry.entry.block.id,
+                        utf16Offset: pageInfo.globalUTF16Range.upperBound
+                    )
                 }
             case .accordionHeader, .compaction:
                 continue
@@ -1834,8 +1915,22 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
         for block: CodexTrajectoryBlock,
         page: CodexTrajectoryLayoutPage
     ) -> String {
-        let displayText = block.displayText.isEmpty ? " " : block.displayText
-        guard page.textRange.length > 0 else { return "" }
+        pageTextInfo(for: block, page: page).text
+    }
+
+    private static func displayText(for block: CodexTrajectoryBlock) -> String {
+        block.displayText.isEmpty ? " " : block.displayText
+    }
+
+    private static func pageTextInfo(
+        for block: CodexTrajectoryBlock,
+        page: CodexTrajectoryLayoutPage
+    ) -> (text: String, globalUTF16Range: Range<Int>) {
+        let displayText = displayText(for: block)
+        guard page.textRange.length > 0 else {
+            let offset = globalUTF16Offset(in: displayText, characterOffset: page.textRange.location)
+            return ("", offset..<offset)
+        }
         let lower = displayText.index(
             displayText.startIndex,
             offsetBy: page.textRange.location,
@@ -1846,7 +1941,19 @@ private final class CodexTrajectoryTranscriptDocumentView: NSView, NSUserInterfa
             offsetBy: page.textRange.length,
             limitedBy: displayText.endIndex
         ) ?? displayText.endIndex
-        return String(displayText[lower..<upper])
+        let text = String(displayText[lower..<upper])
+        let lowerOffset = String(displayText[..<lower]).utf16.count
+        let upperOffset = String(displayText[..<upper]).utf16.count
+        return (text, lowerOffset..<upperOffset)
+    }
+
+    private static func globalUTF16Offset(in text: String, characterOffset: Int) -> Int {
+        let index = text.index(
+            text.startIndex,
+            offsetBy: max(0, characterOffset),
+            limitedBy: text.endIndex
+        ) ?? text.endIndex
+        return String(text[..<index]).utf16.count
     }
 
     private func toggleAccordion(id: String) {
