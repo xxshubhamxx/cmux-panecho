@@ -591,7 +591,7 @@ private struct FilePreviewPDFView: NSViewRepresentable {
 }
 
 private final class FilePreviewPDFContainerView: NSView {
-    private let pdfView = PDFView()
+    private let pdfView = FilePreviewMagnifyingPDFView()
     private let pageLabel = NSTextField(labelWithString: "")
     private var currentURL: URL?
     private var previousButton: NSButton!
@@ -682,6 +682,11 @@ private final class FilePreviewPDFContainerView: NSView {
         pdfView.displayDirection = .vertical
         pdfView.displaysPageBreaks = true
         pdfView.backgroundColor = .textBackgroundColor
+        pdfView.minScaleFactor = 0.1
+        pdfView.maxScaleFactor = 8.0
+        pdfView.onMagnify = { [weak self] event in
+            self?.magnifyPDF(with: event)
+        }
         pdfView.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(toolbar)
@@ -742,12 +747,12 @@ private final class FilePreviewPDFContainerView: NSView {
 
     @objc private func zoomOut() {
         pdfView.autoScales = false
-        pdfView.zoomOut(nil)
+        setPDFScaleFactor(pdfView.scaleFactor / 1.25)
     }
 
     @objc private func zoomIn() {
         pdfView.autoScales = false
-        pdfView.zoomIn(nil)
+        setPDFScaleFactor(pdfView.scaleFactor * 1.25)
     }
 
     @objc private func zoomToFit() {
@@ -756,7 +761,7 @@ private final class FilePreviewPDFContainerView: NSView {
 
     @objc private func actualSize() {
         pdfView.autoScales = false
-        pdfView.scaleFactor = 1.0
+        setPDFScaleFactor(1.0)
     }
 
     @objc private func pdfPageChanged() {
@@ -782,6 +787,32 @@ private final class FilePreviewPDFContainerView: NSView {
         previousButton.isEnabled = pageIndex > 0
         nextButton.isEnabled = pageIndex < document.pageCount - 1
     }
+
+    private func magnifyPDF(with event: NSEvent) {
+        guard pdfView.document != nil else { return }
+        let factor = 1.0 + event.magnification
+        guard factor.isFinite, factor > 0 else { return }
+        pdfView.autoScales = false
+        setPDFScaleFactor(pdfView.scaleFactor * factor)
+    }
+
+    private func setPDFScaleFactor(_ nextScale: CGFloat) {
+        let clamped = min(max(nextScale, pdfView.minScaleFactor), pdfView.maxScaleFactor)
+        guard clamped.isFinite else { return }
+        pdfView.scaleFactor = clamped
+    }
+}
+
+private final class FilePreviewMagnifyingPDFView: PDFView {
+    var onMagnify: ((NSEvent) -> Void)?
+
+    override func magnify(with event: NSEvent) {
+        if let onMagnify {
+            onMagnify(event)
+        } else {
+            super.magnify(with: event)
+        }
+    }
 }
 
 private struct FilePreviewImageView: NSViewRepresentable {
@@ -799,7 +830,7 @@ private struct FilePreviewImageView: NSViewRepresentable {
 }
 
 private final class FilePreviewImageContainerView: NSView {
-    private let scrollView = NSScrollView()
+    private let scrollView = FilePreviewImageScrollView()
     private let documentView = FilePreviewImageDocumentView()
     private let zoomLabel = NSTextField(labelWithString: "")
     private var currentURL: URL?
@@ -888,6 +919,12 @@ private final class FilePreviewImageContainerView: NSView {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = .textBackgroundColor
         scrollView.documentView = documentView
+        scrollView.onMagnify = { [weak self] event in
+            self?.magnifyImage(with: event)
+        }
+        documentView.onMagnify = { [weak self] event in
+            self?.magnifyImage(with: event)
+        }
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(toolbar)
@@ -931,13 +968,13 @@ private final class FilePreviewImageContainerView: NSView {
 
     @objc private func zoomOut() {
         isFitMode = false
-        scale = max(0.05, scale / 1.25)
+        scale = clampedImageScale(scale / 1.25)
         applyScale()
     }
 
     @objc private func zoomIn() {
         isFitMode = false
-        scale = min(16.0, scale * 1.25)
+        scale = clampedImageScale(scale * 1.25)
         applyScale()
     }
 
@@ -958,7 +995,7 @@ private final class FilePreviewImageContainerView: NSView {
         guard clipSize.width > 1, clipSize.height > 1 else { return scale }
         let widthScale = clipSize.width / max(imageSize.width, 1)
         let heightScale = clipSize.height / max(imageSize.height, 1)
-        return min(max(min(widthScale, heightScale), 0.05), 16.0)
+        return clampedImageScale(min(widthScale, heightScale))
     }
 
     private func applyScale() {
@@ -979,14 +1016,87 @@ private final class FilePreviewImageContainerView: NSView {
         zoomLabel.stringValue = "\(Int((scale * 100).rounded()))%"
     }
 
+    private func magnifyImage(with event: NSEvent) {
+        guard documentView.imageView.image != nil else { return }
+        let factor = 1.0 + event.magnification
+        guard factor.isFinite, factor > 0 else { return }
+
+        let anchorInClip = scrollView.contentView.convert(event.locationInWindow, from: nil)
+        let oldImageFrame = documentView.imageView.frame
+        let anchorInDocument = documentView.convert(event.locationInWindow, from: nil)
+        let anchorRatio = CGPoint(
+            x: normalizedAnchorRatio(
+                anchorInDocument.x - oldImageFrame.minX,
+                length: oldImageFrame.width
+            ),
+            y: normalizedAnchorRatio(
+                anchorInDocument.y - oldImageFrame.minY,
+                length: oldImageFrame.height
+            )
+        )
+
+        isFitMode = false
+        scale = clampedImageScale(scale * factor)
+        applyScale()
+        documentView.layoutSubtreeIfNeeded()
+
+        let newImageFrame = documentView.imageView.frame
+        let anchoredDocumentPoint = CGPoint(
+            x: newImageFrame.minX + (newImageFrame.width * anchorRatio.x),
+            y: newImageFrame.minY + (newImageFrame.height * anchorRatio.y)
+        )
+        scrollDocumentPoint(anchoredDocumentPoint, toClipPoint: anchorInClip)
+    }
+
+    private func scrollDocumentPoint(_ documentPoint: CGPoint, toClipPoint clipPoint: CGPoint) {
+        let clipSize = scrollView.contentView.bounds.size
+        let documentSize = documentView.bounds.size
+        let maxOrigin = CGPoint(
+            x: max(0, documentSize.width - clipSize.width),
+            y: max(0, documentSize.height - clipSize.height)
+        )
+        let nextOrigin = CGPoint(
+            x: min(max(0, documentPoint.x - clipPoint.x), maxOrigin.x),
+            y: min(max(0, documentPoint.y - clipPoint.y), maxOrigin.y)
+        )
+        scrollView.contentView.scroll(to: nextOrigin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    private func normalizedAnchorRatio(_ value: CGFloat, length: CGFloat) -> CGFloat {
+        guard length > 1 else { return 0.5 }
+        return min(max(value / length, 0), 1)
+    }
+
+    private func clampedImageScale(_ nextScale: CGFloat) -> CGFloat {
+        min(max(nextScale, 0.05), 16.0)
+    }
+
     private func normalizedSize(_ size: CGSize) -> CGSize {
         CGSize(width: max(1, size.width), height: max(1, size.height))
     }
 }
 
+private final class FilePreviewImageScrollView: NSScrollView {
+    var onMagnify: ((NSEvent) -> Void)?
+
+    override func magnify(with event: NSEvent) {
+        if let onMagnify {
+            onMagnify(event)
+        } else {
+            super.magnify(with: event)
+        }
+    }
+}
+
 private final class FilePreviewImageDocumentView: NSView {
-    let imageView = NSImageView()
+    let imageView = FilePreviewMagnifyingImageView()
     var scaledImageSize = CGSize(width: 1, height: 1)
+    var onMagnify: ((NSEvent) -> Void)? {
+        didSet {
+            imageView.onMagnify = onMagnify
+        }
+    }
 
     override var isFlipped: Bool { true }
 
@@ -1009,6 +1119,26 @@ private final class FilePreviewImageDocumentView: NSView {
             width: scaledImageSize.width,
             height: scaledImageSize.height
         )
+    }
+
+    override func magnify(with event: NSEvent) {
+        if let onMagnify {
+            onMagnify(event)
+        } else {
+            super.magnify(with: event)
+        }
+    }
+}
+
+private final class FilePreviewMagnifyingImageView: NSImageView {
+    var onMagnify: ((NSEvent) -> Void)?
+
+    override func magnify(with event: NSEvent) {
+        if let onMagnify {
+            onMagnify(event)
+        } else {
+            super.magnify(with: event)
+        }
     }
 }
 
