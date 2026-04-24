@@ -8169,8 +8169,16 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
     override func rightMouseDown(with event: NSEvent) {
         guard let surface = surface else { return }
+        let disableContextMenu = TerminalContextMenuSettings.isDisabled()
         if !ghostty_surface_mouse_captured(surface) {
             requestPointerFocusRecovery()
+            guard !disableContextMenu else {
+                window?.makeFirstResponder(self)
+                let point = convert(event.locationInWindow, from: nil)
+                ghostty_surface_mouse_pos(surface, point.x, bounds.height - point.y, modsFromEvent(event))
+                _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, modsFromEvent(event))
+                return
+            }
             super.rightMouseDown(with: event)
             return
         }
@@ -8185,7 +8193,11 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     override func rightMouseUp(with event: NSEvent) {
         guard let surface = surface else { return }
         if !ghostty_surface_mouse_captured(surface) {
-            super.rightMouseUp(with: event)
+            guard TerminalContextMenuSettings.isDisabled() else {
+                super.rightMouseUp(with: event)
+                return
+            }
+            _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, modsFromEvent(event))
             return
         }
 
@@ -8216,7 +8228,7 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let surface = surface else { return nil }
-        if ghostty_surface_mouse_captured(surface) {
+        if ghostty_surface_mouse_captured(surface) || TerminalContextMenuSettings.isDisabled() {
             return nil
         }
 

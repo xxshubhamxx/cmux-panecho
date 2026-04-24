@@ -7195,28 +7195,6 @@ final class Workspace: Identifiable, ObservableObject {
         surfaceTabBarCommandButtons = executableButtons
         surfaceTabBarButtonSourcePath = sourcePath
         surfaceTabBarButtonGlobalConfigPath = globalConfigPath
-
-        let bonsplitButtons = buttons.map { button in
-            let executable = executableButtons[button.id]
-            let allowProjectLocalIcon = executable.map {
-                CmuxConfigExecutor.isTrustedSurfaceButton(
-                    $0.button,
-                    workspaceCommand: $0.workspaceCommand,
-                    terminalCommandSourcePath: $0.terminalCommandSourcePath,
-                    surfaceTabBarConfigSourcePath: sourcePath,
-                    globalConfigPath: globalConfigPath
-                )
-            } ?? true
-            return button.bonsplitActionButton(
-                configSourcePath: sourcePath,
-                globalConfigPath: globalConfigPath,
-                allowProjectLocalIcon: allowProjectLocalIcon
-            )
-        }
-        var configuration = bonsplitController.configuration
-        guard configuration.appearance.splitButtons != bonsplitButtons else { return }
-        configuration.appearance.splitButtons = bonsplitButtons
-        bonsplitController.configuration = configuration
     }
 
     // MARK: - Surface ID to Panel ID Mapping

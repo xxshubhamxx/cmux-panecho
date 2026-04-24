@@ -126,6 +126,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "disableRightClickContextMenu": {
+          "type": "boolean",
+          "default": false,
+          "description": "Disable the cmux terminal context menu so right-click uses only the underlying Ghostty terminal behavior."
+        },
         "showScrollBar": {
           "type": "boolean",
           "default": true,

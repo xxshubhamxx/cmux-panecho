@@ -39,6 +39,7 @@ final class CmuxSettingsFileStore {
         "app.warnBeforeQuit",
         "app.renameSelectsExistingName",
         "app.commandPaletteSearchesAllSurfaces",
+        "terminal.disableRightClickContextMenu",
         "terminal.showScrollBar",
         "notifications.dockBadge",
         "notifications.showInMenuBar",
@@ -473,6 +474,12 @@ final class CmuxSettingsFileStore {
         sourcePath: String,
         snapshot: inout ResolvedSettingsSnapshot
     ) {
+        if let value = jsonBool(section["disableRightClickContextMenu"]) {
+            snapshot.managedUserDefaults[TerminalContextMenuSettings.disableRightClickContextMenuKey] = .bool(value)
+        } else if section.keys.contains("disableRightClickContextMenu") {
+            logInvalid("terminal.disableRightClickContextMenu", sourcePath: sourcePath)
+        }
+
         if let value = jsonBool(section["showScrollBar"]) {
             snapshot.managedUserDefaults[TerminalScrollBarSettings.showScrollBarKey] = .bool(value)
         } else if section.keys.contains("showScrollBar") {
@@ -1230,6 +1237,7 @@ final class CmuxSettingsFileStore {
             ],
             [
                 "terminal": [
+                    "disableRightClickContextMenu": TerminalContextMenuSettings.defaultDisableRightClickContextMenu,
                     "showScrollBar": TerminalScrollBarSettings.defaultShowScrollBar,
                 ],
             ],

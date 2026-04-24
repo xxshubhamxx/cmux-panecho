@@ -4292,6 +4292,8 @@ struct SettingsView: View {
     private var closeWorkspaceOnLastSurfaceShortcut = LastSurfaceCloseShortcutSettings.defaultValue
     @AppStorage(PaneFirstClickFocusSettings.enabledKey)
     private var paneFirstClickFocusEnabled = PaneFirstClickFocusSettings.defaultEnabled
+    @AppStorage(TerminalContextMenuSettings.disableRightClickContextMenuKey)
+    private var disableTerminalContextMenu = TerminalContextMenuSettings.defaultDisableRightClickContextMenu
     @AppStorage(TerminalScrollBarSettings.showScrollBarKey)
     private var showTerminalScrollBar = TerminalScrollBarSettings.defaultShowScrollBar
     @AppStorage(WorkspaceAutoReorderSettings.key) private var workspaceAutoReorder = WorkspaceAutoReorderSettings.defaultValue
@@ -4416,6 +4418,19 @@ struct SettingsView: View {
                 showTerminalScrollBar = newValue
                 TerminalScrollBarSettings.notifyDidChange()
             }
+        )
+    }
+
+    private var disableTerminalContextMenuSubtitle: String {
+        if disableTerminalContextMenu {
+            return String(
+                localized: "settings.terminal.disableRightClickContextMenu.subtitleOn",
+                defaultValue: "Right-clicking in terminal views passes through to Ghostty without showing the cmux context menu."
+            )
+        }
+        return String(
+            localized: "settings.terminal.disableRightClickContextMenu.subtitleOff",
+            defaultValue: "Right-clicking in terminal views shows the cmux context menu with actions like Copy, Paste, and Split."
         )
     }
 
@@ -5392,6 +5407,19 @@ struct SettingsView: View {
 
                     SettingsSectionHeader(title: String(localized: "settings.section.terminal", defaultValue: "Terminal"))
                     SettingsCard {
+                        SettingsCardRow(
+                            configurationReview: .json("terminal.disableRightClickContextMenu"),
+                            String(localized: "settings.terminal.disableRightClickContextMenu", defaultValue: "Disable right-click context menu"),
+                            subtitle: disableTerminalContextMenuSubtitle
+                        ) {
+                            Toggle("", isOn: $disableTerminalContextMenu)
+                                .labelsHidden()
+                                .controlSize(.small)
+                                .accessibilityIdentifier("SettingsDisableTerminalContextMenuToggle")
+                                .accessibilityLabel(
+                                    String(localized: "settings.terminal.disableRightClickContextMenu", defaultValue: "Disable right-click context menu")
+                                )
+                        }
                         SettingsCardRow(
                             configurationReview: .json("terminal.showScrollBar"),
                             String(localized: "settings.terminal.scrollBar", defaultValue: "Show Terminal Scroll Bar"),
@@ -6418,6 +6446,7 @@ struct SettingsView: View {
         defaults.removeObject(forKey: WorkspaceButtonFadeSettings.legacyPaneTabBarControlsVisibilityModeKey)
         closeWorkspaceOnLastSurfaceShortcut = LastSurfaceCloseShortcutSettings.defaultValue
         paneFirstClickFocusEnabled = PaneFirstClickFocusSettings.defaultEnabled
+        disableTerminalContextMenu = TerminalContextMenuSettings.defaultDisableRightClickContextMenu
         let previousShowTerminalScrollBar = showTerminalScrollBar
         showTerminalScrollBar = TerminalScrollBarSettings.defaultShowScrollBar
         if previousShowTerminalScrollBar != showTerminalScrollBar {

@@ -90283,6 +90283,57 @@
         }
       }
     },
+    "settings.terminal.disableRightClickContextMenu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disable right-click context menu"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "右クリックのコンテキストメニューを無効化"
+          }
+        }
+      }
+    },
+    "settings.terminal.disableRightClickContextMenu.subtitleOff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right-clicking in terminal views shows the cmux context menu with actions like Copy, Paste, and Split."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターミナルビューで右クリックすると、Copy、Paste、Split などの cmux コンテキストメニューを表示します。"
+          }
+        }
+      }
+    },
+    "settings.terminal.disableRightClickContextMenu.subtitleOn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right-clicking in terminal views passes through to Ghostty without showing the cmux context menu."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターミナルビューで右クリックしても cmux のコンテキストメニューは表示せず、Ghostty にそのまま渡します。"
+          }
+        }
+      }
+    },
     "settings.terminal.scrollBar": {
       "extractionState": "manual",
       "localizations": {

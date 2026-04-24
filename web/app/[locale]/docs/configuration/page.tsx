@@ -56,7 +56,8 @@ const settingsFileExample = `{
   // },
 
   // "terminal": {
-  //   "showScrollBar": false
+  //   "showScrollBar": false,
+  //   "disableRightClickContextMenu": true
   // },
 
   // "browser": {

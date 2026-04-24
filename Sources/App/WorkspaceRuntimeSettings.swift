@@ -92,6 +92,15 @@ enum PaneFirstClickFocusSettings {
     }
 }
 
+enum TerminalContextMenuSettings {
+    static let disableRightClickContextMenuKey = "terminal.disableRightClickContextMenu"
+    static let defaultDisableRightClickContextMenu = false
+
+    static func isDisabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: disableRightClickContextMenuKey) as? Bool ?? defaultDisableRightClickContextMenu
+    }
+}
+
 enum TerminalScrollBarSettings {
     static let showScrollBarKey = "terminal.showScrollBar"
     static let defaultShowScrollBar = true

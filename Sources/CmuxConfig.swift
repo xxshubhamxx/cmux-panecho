@@ -161,19 +161,6 @@ enum CmuxSurfaceTabBarBuiltInAction: String, Codable, Sendable, CaseIterable, Ha
             return "square.split.1x2"
         }
     }
-
-    var bonsplitAction: BonsplitConfiguration.SplitActionButton.Action {
-        switch self {
-        case .newTerminal:
-            return .newTerminal
-        case .newBrowser:
-            return .newBrowser
-        case .splitRight:
-            return .splitRight
-        case .splitDown:
-            return .splitDown
-        }
-    }
 }
 
 enum CmuxConfigTerminalCommandTarget: String, Codable, Sendable, Hashable {
@@ -316,32 +303,6 @@ enum CmuxButtonIcon: Codable, Sendable, Hashable {
         case .imagePath(let path):
             try container.encode("image", forKey: .type)
             try container.encode(path, forKey: .path)
-        }
-    }
-
-    func bonsplitIcon(
-        configSourcePath: String?,
-        globalConfigPath: String,
-        allowProjectLocalImage: Bool = true
-    ) -> BonsplitConfiguration.SplitActionButton.Icon {
-        switch self {
-        case .symbol(let name):
-            return .systemImage(name)
-        case .emoji(let value, let scale):
-            return .emoji(value, scale: scale)
-        case .imagePath(let path):
-            guard let preparedImage = Self.preparedImageAsset(
-                path,
-                relativeToConfig: configSourcePath,
-                globalConfigPath: globalConfigPath
-            ) else {
-                NSLog("[CmuxConfig] icon image path is not allowed: %@", path)
-                return .systemImage("questionmark.circle")
-            }
-            if preparedImage.isProjectLocal && !allowProjectLocalImage {
-                return .systemImage("lock.fill")
-            }
-            return .imageData(preparedImage.data)
         }
     }
 
@@ -1130,32 +1091,6 @@ struct CmuxSurfaceTabBarButton: Codable, Sendable, Hashable, Identifiable {
 
     var workspaceCommandName: String? {
         action.workspaceCommandName
-    }
-
-    func bonsplitActionButton(
-        configSourcePath: String?,
-        globalConfigPath: String,
-        allowProjectLocalIcon: Bool = true
-    ) -> BonsplitConfiguration.SplitActionButton {
-        let bonsplitAction: BonsplitConfiguration.SplitActionButton.Action = {
-            switch action {
-            case .builtIn(let builtIn):
-                return builtIn.bonsplitAction
-            case .command, .agent, .workspaceCommand, .actionReference:
-                return .custom(id)
-            }
-        }()
-
-        return BonsplitConfiguration.SplitActionButton(
-            id: id,
-            icon: (icon ?? action.defaultButtonIcon).bonsplitIcon(
-                configSourcePath: iconSourcePath ?? configSourcePath,
-                globalConfigPath: globalConfigPath,
-                allowProjectLocalImage: allowProjectLocalIcon
-            ),
-            tooltip: tooltip ?? title ?? terminalCommand,
-            action: bonsplitAction
-        )
     }
 
     init(
