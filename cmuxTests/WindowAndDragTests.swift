@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import PDFKit
 import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
@@ -1059,7 +1060,7 @@ final class FilePreviewPDFChromeTests: XCTestCase {
         }
 
         defaults.removeObject(forKey: FilePreviewPDFChromeStyleVariant.defaultsKey)
-        XCTAssertEqual(FilePreviewPDFChromeStyleVariant.current(), .liquidGlass)
+        XCTAssertEqual(FilePreviewPDFChromeStyleVariant.current(), .systemControlGroup)
 
         FilePreviewPDFChromeStyleVariant.thinOutline.persist()
         XCTAssertEqual(FilePreviewPDFChromeStyleVariant.current(), .thinOutline)
@@ -1159,6 +1160,32 @@ final class FilePreviewPDFChromeTests: XCTestCase {
         XCTAssertGreaterThan(itemSize.width, sidebar.bounds.width / 2)
     }
 
+    func testThumbnailSidebarKeepsSingleSelectionWhenProgrammaticallyChangingPage() throws {
+        let sidebar = FilePreviewPDFThumbnailSidebarView(frame: NSRect(x: 0, y: 0, width: 320, height: 480))
+        let document = try makePDFDocument(pageCount: 5)
+
+        sidebar.setDocument(document)
+        sidebar.selectPage(at: 1, scrollToVisible: false)
+        sidebar.selectPage(at: 3, scrollToVisible: false)
+
+        let mirror = Mirror(reflecting: sidebar)
+        let collectionView = try XCTUnwrap(
+            mirror.descendant("collectionView") as? NSCollectionView
+        )
+
+        let previousItem = sidebar.collectionView(
+            collectionView,
+            itemForRepresentedObjectAt: IndexPath(item: 1, section: 0)
+        )
+        let currentItem = sidebar.collectionView(
+            collectionView,
+            itemForRepresentedObjectAt: IndexPath(item: 3, section: 0)
+        )
+
+        XCTAssertFalse(try thumbnailItemSelectedState(previousItem))
+        XCTAssertTrue(try thumbnailItemSelectedState(currentItem))
+    }
+
     private func isView(_ view: NSView?, inside container: NSView) -> Bool {
         var current = view
         while let next = current {
@@ -1168,6 +1195,24 @@ final class FilePreviewPDFChromeTests: XCTestCase {
             current = next.superview
         }
         return false
+    }
+
+    private func makePDFDocument(pageCount: Int) throws -> PDFDocument {
+        let document = PDFDocument()
+        for pageIndex in 0..<pageCount {
+            let image = NSImage(size: NSSize(width: 80, height: 80))
+            image.lockFocus()
+            NSColor(calibratedHue: CGFloat(pageIndex) / CGFloat(max(pageCount, 1)), saturation: 0.5, brightness: 0.8, alpha: 1).setFill()
+            NSBezierPath(rect: NSRect(x: 0, y: 0, width: 80, height: 80)).fill()
+            image.unlockFocus()
+            let page = try XCTUnwrap(PDFPage(image: image))
+            document.insert(page, at: pageIndex)
+        }
+        return document
+    }
+
+    private func thumbnailItemSelectedState(_ item: NSCollectionViewItem) throws -> Bool {
+        try XCTUnwrap(Mirror(reflecting: item.view).descendant("isSelectedForPreview") as? Bool)
     }
 }
 

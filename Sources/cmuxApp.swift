@@ -2539,12 +2539,52 @@ enum SettingsNavigationRequest {
 
 // MARK: - PDF Preview Chrome Debug
 
+private enum PDFPreviewChromeDebugAction {
+    case zoomOut
+    case actualSize
+    case zoomIn
+
+    var title: String {
+        switch self {
+        case .zoomOut:
+            String(localized: "filePreview.pdf.zoomOut", defaultValue: "Zoom Out")
+        case .actualSize:
+            String(localized: "filePreview.pdf.actualSize", defaultValue: "Actual Size")
+        case .zoomIn:
+            String(localized: "filePreview.pdf.zoomIn", defaultValue: "Zoom In")
+        }
+    }
+
+    var systemName: String {
+        switch self {
+        case .zoomOut:
+            "minus.magnifyingglass"
+        case .actualSize:
+            "1.magnifyingglass"
+        case .zoomIn:
+            "plus.magnifyingglass"
+        }
+    }
+}
+
+private final class PDFPreviewChromeDebugModel: ObservableObject {
+    @Published var lastActionTitle = ""
+    @Published var actionCount = 0
+
+    func record(_ action: PDFPreviewChromeDebugAction) {
+        lastActionTitle = action.title
+        actionCount += 1
+    }
+}
+
 private struct PDFPreviewChromeDebugView: View {
+    @ObservedObject var model: PDFPreviewChromeDebugModel
+
     @AppStorage(FilePreviewPDFChromeStyleVariant.defaultsKey)
-    private var chromeStyleRawValue = FilePreviewPDFChromeStyleVariant.liquidGlass.rawValue
+    private var chromeStyleRawValue = FilePreviewPDFChromeStyleVariant.systemControlGroup.rawValue
 
     private var currentVariant: FilePreviewPDFChromeStyleVariant {
-        FilePreviewPDFChromeStyleVariant(rawValue: chromeStyleRawValue) ?? .liquidGlass
+        FilePreviewPDFChromeStyleVariant(rawValue: chromeStyleRawValue) ?? .systemControlGroup
     }
 
     var body: some View {
@@ -2561,6 +2601,23 @@ private struct PDFPreviewChromeDebugView: View {
                 )
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+
+                GroupBox(String(localized: "debug.pdfPreviewChrome.toolbarReference", defaultValue: "Native Window Toolbar")) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(
+                            String(
+                                localized: "debug.pdfPreviewChrome.toolbarReferenceDescription",
+                                defaultValue: "Use the buttons in this debug window's titlebar toolbar to test real NSToolbar hover and press feedback."
+                            )
+                        )
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+
+                        actionStatus
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
+                }
 
                 ForEach(FilePreviewPDFChromeStyleVariant.allCases) { variant in
                     variantRow(variant)
@@ -2588,13 +2645,35 @@ private struct PDFPreviewChromeDebugView: View {
                     }
 
                     Button(String(localized: "debug.pdfPreviewChrome.resetToDefault", defaultValue: "Reset to Default")) {
-                        apply(.liquidGlass)
+                        apply(.systemControlGroup)
                     }
                 }
             }
             .padding(16)
         }
-        .frame(width: 460, height: 520)
+        .frame(width: 500, height: 620)
+    }
+
+    @ViewBuilder
+    private var actionStatus: some View {
+        if model.actionCount == 0 {
+            Text(String(localized: "debug.pdfPreviewChrome.noActions", defaultValue: "No sample actions yet."))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+        } else {
+            Text(
+                String(
+                    format: String(
+                        localized: "debug.pdfPreviewChrome.lastActionFormat",
+                        defaultValue: "Last action: %@ (%d)"
+                    ),
+                    model.lastActionTitle,
+                    model.actionCount
+                )
+            )
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
     }
 
     private func variantRow(_ variant: FilePreviewPDFChromeStyleVariant) -> some View {
@@ -2628,7 +2707,7 @@ private struct PDFPreviewChromeDebugView: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 48, alignment: .leading)
 
-                PDFPreviewChromeDebugSample(variant: variant)
+                PDFPreviewChromeDebugSample(variant: variant, model: model)
             }
         }
         .padding(10)
@@ -2657,48 +2736,68 @@ private struct PDFPreviewChromeDebugView: View {
 
 private struct PDFPreviewChromeDebugSample: View {
     let variant: FilePreviewPDFChromeStyleVariant
+    @ObservedObject var model: PDFPreviewChromeDebugModel
 
     var body: some View {
-        HStack(spacing: 0) {
-            sampleButton(
-                systemName: "minus.magnifyingglass",
-                label: String(localized: "filePreview.pdf.zoomOut", defaultValue: "Zoom Out")
-            )
-            Divider()
-                .frame(height: 20)
-            sampleButton(
-                systemName: "1.magnifyingglass",
-                label: String(localized: "filePreview.pdf.actualSize", defaultValue: "Actual Size")
-            )
-            Divider()
-                .frame(height: 20)
-            sampleButton(
-                systemName: "plus.magnifyingglass",
-                label: String(localized: "filePreview.pdf.zoomIn", defaultValue: "Zoom In")
-            )
+        if variant == .systemControlGroup {
+            ControlGroup {
+                sampleButtons(includeDividers: false)
+            } label: {
+                Label(
+                    String(localized: "filePreview.pdf.zoomControls", defaultValue: "Zoom Controls"),
+                    systemImage: "magnifyingglass"
+                )
+            }
+            .controlSize(.regular)
+        } else {
+            HStack(spacing: 0) {
+                sampleButtons(includeDividers: true)
+            }
+            .frame(height: 36)
+            .modifier(FilePreviewPDFChromeStyleModifier(variant: variant))
         }
-        .frame(height: 36)
-        .modifier(FilePreviewPDFChromeStyleModifier(variant: variant))
     }
 
-    private func sampleButton(systemName: String, label: String) -> some View {
-        Button(action: {}) {
-            Image(systemName: systemName)
+    @ViewBuilder
+    private func sampleButtons(includeDividers: Bool) -> some View {
+        sampleButton(.zoomOut)
+        if includeDividers {
+            Divider()
+                .frame(height: 20)
+        }
+        sampleButton(.actualSize)
+        if includeDividers {
+            Divider()
+                .frame(height: 20)
+        }
+        sampleButton(.zoomIn)
+    }
+
+    private func sampleButton(_ action: PDFPreviewChromeDebugAction) -> some View {
+        Button {
+            model.record(action)
+        } label: {
+            Image(systemName: action.systemName)
                 .font(.system(size: 16, weight: .regular))
                 .frame(width: 38, height: 36)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel(label)
-        .help(label)
+        .accessibilityLabel(action.title)
+        .help(action.title)
     }
 }
 
 private final class PDFPreviewChromeDebugWindowController: NSWindowController, NSWindowDelegate {
     static let shared = PDFPreviewChromeDebugWindowController()
+    private static let zoomOutItemID = NSToolbarItem.Identifier("cmux.pdfPreviewChromeDebug.zoomOut")
+    private static let actualSizeItemID = NSToolbarItem.Identifier("cmux.pdfPreviewChromeDebug.actualSize")
+    private static let zoomInItemID = NSToolbarItem.Identifier("cmux.pdfPreviewChromeDebug.zoomIn")
+
+    private let model = PDFPreviewChromeDebugModel()
 
     private init() {
         let window = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 540),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 660),
             styleMask: [.titled, .closable, .utilityWindow],
             backing: .buffered,
             defer: false
@@ -2710,10 +2809,11 @@ private final class PDFPreviewChromeDebugWindowController: NSWindowController, N
         window.isReleasedWhenClosed = false
         window.identifier = NSUserInterfaceItemIdentifier("cmux.pdfPreviewChromeDebug")
         window.center()
-        window.contentView = NSHostingView(rootView: PDFPreviewChromeDebugView())
+        window.contentView = NSHostingView(rootView: PDFPreviewChromeDebugView(model: model))
         AppDelegate.shared?.applyWindowDecorations(to: window)
         super.init(window: window)
         window.delegate = self
+        installToolbar(on: window)
     }
 
     @available(*, unavailable)
@@ -2724,6 +2824,81 @@ private final class PDFPreviewChromeDebugWindowController: NSWindowController, N
     func show() {
         window?.center()
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func installToolbar(on window: NSWindow) {
+        let toolbar = NSToolbar(identifier: NSToolbar.Identifier("cmux.pdfPreviewChromeDebug.toolbar"))
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.sizeMode = .regular
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+        window.toolbarStyle = .unifiedCompact
+    }
+
+    @objc private func toolbarZoomOut(_ sender: Any?) {
+        model.record(.zoomOut)
+    }
+
+    @objc private func toolbarActualSize(_ sender: Any?) {
+        model.record(.actualSize)
+    }
+
+    @objc private func toolbarZoomIn(_ sender: Any?) {
+        model.record(.zoomIn)
+    }
+
+    private func makeToolbarItem(
+        identifier: NSToolbarItem.Identifier,
+        action: PDFPreviewChromeDebugAction,
+        selector: Selector
+    ) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = action.title
+        item.paletteLabel = action.title
+        item.toolTip = action.title
+        item.image = NSImage(systemSymbolName: action.systemName, accessibilityDescription: action.title)
+        item.target = self
+        item.action = selector
+        item.isBordered = true
+        return item
+    }
+}
+
+extension PDFPreviewChromeDebugWindowController: NSToolbarDelegate {
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [
+            .flexibleSpace,
+            Self.zoomOutItemID,
+            Self.actualSizeItemID,
+            Self.zoomInItemID,
+        ]
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [
+            .flexibleSpace,
+            Self.zoomOutItemID,
+            Self.actualSizeItemID,
+            Self.zoomInItemID,
+        ]
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        switch itemIdentifier {
+        case Self.zoomOutItemID:
+            makeToolbarItem(identifier: itemIdentifier, action: .zoomOut, selector: #selector(toolbarZoomOut(_:)))
+        case Self.actualSizeItemID:
+            makeToolbarItem(identifier: itemIdentifier, action: .actualSize, selector: #selector(toolbarActualSize(_:)))
+        case Self.zoomInItemID:
+            makeToolbarItem(identifier: itemIdentifier, action: .zoomIn, selector: #selector(toolbarZoomIn(_:)))
+        default:
+            nil
+        }
     }
 }
 

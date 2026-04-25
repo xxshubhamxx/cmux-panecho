@@ -692,6 +692,7 @@ private enum FilePreviewPDFDisplayMode {
 }
 
 enum FilePreviewPDFChromeStyleVariant: String, CaseIterable, Identifiable {
+    case systemControlGroup
     case liquidGlass
     case materialCapsule
     case borderedCapsule
@@ -704,16 +705,18 @@ enum FilePreviewPDFChromeStyleVariant: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .systemControlGroup:
+            String(localized: "filePreview.pdf.chromeStyle.systemControlGroup", defaultValue: "A: System Control Group")
         case .liquidGlass:
-            String(localized: "filePreview.pdf.chromeStyle.liquidGlass", defaultValue: "A: Liquid Glass")
+            String(localized: "filePreview.pdf.chromeStyle.liquidGlass", defaultValue: "B: Liquid Glass")
         case .materialCapsule:
-            String(localized: "filePreview.pdf.chromeStyle.materialCapsule", defaultValue: "B: Material Pill")
+            String(localized: "filePreview.pdf.chromeStyle.materialCapsule", defaultValue: "C: Material Pill")
         case .borderedCapsule:
-            String(localized: "filePreview.pdf.chromeStyle.borderedCapsule", defaultValue: "C: Bordered Controls")
+            String(localized: "filePreview.pdf.chromeStyle.borderedCapsule", defaultValue: "D: Bordered Controls")
         case .thinOutline:
-            String(localized: "filePreview.pdf.chromeStyle.thinOutline", defaultValue: "D: Thin Outline")
+            String(localized: "filePreview.pdf.chromeStyle.thinOutline", defaultValue: "E: Thin Outline")
         case .plainToolbar:
-            String(localized: "filePreview.pdf.chromeStyle.plainToolbar", defaultValue: "E: Plain Toolbar")
+            String(localized: "filePreview.pdf.chromeStyle.plainToolbar", defaultValue: "F: Plain Toolbar")
         }
     }
 
@@ -724,7 +727,7 @@ enum FilePreviewPDFChromeStyleVariant: String, CaseIterable, Identifiable {
             return variant
         }
         #endif
-        return .liquidGlass
+        return .systemControlGroup
     }
 
     func persist() {
@@ -783,6 +786,25 @@ private struct FilePreviewPDFSidebarChromeView: View {
     let selectTwoPages: () -> Void
 
     var body: some View {
+        if chromeStyleVariant == .systemControlGroup {
+            ControlGroup {
+                sidebarMenu
+            } label: {
+                Label(
+                    String(localized: "filePreview.pdf.sidebarOptions", defaultValue: "Sidebar Options"),
+                    systemImage: "sidebar.left"
+                )
+            }
+            .controlSize(.regular)
+            .accessibilityLabel(String(localized: "filePreview.pdf.sidebarOptions", defaultValue: "Sidebar Options"))
+        } else {
+            sidebarMenu
+                .modifier(FilePreviewPDFChromeStyleModifier(variant: chromeStyleVariant))
+                .accessibilityLabel(String(localized: "filePreview.pdf.sidebarOptions", defaultValue: "Sidebar Options"))
+        }
+    }
+
+    private var sidebarMenu: some View {
         Menu {
             Button(action: toggleSidebar) {
                 Text(isSidebarVisible
@@ -826,8 +848,6 @@ private struct FilePreviewPDFSidebarChromeView: View {
             .frame(width: 58, height: 36)
             .contentShape(Capsule())
         }
-        .modifier(FilePreviewPDFChromeStyleModifier(variant: chromeStyleVariant))
-        .accessibilityLabel(String(localized: "filePreview.pdf.sidebarOptions", defaultValue: "Sidebar Options"))
     }
 
     private func checkedMenuButton(
@@ -853,29 +873,50 @@ private struct FilePreviewPDFZoomChromeView: View {
     let zoomIn: () -> Void
 
     var body: some View {
-        HStack(spacing: 0) {
-            chromeButton(
-                systemName: "minus.magnifyingglass",
-                label: String(localized: "filePreview.pdf.zoomOut", defaultValue: "Zoom Out"),
-                action: zoomOut
-            )
-            Divider()
-                .frame(height: 20)
-            chromeButton(
-                systemName: "1.magnifyingglass",
-                label: String(localized: "filePreview.pdf.actualSize", defaultValue: "Actual Size"),
-                action: actualSize
-            )
-            Divider()
-                .frame(height: 20)
-            chromeButton(
-                systemName: "plus.magnifyingglass",
-                label: String(localized: "filePreview.pdf.zoomIn", defaultValue: "Zoom In"),
-                action: zoomIn
-            )
+        if chromeStyleVariant == .systemControlGroup {
+            ControlGroup {
+                zoomButtons(includeDividers: false)
+            } label: {
+                Label(
+                    String(localized: "filePreview.pdf.zoomControls", defaultValue: "Zoom Controls"),
+                    systemImage: "magnifyingglass"
+                )
+            }
+            .controlSize(.regular)
+        } else {
+            HStack(spacing: 0) {
+                zoomButtons(includeDividers: true)
+            }
+            .frame(height: 36)
+            .modifier(FilePreviewPDFChromeStyleModifier(variant: chromeStyleVariant))
         }
-        .frame(height: 36)
-        .modifier(FilePreviewPDFChromeStyleModifier(variant: chromeStyleVariant))
+    }
+
+    @ViewBuilder
+    private func zoomButtons(includeDividers: Bool) -> some View {
+        chromeButton(
+            systemName: "minus.magnifyingglass",
+            label: String(localized: "filePreview.pdf.zoomOut", defaultValue: "Zoom Out"),
+            action: zoomOut
+        )
+        if includeDividers {
+            Divider()
+                .frame(height: 20)
+        }
+        chromeButton(
+            systemName: "1.magnifyingglass",
+            label: String(localized: "filePreview.pdf.actualSize", defaultValue: "Actual Size"),
+            action: actualSize
+        )
+        if includeDividers {
+            Divider()
+                .frame(height: 20)
+        }
+        chromeButton(
+            systemName: "plus.magnifyingglass",
+            label: String(localized: "filePreview.pdf.zoomIn", defaultValue: "Zoom In"),
+            action: zoomIn
+        )
     }
 
     private func chromeButton(
@@ -900,6 +941,10 @@ struct FilePreviewPDFChromeStyleModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         switch variant {
+        case .systemControlGroup:
+            content
+                .buttonStyle(.automatic)
+                .controlSize(.regular)
         case .liquidGlass:
             liquidGlassChrome(content: content)
         case .materialCapsule:
@@ -964,6 +1009,7 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
     private let flowLayout = NSCollectionViewFlowLayout()
     private var document: PDFDocument?
     private var isApplyingSelection = false
+    private var selectedPageIndex: Int?
 
     var onSelectPage: ((PDFPage) -> Void)?
 
@@ -993,19 +1039,31 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
 
     func setDocument(_ document: PDFDocument?) {
         self.document = document
+        selectedPageIndex = nil
         collectionView.reloadData()
         selectPage(at: 0, scrollToVisible: false)
     }
 
     func selectPage(at pageIndex: Int, scrollToVisible: Bool) {
         guard let document, pageIndex >= 0, pageIndex < document.pageCount else {
+            selectedPageIndex = nil
             collectionView.deselectAll(nil)
             return
         }
 
         isApplyingSelection = true
+        let previousPageIndex = selectedPageIndex
+        selectedPageIndex = pageIndex
         let indexPath = IndexPath(item: pageIndex, section: 0)
+        collectionView.deselectAll(nil)
         collectionView.selectItems(at: [indexPath], scrollPosition: scrollToVisible ? .centeredVertically : [])
+        let reloadIndexPaths = [previousPageIndex, selectedPageIndex]
+            .compactMap { $0 }
+            .filter { $0 >= 0 && $0 < document.pageCount }
+            .map { IndexPath(item: $0, section: 0) }
+        if !reloadIndexPaths.isEmpty {
+            collectionView.reloadItems(at: Set(reloadIndexPaths))
+        }
         isApplyingSelection = false
     }
 
@@ -1091,7 +1149,11 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
             for: indexPath
         ) as? FilePreviewPDFThumbnailItem ?? FilePreviewPDFThumbnailItem()
         let page = document?.page(at: indexPath.item)
-        item.configure(page: page, pageNumber: indexPath.item + 1)
+        item.configure(
+            page: page,
+            pageNumber: indexPath.item + 1,
+            isSelectedForPreview: indexPath.item == selectedPageIndex
+        )
         return item
     }
 
@@ -1131,12 +1193,13 @@ private final class FilePreviewPDFThumbnailItem: NSCollectionViewItem {
     override func prepareForReuse() {
         super.prepareForReuse()
         thumbnailItemView?.configure(image: nil, pageNumber: "")
+        thumbnailItemView?.isSelectedForPreview = false
     }
 
-    func configure(page: PDFPage?, pageNumber: Int) {
+    func configure(page: PDFPage?, pageNumber: Int, isSelectedForPreview: Bool) {
         let thumbnail = page?.thumbnail(of: NSSize(width: 190, height: 106), for: .cropBox)
         thumbnailItemView?.configure(image: thumbnail, pageNumber: "\(pageNumber)")
-        thumbnailItemView?.isSelectedForPreview = isSelected
+        thumbnailItemView?.isSelectedForPreview = isSelectedForPreview
     }
 }
 

@@ -1293,6 +1293,64 @@
         }
       }
     },
+    "debug.pdfPreviewChrome.noActions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No sample actions yet."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サンプル操作はまだありません。"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дій зразка ще немає."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "아직 샘플 동작이 없습니다."
+          }
+        }
+      }
+    },
+    "debug.pdfPreviewChrome.lastActionFormat": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last action: %@ (%d)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最後の操作: %@ (%d)"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остання дія: %@ (%d)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마지막 동작: %@ (%d)"
+          }
+        }
+      }
+    },
     "debug.pdfPreviewChrome.selected": {
       "extractionState": "manual",
       "localizations": {
@@ -1318,6 +1376,64 @@
           "stringUnit": {
             "state": "translated",
             "value": "선택됨"
+          }
+        }
+      }
+    },
+    "debug.pdfPreviewChrome.toolbarReference": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Native Window Toolbar"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ネイティブウィンドウツールバー"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нативна панель вікна"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "네이티브 윈도우 툴바"
+          }
+        }
+      }
+    },
+    "debug.pdfPreviewChrome.toolbarReferenceDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the buttons in this debug window's titlebar toolbar to test real NSToolbar hover and press feedback."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このデバッグウィンドウのタイトルバーツールバーにあるボタンで、実際のNSToolbarのホバーと押下の反応をテストできます。"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Використовуйте кнопки на панелі заголовка цього вікна налагодження, щоб перевірити реальні стани наведення та натискання NSToolbar."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 디버그 윈도우의 제목 표시줄 툴바 버튼으로 실제 NSToolbar의 호버 및 누름 피드백을 테스트합니다."
           }
         }
       }
@@ -87001,6 +87117,35 @@
         }
       }
     },
+    "filePreview.pdf.zoomControls": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zoom Controls"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ズームコントロール"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Елементи масштабування"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "확대/축소 컨트롤"
+          }
+        }
+      }
+    },
     "filePreview.pdf.zoomToFit": {
       "extractionState": "manual",
       "localizations": {
@@ -87378,31 +87523,60 @@
         }
       }
     },
+    "filePreview.pdf.chromeStyle.systemControlGroup": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A: System Control Group"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A: システムコントロールグループ"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A: Системна група елементів керування"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A: 시스템 컨트롤 그룹"
+          }
+        }
+      }
+    },
     "filePreview.pdf.chromeStyle.liquidGlass": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A: Liquid Glass"
+            "value": "B: Liquid Glass"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "A: リキッドグラス"
+            "value": "B: リキッドグラス"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "A: Liquid Glass"
+            "value": "B: Liquid Glass"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "A: 리퀴드 글래스"
+            "value": "B: 리퀴드 글래스"
           }
         }
       }
@@ -87413,25 +87587,25 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "B: Material Pill"
+            "value": "C: Material Pill"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "B: マテリアルピル"
+            "value": "C: マテリアルピル"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "B: Матеріальна капсула"
+            "value": "C: Матеріальна капсула"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "B: 머티리얼 필"
+            "value": "C: 머티리얼 필"
           }
         }
       }
@@ -87442,25 +87616,25 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "C: Bordered Controls"
+            "value": "D: Bordered Controls"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "C: 枠線付きコントロール"
+            "value": "D: 枠線付きコントロール"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "C: Кнопки з рамкою"
+            "value": "D: Кнопки з рамкою"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "C: 테두리 컨트롤"
+            "value": "D: 테두리 컨트롤"
           }
         }
       }
@@ -87471,25 +87645,25 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "D: Thin Outline"
+            "value": "E: Thin Outline"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "D: 細いアウトライン"
+            "value": "E: 細いアウトライン"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "D: Тонкий контур"
+            "value": "E: Тонкий контур"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "D: 얇은 외곽선"
+            "value": "E: 얇은 외곽선"
           }
         }
       }
@@ -87500,25 +87674,25 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "E: Plain Toolbar"
+            "value": "F: Plain Toolbar"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "E: プレーンツールバー"
+            "value": "F: プレーンツールバー"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "E: Проста панель"
+            "value": "F: Проста панель"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "E: 일반 툴바"
+            "value": "F: 일반 툴바"
           }
         }
       }
