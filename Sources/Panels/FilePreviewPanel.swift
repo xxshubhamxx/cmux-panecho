@@ -691,12 +691,6 @@ private enum FilePreviewPDFDisplayMode {
     case twoPages
 }
 
-final class FilePreviewPDFChromeButton: NSButton {
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-        true
-    }
-}
-
 final class FilePreviewPDFChromeHostView: NSView {
     var interactiveOverlayViews: [NSView] = []
 
@@ -718,11 +712,159 @@ final class FilePreviewPDFChromeHostView: NSView {
                 return hitView
             }
         }
-        return view is NSControl ? view : nil
+        return view is NSControl || view is FilePreviewPDFChromeHostingView ? view : nil
     }
 }
 
-final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSource, NSCollectionViewDelegate {
+final class FilePreviewPDFChromeHostingView: NSHostingView<AnyView> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+}
+
+private struct FilePreviewPDFSidebarChromeView: View {
+    let isSidebarVisible: Bool
+    let sidebarMode: FilePreviewPDFSidebarMode
+    let displayMode: FilePreviewPDFDisplayMode
+    let toggleSidebar: () -> Void
+    let selectThumbnails: () -> Void
+    let selectTableOfContents: () -> Void
+    let selectContinuousScroll: () -> Void
+    let selectSinglePage: () -> Void
+    let selectTwoPages: () -> Void
+
+    var body: some View {
+        Menu {
+            Button(action: toggleSidebar) {
+                Text(isSidebarVisible
+                    ? String(localized: "filePreview.pdf.hideSidebar", defaultValue: "Hide Sidebar")
+                    : String(localized: "filePreview.pdf.showSidebar", defaultValue: "Show Sidebar"))
+            }
+            checkedMenuButton(
+                title: String(localized: "filePreview.pdf.thumbnails", defaultValue: "Thumbnails"),
+                isSelected: sidebarMode == .thumbnails,
+                action: selectThumbnails
+            )
+            checkedMenuButton(
+                title: String(localized: "filePreview.pdf.tableOfContents", defaultValue: "Table of Contents"),
+                isSelected: sidebarMode == .tableOfContents,
+                action: selectTableOfContents
+            )
+            Divider()
+            checkedMenuButton(
+                title: String(localized: "filePreview.pdf.continuousScroll", defaultValue: "Continuous Scroll"),
+                isSelected: displayMode == .continuousScroll,
+                action: selectContinuousScroll
+            )
+            checkedMenuButton(
+                title: String(localized: "filePreview.pdf.singlePage", defaultValue: "Single Page"),
+                isSelected: displayMode == .singlePage,
+                action: selectSinglePage
+            )
+            checkedMenuButton(
+                title: String(localized: "filePreview.pdf.twoPages", defaultValue: "Two Pages"),
+                isSelected: displayMode == .twoPages,
+                action: selectTwoPages
+            )
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 17, weight: .regular))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 58, height: 36)
+            .contentShape(Capsule())
+        }
+        .modifier(FilePreviewPDFLiquidGlassButtonModifier())
+        .accessibilityLabel(String(localized: "filePreview.pdf.sidebarOptions", defaultValue: "Sidebar Options"))
+    }
+
+    private func checkedMenuButton(
+        title: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                }
+                Text(title)
+            }
+        }
+    }
+}
+
+private struct FilePreviewPDFZoomChromeView: View {
+    let zoomOut: () -> Void
+    let actualSize: () -> Void
+    let zoomIn: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            chromeButton(
+                systemName: "minus.magnifyingglass",
+                label: String(localized: "filePreview.pdf.zoomOut", defaultValue: "Zoom Out"),
+                action: zoomOut
+            )
+            Divider()
+                .frame(height: 20)
+            chromeButton(
+                systemName: "1.magnifyingglass",
+                label: String(localized: "filePreview.pdf.actualSize", defaultValue: "Actual Size"),
+                action: actualSize
+            )
+            Divider()
+                .frame(height: 20)
+            chromeButton(
+                systemName: "plus.magnifyingglass",
+                label: String(localized: "filePreview.pdf.zoomIn", defaultValue: "Zoom In"),
+                action: zoomIn
+            )
+        }
+        .frame(height: 36)
+        .modifier(FilePreviewPDFLiquidGlassButtonModifier())
+    }
+
+    private func chromeButton(
+        systemName: String,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 16, weight: .regular))
+                .frame(width: 38, height: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(label)
+        .help(label)
+    }
+}
+
+private struct FilePreviewPDFLiquidGlassButtonModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 0) {
+                content
+                    .buttonStyle(.glass)
+                    .controlSize(.regular)
+            }
+        } else {
+            content
+                .buttonStyle(.borderless)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+                }
+        }
+    }
+}
+
+final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSource, NSCollectionViewDelegate, NSCollectionViewDelegateFlowLayout {
     private enum Metrics {
         static let thumbnailHeight: CGFloat = 106
         static let labelHeight: CGFloat = 22
@@ -825,18 +967,28 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
     }
 
     private func updateItemSize() {
-        let visibleWidth = scrollView.contentView.bounds.width > 0 ? scrollView.contentView.bounds.width : bounds.width
-        let itemWidth = max(124, visibleWidth)
-        let nextSize = NSSize(
-            width: itemWidth,
-            height: Metrics.thumbnailHeight + Metrics.labelHeight + 10
-        )
-        if collectionView.frame.width != itemWidth {
+        let itemWidth = thumbnailItemWidth()
+        if abs(collectionView.frame.width - itemWidth) > 0.5 {
             collectionView.setFrameSize(NSSize(width: itemWidth, height: collectionView.frame.height))
         }
+        let nextSize = thumbnailItemSize(width: itemWidth)
         guard flowLayout.itemSize != nextSize else { return }
         flowLayout.itemSize = nextSize
         flowLayout.invalidateLayout()
+    }
+
+    private func thumbnailItemWidth() -> CGFloat {
+        let contentWidth = scrollView.contentView.bounds.width
+        let scrollWidth = scrollView.bounds.width
+        let fallbackWidth = bounds.width
+        return max(1, contentWidth, scrollWidth, fallbackWidth)
+    }
+
+    private func thumbnailItemSize(width: CGFloat) -> NSSize {
+        NSSize(
+            width: max(1, width),
+            height: Metrics.thumbnailHeight + Metrics.labelHeight + 10
+        )
     }
 
     func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -861,6 +1013,14 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
               let pageIndex = indexPaths.first?.item,
               let page = document?.page(at: pageIndex) else { return }
         onSelectPage?(page)
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        layout collectionViewLayout: NSCollectionViewLayout,
+        sizeForItemAt indexPath: IndexPath
+    ) -> NSSize {
+        thumbnailItemSize(width: thumbnailItemWidth())
     }
 }
 
@@ -987,12 +1147,8 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     private let outlineScrollView = NSScrollView()
     private let outlineView = NSOutlineView()
     private let outlinePlaceholder = NSTextField(wrappingLabelWithString: "")
-    private let sidebarMenuButton = FilePreviewPDFChromeButton(title: "", target: nil, action: nil)
-    private let leftFloatingChrome = NSVisualEffectView()
-    private let rightFloatingChrome = NSVisualEffectView()
-    private let zoomOutButton = FilePreviewPDFChromeButton(title: "", target: nil, action: nil)
-    private let actualSizeButton = FilePreviewPDFChromeButton(title: "", target: nil, action: nil)
-    private let zoomInButton = FilePreviewPDFChromeButton(title: "", target: nil, action: nil)
+    private let sidebarChromeHost = FilePreviewPDFChromeHostingView(rootView: AnyView(EmptyView()))
+    private let zoomChromeHost = FilePreviewPDFChromeHostingView(rootView: AnyView(EmptyView()))
     private let titleLabel = NSTextField(labelWithString: "")
     private let pageLabel = NSTextField(labelWithString: "")
     private var currentURL: URL?
@@ -1184,53 +1340,13 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         chromeHost.autoresizingMask = []
         addSubview(chromeHost, positioned: .above, relativeTo: splitView)
 
-        configureFloatingChrome(leftFloatingChrome)
-        configureFloatingChrome(rightFloatingChrome)
+        sidebarChromeHost.translatesAutoresizingMaskIntoConstraints = false
+        zoomChromeHost.translatesAutoresizingMaskIntoConstraints = false
+        updateChromeRootViews()
 
-        configureSidebarMenuButton(
-            sidebarMenuButton,
-            label: String(localized: "filePreview.pdf.sidebarOptions", defaultValue: "Sidebar Options"),
-            action: #selector(showSidebarMenu)
-        )
-
-        leftFloatingChrome.addSubview(sidebarMenuButton)
-        chromeHost.addSubview(leftFloatingChrome)
-
-        configureFloatingIconButton(
-            zoomOutButton,
-            symbolName: "minus.magnifyingglass",
-            label: String(localized: "filePreview.pdf.zoomOut", defaultValue: "Zoom Out"),
-            action: #selector(zoomOut)
-        )
-        configureFloatingIconButton(
-            actualSizeButton,
-            symbolName: "1.magnifyingglass",
-            label: String(localized: "filePreview.pdf.actualSize", defaultValue: "Actual Size"),
-            action: #selector(actualSize)
-        )
-        configureFloatingIconButton(
-            zoomInButton,
-            symbolName: "plus.magnifyingglass",
-            label: String(localized: "filePreview.pdf.zoomIn", defaultValue: "Zoom In"),
-            action: #selector(zoomIn)
-        )
-
-        let zoomStack = NSStackView(views: [
-            zoomOutButton,
-            makeFloatingSeparator(),
-            actualSizeButton,
-            makeFloatingSeparator(),
-            zoomInButton,
-        ])
-        zoomStack.orientation = .horizontal
-        zoomStack.alignment = .centerY
-        zoomStack.spacing = 0
-        zoomStack.edgeInsets = NSEdgeInsets(top: 0, left: 4, bottom: 0, right: 4)
-        zoomStack.translatesAutoresizingMaskIntoConstraints = false
-
-        rightFloatingChrome.addSubview(zoomStack)
-        chromeHost.addSubview(rightFloatingChrome)
-        chromeHost.interactiveOverlayViews = [leftFloatingChrome, rightFloatingChrome]
+        chromeHost.addSubview(sidebarChromeHost)
+        chromeHost.addSubview(zoomChromeHost)
+        chromeHost.interactiveOverlayViews = [sidebarChromeHost, zoomChromeHost]
 
         titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleLabel.textColor = .labelColor
@@ -1249,26 +1365,19 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         chromeHost.addSubview(titleStack)
 
         NSLayoutConstraint.activate([
-            leftFloatingChrome.topAnchor.constraint(equalTo: chromeHost.topAnchor, constant: 10),
-            leftFloatingChrome.leadingAnchor.constraint(equalTo: chromeHost.leadingAnchor, constant: 10),
-            leftFloatingChrome.widthAnchor.constraint(equalToConstant: 58),
-            leftFloatingChrome.heightAnchor.constraint(equalToConstant: Metrics.floatingChromeHeight),
-            sidebarMenuButton.topAnchor.constraint(equalTo: leftFloatingChrome.topAnchor),
-            sidebarMenuButton.leadingAnchor.constraint(equalTo: leftFloatingChrome.leadingAnchor),
-            sidebarMenuButton.trailingAnchor.constraint(equalTo: leftFloatingChrome.trailingAnchor),
-            sidebarMenuButton.bottomAnchor.constraint(equalTo: leftFloatingChrome.bottomAnchor),
+            sidebarChromeHost.topAnchor.constraint(equalTo: chromeHost.topAnchor, constant: 10),
+            sidebarChromeHost.leadingAnchor.constraint(equalTo: chromeHost.leadingAnchor, constant: 10),
+            sidebarChromeHost.widthAnchor.constraint(equalToConstant: 58),
+            sidebarChromeHost.heightAnchor.constraint(equalToConstant: Metrics.floatingChromeHeight),
 
-            rightFloatingChrome.topAnchor.constraint(equalTo: chromeHost.topAnchor, constant: 10),
-            rightFloatingChrome.trailingAnchor.constraint(equalTo: chromeHost.trailingAnchor, constant: -10),
-            rightFloatingChrome.heightAnchor.constraint(equalToConstant: Metrics.floatingChromeHeight),
-            zoomStack.topAnchor.constraint(equalTo: rightFloatingChrome.topAnchor),
-            zoomStack.leadingAnchor.constraint(equalTo: rightFloatingChrome.leadingAnchor),
-            zoomStack.trailingAnchor.constraint(equalTo: rightFloatingChrome.trailingAnchor),
-            zoomStack.bottomAnchor.constraint(equalTo: rightFloatingChrome.bottomAnchor),
+            zoomChromeHost.topAnchor.constraint(equalTo: chromeHost.topAnchor, constant: 10),
+            zoomChromeHost.trailingAnchor.constraint(equalTo: chromeHost.trailingAnchor, constant: -10),
+            zoomChromeHost.widthAnchor.constraint(equalToConstant: 122),
+            zoomChromeHost.heightAnchor.constraint(equalToConstant: Metrics.floatingChromeHeight),
 
-            titleStack.leadingAnchor.constraint(equalTo: leftFloatingChrome.trailingAnchor, constant: 12),
-            titleStack.centerYAnchor.constraint(equalTo: leftFloatingChrome.centerYAnchor),
-            titleStack.trailingAnchor.constraint(lessThanOrEqualTo: rightFloatingChrome.leadingAnchor, constant: -12),
+            titleStack.leadingAnchor.constraint(equalTo: sidebarChromeHost.trailingAnchor, constant: 12),
+            titleStack.centerYAnchor.constraint(equalTo: sidebarChromeHost.centerYAnchor),
+            titleStack.trailingAnchor.constraint(lessThanOrEqualTo: zoomChromeHost.leadingAnchor, constant: -12),
         ])
     }
 
@@ -1281,115 +1390,23 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         chromeHost.needsLayout = true
     }
 
-    private func configureFloatingChrome(_ effectView: NSVisualEffectView) {
-        effectView.material = .hudWindow
-        effectView.blendingMode = .withinWindow
-        effectView.state = .active
-        effectView.wantsLayer = true
-        effectView.layer?.cornerRadius = Metrics.floatingChromeCornerRadius
-        effectView.layer?.masksToBounds = true
-        effectView.layer?.borderWidth = 0.5
-        effectView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
-        effectView.translatesAutoresizingMaskIntoConstraints = false
-    }
-
-    private func configureFloatingIconButton(
-        _ button: NSButton,
-        symbolName: String,
-        label: String,
-        action: Selector
-    ) {
-        configureFloatingToolbarButton(button, label: label, action: action)
-        button.image = templateSymbol(named: symbolName, accessibilityLabel: label)
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 38),
-            button.heightAnchor.constraint(equalToConstant: Metrics.floatingChromeHeight),
-        ])
-    }
-
-    private func configureSidebarMenuButton(
-        _ button: NSButton,
-        label: String,
-        action: Selector
-    ) {
-        configureFloatingToolbarButton(button, label: label, action: action)
-        button.image = sidebarMenuImage(accessibilityLabel: label)
-    }
-
-    private func configureFloatingToolbarButton(
-        _ button: NSButton,
-        label: String,
-        action: Selector
-    ) {
-        button.target = self
-        button.action = action
-        button.setButtonType(.momentaryPushIn)
-        button.isBordered = true
-        button.bezelStyle = .toolbar
-        button.showsBorderOnlyWhileMouseInside = true
-        button.focusRingType = .none
-        button.title = ""
-        button.imagePosition = .imageOnly
-        button.imageScaling = .scaleProportionallyDown
-        button.contentTintColor = .labelColor
-        button.toolTip = label
-        button.setAccessibilityLabel(label)
-        button.translatesAutoresizingMaskIntoConstraints = false
-    }
-
-    private func templateSymbol(named symbolName: String, accessibilityLabel: String) -> NSImage? {
-        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityLabel)
-        image?.isTemplate = true
-        return image
-    }
-
-    private func sidebarMenuImage(accessibilityLabel: String) -> NSImage? {
-        let sidebarConfiguration = NSImage.SymbolConfiguration(pointSize: 17, weight: .regular)
-        let chevronConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
-        guard
-            let sidebarImage = templateSymbol(
-                named: "sidebar.left",
-                accessibilityLabel: accessibilityLabel
-            )?.withSymbolConfiguration(sidebarConfiguration),
-            let chevronImage = templateSymbol(
-                named: "chevron.down",
-                accessibilityLabel: accessibilityLabel
-            )?.withSymbolConfiguration(chevronConfiguration)
-        else {
-            return templateSymbol(named: "sidebar.left", accessibilityLabel: accessibilityLabel)
-        }
-
-        sidebarImage.isTemplate = true
-        chevronImage.isTemplate = true
-
-        let image = NSImage(size: NSSize(width: 36, height: 18), flipped: false) { _ in
-            sidebarImage.draw(
-                in: NSRect(x: 0, y: 0, width: 18, height: 18),
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1
-            )
-            chevronImage.draw(
-                in: NSRect(x: 26, y: 4, width: 10, height: 10),
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1
-            )
-            return true
-        }
-        image.isTemplate = true
-        return image
-    }
-
-    private func makeFloatingSeparator() -> NSView {
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            separator.widthAnchor.constraint(equalToConstant: 1),
-            separator.heightAnchor.constraint(equalToConstant: 20),
-        ])
-        return separator
+    private func updateChromeRootViews() {
+        sidebarChromeHost.rootView = AnyView(FilePreviewPDFSidebarChromeView(
+            isSidebarVisible: isSidebarVisible,
+            sidebarMode: sidebarMode,
+            displayMode: displayMode,
+            toggleSidebar: { [weak self] in self?.toggleSidebar() },
+            selectThumbnails: { [weak self] in self?.selectThumbnailSidebar() },
+            selectTableOfContents: { [weak self] in self?.selectTableOfContentsSidebar() },
+            selectContinuousScroll: { [weak self] in self?.selectContinuousScroll() },
+            selectSinglePage: { [weak self] in self?.selectSinglePage() },
+            selectTwoPages: { [weak self] in self?.selectTwoPages() }
+        ))
+        zoomChromeHost.rootView = AnyView(FilePreviewPDFZoomChromeView(
+            zoomOut: { [weak self] in self?.zoomOut() },
+            actualSize: { [weak self] in self?.actualSize() },
+            zoomIn: { [weak self] in self?.zoomIn() }
+        ))
     }
 
     @objc private func zoomOut() {
@@ -1411,14 +1428,10 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         setPDFScaleFactor(1.0)
     }
 
-    @objc private func showSidebarMenu(_ sender: NSButton) {
-        let menu = makeSidebarMenu()
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY - 4), in: sender)
-    }
-
     @objc private func toggleSidebar() {
         isSidebarVisible.toggle()
         updateSidebarVisibility()
+        updateChromeRootViews()
     }
 
     @objc private func selectThumbnailSidebar() {
@@ -1426,6 +1439,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         isSidebarVisible = true
         updateSidebarVisibility()
         updateSidebarContent()
+        updateChromeRootViews()
     }
 
     @objc private func selectTableOfContentsSidebar() {
@@ -1433,21 +1447,25 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         isSidebarVisible = true
         updateSidebarVisibility()
         updateSidebarContent()
+        updateChromeRootViews()
     }
 
     @objc private func selectContinuousScroll() {
         displayMode = .continuousScroll
         applyDisplayMode()
+        updateChromeRootViews()
     }
 
     @objc private func selectSinglePage() {
         displayMode = .singlePage
         applyDisplayMode()
+        updateChromeRootViews()
     }
 
     @objc private func selectTwoPages() {
         displayMode = .twoPages
         applyDisplayMode()
+        updateChromeRootViews()
     }
 
     @objc private func pdfPageChanged() {
@@ -1469,55 +1487,6 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         let format = String(localized: "filePreview.pdf.pageCount", defaultValue: "Page %d of %d")
         pageLabel.stringValue = String(format: format, pageIndex + 1, document.pageCount)
         thumbnailView.selectPage(at: pageIndex, scrollToVisible: true)
-    }
-
-    private func makeSidebarMenu() -> NSMenu {
-        let menu = NSMenu()
-        let sidebarVisibilityTitle = isSidebarVisible
-            ? String(localized: "filePreview.pdf.hideSidebar", defaultValue: "Hide Sidebar")
-            : String(localized: "filePreview.pdf.showSidebar", defaultValue: "Show Sidebar")
-        menu.addItem(makeMenuItem(
-            title: sidebarVisibilityTitle,
-            action: #selector(toggleSidebar)
-        ))
-        menu.addItem(makeMenuItem(
-            title: String(localized: "filePreview.pdf.thumbnails", defaultValue: "Thumbnails"),
-            action: #selector(selectThumbnailSidebar),
-            state: sidebarMode == .thumbnails ? .on : .off
-        ))
-        menu.addItem(makeMenuItem(
-            title: String(localized: "filePreview.pdf.tableOfContents", defaultValue: "Table of Contents"),
-            action: #selector(selectTableOfContentsSidebar),
-            state: sidebarMode == .tableOfContents ? .on : .off
-        ))
-        menu.addItem(.separator())
-        menu.addItem(makeMenuItem(
-            title: String(localized: "filePreview.pdf.continuousScroll", defaultValue: "Continuous Scroll"),
-            action: #selector(selectContinuousScroll),
-            state: displayMode == .continuousScroll ? .on : .off
-        ))
-        menu.addItem(makeMenuItem(
-            title: String(localized: "filePreview.pdf.singlePage", defaultValue: "Single Page"),
-            action: #selector(selectSinglePage),
-            state: displayMode == .singlePage ? .on : .off
-        ))
-        menu.addItem(makeMenuItem(
-            title: String(localized: "filePreview.pdf.twoPages", defaultValue: "Two Pages"),
-            action: #selector(selectTwoPages),
-            state: displayMode == .twoPages ? .on : .off
-        ))
-        return menu
-    }
-
-    private func makeMenuItem(
-        title: String,
-        action: Selector,
-        state: NSControl.StateValue = .off
-    ) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        item.state = state
-        return item
     }
 
     private func updateSidebarVisibility() {

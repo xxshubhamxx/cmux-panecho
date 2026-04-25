@@ -1027,35 +1027,30 @@ final class WindowMoveSuppressionHitPathTests: XCTestCase {
 
 @MainActor
 final class FilePreviewPDFChromeTests: XCTestCase {
-    func testChromeButtonsAcceptFirstMouse() {
-        let button = FilePreviewPDFChromeButton(title: "", target: nil, action: nil)
+    func testChromeHostsAcceptFirstMouse() {
+        let host = FilePreviewPDFChromeHostingView(rootView: AnyView(EmptyView()))
 
-        XCTAssertTrue(button.acceptsFirstMouse(for: nil))
+        XCTAssertTrue(host.acceptsFirstMouse(for: nil))
     }
 
-    func testPDFChromeControlsUseNativeToolbarHoverButtons() throws {
+    func testPDFChromeControlsUseSwiftUILiquidGlassHosts() throws {
         let container = FilePreviewPDFContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         let mirror = Mirror(reflecting: container)
-        let sidebarMenuButton = try XCTUnwrap(
-            mirror.descendant("sidebarMenuButton") as? NSButton
+        let sidebarChromeHost = try XCTUnwrap(
+            mirror.descendant("sidebarChromeHost") as? FilePreviewPDFChromeHostingView
         )
-        let zoomOutButton = try XCTUnwrap(
-            mirror.descendant("zoomOutButton") as? NSButton
+        let zoomChromeHost = try XCTUnwrap(
+            mirror.descendant("zoomChromeHost") as? FilePreviewPDFChromeHostingView
         )
-        let actualSizeButton = try XCTUnwrap(
-            mirror.descendant("actualSizeButton") as? NSButton
-        )
-        let zoomInButton = try XCTUnwrap(
-            mirror.descendant("zoomInButton") as? NSButton
+        let chromeHost = try XCTUnwrap(
+            mirror.descendant("chromeHost") as? FilePreviewPDFChromeHostView
         )
 
-        for button in [sidebarMenuButton, zoomOutButton, actualSizeButton, zoomInButton] {
-            XCTAssertTrue(button.isBordered)
-            XCTAssertEqual(button.bezelStyle, .toolbar)
-            XCTAssertTrue(button.showsBorderOnlyWhileMouseInside)
-            XCTAssertEqual(button.imagePosition, .imageOnly)
-            XCTAssertNotNil(button.image)
-        }
+        XCTAssertFalse(sidebarChromeHost.isHidden)
+        XCTAssertFalse(zoomChromeHost.isHidden)
+        XCTAssertEqual(chromeHost.interactiveOverlayViews.count, 2)
+        XCTAssertTrue(chromeHost.interactiveOverlayViews.contains { $0 === sidebarChromeHost })
+        XCTAssertTrue(chromeHost.interactiveOverlayViews.contains { $0 === zoomChromeHost })
     }
 
     func testPDFChromeControlsAreHitTestedAbovePDFContent() throws {
@@ -1084,39 +1079,61 @@ final class FilePreviewPDFChromeTests: XCTestCase {
 
         let mirror = Mirror(reflecting: container)
         let chromeHost = try XCTUnwrap(mirror.descendant("chromeHost") as? NSView)
-        let leftFloatingChrome = try XCTUnwrap(mirror.descendant("leftFloatingChrome") as? NSView)
-        let rightFloatingChrome = try XCTUnwrap(mirror.descendant("rightFloatingChrome") as? NSView)
+        let sidebarChromeHost = try XCTUnwrap(mirror.descendant("sidebarChromeHost") as? NSView)
+        let zoomChromeHost = try XCTUnwrap(mirror.descendant("zoomChromeHost") as? NSView)
         let contentHost = mirror.descendant("contentHost") as? NSView
         chromeHost.needsLayout = true
         chromeHost.layoutSubtreeIfNeeded()
-        leftFloatingChrome.layoutSubtreeIfNeeded()
-        rightFloatingChrome.layoutSubtreeIfNeeded()
+        sidebarChromeHost.layoutSubtreeIfNeeded()
+        zoomChromeHost.layoutSubtreeIfNeeded()
 
         let leftProbe = chromeHost.convert(
-            NSPoint(x: leftFloatingChrome.frame.midX, y: leftFloatingChrome.frame.midY),
+            NSPoint(x: sidebarChromeHost.frame.midX, y: sidebarChromeHost.frame.midY),
             to: container
         )
         let rightProbe = chromeHost.convert(
-            NSPoint(x: rightFloatingChrome.frame.midX, y: rightFloatingChrome.frame.midY),
+            NSPoint(x: zoomChromeHost.frame.midX, y: zoomChromeHost.frame.midY),
             to: container
         )
         let leftChromeHit = container.hitTest(leftProbe)
         let rightChromeHit = container.hitTest(rightProbe)
-        let debugFrames = "container=\(container.frame) content=\(String(describing: contentHost?.frame)) chromeHost=\(chromeHost.frame) left=\(leftFloatingChrome.frame) right=\(rightFloatingChrome.frame) leftProbe=\(leftProbe) rightProbe=\(rightProbe) leftHit=\(String(describing: leftChromeHit)) rightHit=\(String(describing: rightChromeHit))"
+        let debugFrames = "container=\(container.frame) content=\(String(describing: contentHost?.frame)) chromeHost=\(chromeHost.frame) left=\(sidebarChromeHost.frame) right=\(zoomChromeHost.frame) leftProbe=\(leftProbe) rightProbe=\(rightProbe) leftHit=\(String(describing: leftChromeHit)) rightHit=\(String(describing: rightChromeHit))"
 
-        XCTAssertTrue(leftChromeHit is FilePreviewPDFChromeButton, debugFrames)
-        XCTAssertTrue(rightChromeHit is FilePreviewPDFChromeButton, debugFrames)
+        XCTAssertTrue(isView(leftChromeHit, inside: sidebarChromeHost), debugFrames)
+        XCTAssertTrue(isView(rightChromeHit, inside: zoomChromeHost), debugFrames)
     }
 
     func testThumbnailSidebarUsesFullWidthSingleColumnLayout() throws {
-        let sidebar = FilePreviewPDFThumbnailSidebarView(frame: NSRect(x: 0, y: 0, width: 240, height: 480))
+        let sidebar = FilePreviewPDFThumbnailSidebarView(frame: NSRect(x: 0, y: 0, width: 320, height: 480))
 
         sidebar.layoutSubtreeIfNeeded()
 
-        let flowLayout = try XCTUnwrap(
-            Mirror(reflecting: sidebar).descendant("flowLayout") as? NSCollectionViewFlowLayout
+        let mirror = Mirror(reflecting: sidebar)
+        let collectionView = try XCTUnwrap(
+            mirror.descendant("collectionView") as? NSCollectionView
         )
-        XCTAssertGreaterThan(flowLayout.itemSize.width, sidebar.bounds.width / 2)
+        let flowLayout = try XCTUnwrap(
+            mirror.descendant("flowLayout") as? NSCollectionViewFlowLayout
+        )
+        let itemSize = sidebar.collectionView(
+            collectionView,
+            layout: flowLayout,
+            sizeForItemAt: IndexPath(item: 0, section: 0)
+        )
+
+        XCTAssertGreaterThanOrEqual(itemSize.width, sidebar.bounds.width)
+        XCTAssertGreaterThan(itemSize.width, sidebar.bounds.width / 2)
+    }
+
+    private func isView(_ view: NSView?, inside container: NSView) -> Bool {
+        var current = view
+        while let next = current {
+            if next === container {
+                return true
+            }
+            current = next.superview
+        }
+        return false
     }
 }
 
