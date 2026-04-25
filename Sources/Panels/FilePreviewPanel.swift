@@ -730,8 +730,13 @@ enum FilePreviewPDFChromeStyleVariant: String, CaseIterable, Identifiable {
     func persist() {
         #if DEBUG
         UserDefaults.standard.set(rawValue, forKey: Self.defaultsKey)
+        NotificationCenter.default.post(name: .filePreviewPDFChromeStyleDidChange, object: nil)
         #endif
     }
+}
+
+extension Notification.Name {
+    static let filePreviewPDFChromeStyleDidChange = Notification.Name("filePreviewPDFChromeStyleDidChange")
 }
 
 final class FilePreviewPDFChromeHostView: NSView {
@@ -776,7 +781,6 @@ private struct FilePreviewPDFSidebarChromeView: View {
     let selectContinuousScroll: () -> Void
     let selectSinglePage: () -> Void
     let selectTwoPages: () -> Void
-    let selectChromeStyleVariant: (FilePreviewPDFChromeStyleVariant) -> Void
 
     var body: some View {
         Menu {
@@ -811,20 +815,6 @@ private struct FilePreviewPDFSidebarChromeView: View {
                 isSelected: displayMode == .twoPages,
                 action: selectTwoPages
             )
-            #if DEBUG
-            Divider()
-            Menu {
-                ForEach(FilePreviewPDFChromeStyleVariant.allCases) { variant in
-                    checkedMenuButton(
-                        title: variant.title,
-                        isSelected: chromeStyleVariant == variant,
-                        action: { selectChromeStyleVariant(variant) }
-                    )
-                }
-            } label: {
-                Text(String(localized: "filePreview.pdf.debugChromeStyle", defaultValue: "Debug Chrome Style"))
-            }
-            #endif
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "sidebar.left")
@@ -904,7 +894,7 @@ private struct FilePreviewPDFZoomChromeView: View {
     }
 }
 
-private struct FilePreviewPDFChromeStyleModifier: ViewModifier {
+struct FilePreviewPDFChromeStyleModifier: ViewModifier {
     let variant: FilePreviewPDFChromeStyleVariant
 
     @ViewBuilder
@@ -1341,6 +1331,12 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
             name: Notification.Name.PDFViewPageChanged,
             object: pdfView
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(pdfChromeStyleChanged),
+            name: .filePreviewPDFChromeStyleDidChange,
+            object: nil
+        )
     }
 
     private func setupSplitView() {
@@ -1499,8 +1495,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
             selectTableOfContents: { [weak self] in self?.selectTableOfContentsSidebar() },
             selectContinuousScroll: { [weak self] in self?.selectContinuousScroll() },
             selectSinglePage: { [weak self] in self?.selectSinglePage() },
-            selectTwoPages: { [weak self] in self?.selectTwoPages() },
-            selectChromeStyleVariant: { [weak self] variant in self?.selectChromeStyleVariant(variant) }
+            selectTwoPages: { [weak self] in self?.selectTwoPages() }
         ))
         zoomChromeHost.rootView = AnyView(FilePreviewPDFZoomChromeView(
             chromeStyleVariant: chromeStyleVariant,
@@ -1569,14 +1564,15 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         updateChromeRootViews()
     }
 
-    private func selectChromeStyleVariant(_ variant: FilePreviewPDFChromeStyleVariant) {
-        chromeStyleVariant = variant
-        variant.persist()
-        updateChromeRootViews()
-    }
-
     @objc private func pdfPageChanged() {
         updatePageControls()
+    }
+
+    @objc private func pdfChromeStyleChanged() {
+        let variant = FilePreviewPDFChromeStyleVariant.current()
+        guard variant != chromeStyleVariant else { return }
+        chromeStyleVariant = variant
+        updateChromeRootViews()
     }
 
     private func updatePageControls() {

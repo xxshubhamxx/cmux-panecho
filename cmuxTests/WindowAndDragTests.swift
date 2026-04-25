@@ -1024,6 +1024,10 @@ final class WindowMoveSuppressionHitPathTests: XCTestCase {
     }
 }
 
+private final class FilePreviewPDFChromeNotificationFlag: @unchecked Sendable {
+    var didNotify = false
+}
+
 
 @MainActor
 final class FilePreviewPDFChromeTests: XCTestCase {
@@ -1034,10 +1038,19 @@ final class FilePreviewPDFChromeTests: XCTestCase {
     }
 
     #if DEBUG
-    func testPDFChromeStyleVariantPersistsForDogfoodPicker() {
+    func testPDFChromeStyleVariantPersistsForDebugWindow() {
         let defaults = UserDefaults.standard
         let previousValue = defaults.string(forKey: FilePreviewPDFChromeStyleVariant.defaultsKey)
+        let notificationFlag = FilePreviewPDFChromeNotificationFlag()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .filePreviewPDFChromeStyleDidChange,
+            object: nil,
+            queue: nil
+        ) { _ in
+            notificationFlag.didNotify = true
+        }
         defer {
+            NotificationCenter.default.removeObserver(observer)
             if let previousValue {
                 defaults.set(previousValue, forKey: FilePreviewPDFChromeStyleVariant.defaultsKey)
             } else {
@@ -1050,6 +1063,7 @@ final class FilePreviewPDFChromeTests: XCTestCase {
 
         FilePreviewPDFChromeStyleVariant.thinOutline.persist()
         XCTAssertEqual(FilePreviewPDFChromeStyleVariant.current(), .thinOutline)
+        XCTAssertTrue(notificationFlag.didNotify)
     }
     #endif
 

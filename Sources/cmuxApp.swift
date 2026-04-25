@@ -371,6 +371,14 @@ struct cmuxApp: App {
                     Button("File Explorer Style Debug…") {
                         FileExplorerStyleDebugWindowController.shared.show()
                     }
+                    Button(
+                        String(
+                            localized: "debug.menu.pdfPreviewChromeDebug",
+                            defaultValue: "PDF Preview Chrome Debug…"
+                        )
+                    ) {
+                        PDFPreviewChromeDebugWindowController.shared.show()
+                    }
                     Button("Open All Debug Windows") {
                         openAllDebugWindows()
                     }
@@ -1016,6 +1024,7 @@ struct cmuxApp: App {
         SidebarDebugWindowController.shared.show()
         BackgroundDebugWindowController.shared.show()
         MenuBarExtraDebugWindowController.shared.show()
+        PDFPreviewChromeDebugWindowController.shared.show()
     }
 }
 
@@ -1666,6 +1675,14 @@ private struct DebugWindowControlsView: View {
                         Button("Menu Bar Extra Debug…") {
                             MenuBarExtraDebugWindowController.shared.show()
                         }
+                        Button(
+                            String(
+                                localized: "debug.menu.pdfPreviewChromeDebug",
+                                defaultValue: "PDF Preview Chrome Debug…"
+                            )
+                        ) {
+                            PDFPreviewChromeDebugWindowController.shared.show()
+                        }
                         Button("Open All Debug Windows") {
                             BrowserImportHintDebugWindowController.shared.show()
                             BrowserProfilePopoverDebugWindowController.shared.show()
@@ -1673,6 +1690,7 @@ private struct DebugWindowControlsView: View {
                             SidebarDebugWindowController.shared.show()
                             BackgroundDebugWindowController.shared.show()
                             MenuBarExtraDebugWindowController.shared.show()
+                            PDFPreviewChromeDebugWindowController.shared.show()
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2516,6 +2534,196 @@ enum SettingsNavigationRequest {
     static func target(from notification: Notification) -> SettingsNavigationTarget? {
         guard let rawValue = notification.userInfo?[targetKey] as? String else { return nil }
         return SettingsNavigationTarget(rawValue: rawValue)
+    }
+}
+
+// MARK: - PDF Preview Chrome Debug
+
+private struct PDFPreviewChromeDebugView: View {
+    @AppStorage(FilePreviewPDFChromeStyleVariant.defaultsKey)
+    private var chromeStyleRawValue = FilePreviewPDFChromeStyleVariant.liquidGlass.rawValue
+
+    private var currentVariant: FilePreviewPDFChromeStyleVariant {
+        FilePreviewPDFChromeStyleVariant(rawValue: chromeStyleRawValue) ?? .liquidGlass
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(String(localized: "debug.pdfPreviewChrome.heading", defaultValue: "PDF Preview Chrome"))
+                    .font(.headline)
+
+                Text(
+                    String(
+                        localized: "debug.pdfPreviewChrome.description",
+                        defaultValue: "Choose the floating control style used by PDF previews."
+                    )
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+                ForEach(FilePreviewPDFChromeStyleVariant.allCases) { variant in
+                    variantRow(variant)
+                }
+
+                Divider()
+
+                HStack(spacing: 10) {
+                    Text(
+                        String(
+                            format: String(
+                                localized: "debug.pdfPreviewChrome.currentFormat",
+                                defaultValue: "Current: %@"
+                            ),
+                            currentVariant.title
+                        )
+                    )
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Button(String(localized: "debug.pdfPreviewChrome.copyConfig", defaultValue: "Copy Config")) {
+                        copyConfig()
+                    }
+
+                    Button(String(localized: "debug.pdfPreviewChrome.resetToDefault", defaultValue: "Reset to Default")) {
+                        apply(.liquidGlass)
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .frame(width: 460, height: 520)
+    }
+
+    private func variantRow(_ variant: FilePreviewPDFChromeStyleVariant) -> some View {
+        let isSelected = variant == currentVariant
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .frame(width: 16)
+
+                Text(variant.title)
+                    .font(.system(size: 13, weight: .medium))
+
+                Spacer()
+
+                Button(
+                    isSelected
+                        ? String(localized: "debug.pdfPreviewChrome.selected", defaultValue: "Selected")
+                        : String(localized: "debug.pdfPreviewChrome.use", defaultValue: "Use")
+                ) {
+                    apply(variant)
+                }
+                .disabled(isSelected)
+                .controlSize(.small)
+            }
+
+            HStack(spacing: 8) {
+                Text(String(localized: "debug.pdfPreviewChrome.sampleLabel", defaultValue: "Sample"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, alignment: .leading)
+
+                PDFPreviewChromeDebugSample(variant: variant)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func apply(_ variant: FilePreviewPDFChromeStyleVariant) {
+        chromeStyleRawValue = variant.rawValue
+        variant.persist()
+    }
+
+    private func copyConfig() {
+        let payload = "\(FilePreviewPDFChromeStyleVariant.defaultsKey)=\(currentVariant.rawValue)"
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(payload, forType: .string)
+    }
+}
+
+private struct PDFPreviewChromeDebugSample: View {
+    let variant: FilePreviewPDFChromeStyleVariant
+
+    var body: some View {
+        HStack(spacing: 0) {
+            sampleButton(
+                systemName: "minus.magnifyingglass",
+                label: String(localized: "filePreview.pdf.zoomOut", defaultValue: "Zoom Out")
+            )
+            Divider()
+                .frame(height: 20)
+            sampleButton(
+                systemName: "1.magnifyingglass",
+                label: String(localized: "filePreview.pdf.actualSize", defaultValue: "Actual Size")
+            )
+            Divider()
+                .frame(height: 20)
+            sampleButton(
+                systemName: "plus.magnifyingglass",
+                label: String(localized: "filePreview.pdf.zoomIn", defaultValue: "Zoom In")
+            )
+        }
+        .frame(height: 36)
+        .modifier(FilePreviewPDFChromeStyleModifier(variant: variant))
+    }
+
+    private func sampleButton(systemName: String, label: String) -> some View {
+        Button(action: {}) {
+            Image(systemName: systemName)
+                .font(.system(size: 16, weight: .regular))
+                .frame(width: 38, height: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(label)
+        .help(label)
+    }
+}
+
+private final class PDFPreviewChromeDebugWindowController: NSWindowController, NSWindowDelegate {
+    static let shared = PDFPreviewChromeDebugWindowController()
+
+    private init() {
+        let window = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 540),
+            styleMask: [.titled, .closable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = String(localized: "debug.pdfPreviewChrome.windowTitle", defaultValue: "PDF Preview Chrome")
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = false
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        window.identifier = NSUserInterfaceItemIdentifier("cmux.pdfPreviewChromeDebug")
+        window.center()
+        window.contentView = NSHostingView(rootView: PDFPreviewChromeDebugView())
+        AppDelegate.shared?.applyWindowDecorations(to: window)
+        super.init(window: window)
+        window.delegate = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func show() {
+        window?.center()
+        window?.makeKeyAndOrderFront(nil)
     }
 }
 
