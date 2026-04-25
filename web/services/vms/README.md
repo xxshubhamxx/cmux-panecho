@@ -41,6 +41,34 @@ All endpoints verify `Authorization: Bearer <stack access token>` plus `X-Stack-
 `cmux auth login`). Browsers going through `/handler/*` hit the same functions via the Stack
 Auth cookie path.
 
+## Authentication model
+
+The VM service has three separate trust boundaries:
+
+1. Native/client boundary. Public callers only use `/api/vm/*`. These routes call Stack Auth first,
+   return `401` before provisioning when the caller is unauthenticated, and check the coordinator
+   actor's user-owned VM list before `delete`, `exec`, `attach`, or legacy SSH endpoint minting.
+2. Server-to-Rivet boundary. The REST routes call Rivet with `x-cmux-rivet-internal:
+   CMUX_RIVET_INTERNAL_SECRET`. Raw `/api/rivet/*` requests without that header are rejected. This
+   keeps a user from bypassing REST ownership checks with a direct Rivet client and a guessed actor
+   key.
+3. Actor boundary. Actor handles include HMAC-signed params from `makeActorAuthParams(userId)`.
+   `userVmsActor` requires those params to match its actor key. `vmActor` requires them to match
+   `c.state.userId`. This protects deployed Rivet actor actions even if a raw actor endpoint is
+   reachable.
+
+`GET /api/rivet/start` is intentionally excluded from the shared-secret header because Rivet Cloud
+calls it in serverless mode. In deployed envs it refuses to run unless `RIVET_ENDPOINT` or
+`RIVET_TOKEN` + `RIVET_NAMESPACE` is configured, so the public start route is still tied to the
+trusted Rivet engine.
+
+The auth regression tests live in `web/tests`:
+
+- `vm-route-auth.test.ts` verifies unauthenticated `POST /api/vm` returns `401` before a Rivet
+  client or provider provisioning path can run.
+- `vm-rivet-security.test.ts` verifies raw Rivet header checks, signed actor params, and the
+  deployed `/api/rivet/start` private-endpoint requirement.
+
 ## Env
 
 See `web/.env.example`. The VM-specific vars:
@@ -113,16 +141,35 @@ attach token into `/tmp/cmux/attach-lease.json`; the raw token is returned once 
 
 ## Lifecycle
 
-- `userVmsActor.create({ image, provider })` allocates a cmux UUID, spawns `vmActor(uuid)` with
-  input, appends to the user's list, returns `{ id, provider, image }`.
-- `vmActor.onCreate` calls the provider driver to provision a real sandbox and stores
-  `providerVmId` in actor state.
+- `userVmsActor.create({ image, provider })` provisions the provider VM, spawns `vmActor(providerVmId)`
+  with input, appends to the user's list, returns `{ id, provider, image }`.
+- `vmActor.createState` stores the provider id, Stack user id, image, and lifecycle state.
 - A client WebSocket connection keeps `c.conns.size >= 1`. Disconnecting schedules `autoPause`
   10 minutes out.
 - `autoPause` re-checks `c.conns.size` first, so a reconnect race is a no-op. If still zero,
   it calls `driver.pause()`.
 - `vmActor.remove` calls `driver.destroy()` then `c.destroy()`. `userVmsActor.forget(id)`
   removes the id from the coordinator.
+
+## Rivet responsibilities
+
+Rivet is not currently used for user-facing realtime UI. The WebSocket PTY and browser proxy paths
+talk to `cmuxd-remote` inside the provider VM through E2B/Freestyle networking after the REST
+handshake mints short-lived leases.
+
+Today Rivet provides the stateful control plane:
+
+- one `userVmsActor` per Stack user for owned VM listing, idempotent creates, and coordinator state
+- one `vmActor` per provider VM for lifecycle operations, credentials, exec, attach endpoint minting,
+  snapshots, and cleanup
+- serialized per-actor actions so duplicate create/delete/credential-mint races have one owner
+
+This is convenient, but not strictly necessary for the first version. If we do not use Rivet for
+realtime subscriptions or long-running workflows soon, most logic could move into Vercel route
+handlers backed by a persistent database table for users, VMs, leases, usage ledger rows, and
+idempotency keys. That version would still need a separate background cleanup path for orphaned VMs
+and expired leases. Rivet is most justified if we keep per-VM lifecycle coordination in actors or add
+live VM status/progress subscriptions.
 
 ## Next steps
 

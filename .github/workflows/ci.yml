@@ -74,6 +74,9 @@ jobs:
       - name: Typecheck
         run: bun tsc --noEmit
 
+      - name: Web tests
+        run: bun test
+
   tests:
     runs-on: warp-macos-15-arm64-6x
     timeout-minutes: 30

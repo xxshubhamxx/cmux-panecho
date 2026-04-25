@@ -7,6 +7,7 @@
     "dev": "CMUX_VM_API_BASE_URL=http://localhost:${CMUX_PORT:-${PORT:-3777}} next dev --port ${CMUX_PORT:-${PORT:-3777}}",
     "build": "next build",
     "start": "next start",
+    "test": "bun test",
     "lint": "eslint"
   },
   "dependencies": {
