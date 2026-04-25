@@ -1133,6 +1133,77 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         }
     }
 
+    func testGoogleLikeSearchInputKeepsCaretAndSpacesAfterRepeatedPaneFocusRoundTrips() {
+        let app = XCUIApplication()
+        app.launchEnvironment["CMUX_SOCKET_PATH"] = socketPath
+        app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_SETUP"] = "1"
+        app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_PATH"] = dataPath
+        app.launchEnvironment["CMUX_UI_TEST_GOTO_SPLIT_BROWSER_URL"] = googleLikeSearchPageURL
+        launchAndEnsureForeground(app)
+
+        XCTAssertTrue(
+            waitForData(
+                keys: [
+                    "browserPanelId",
+                    "terminalPaneId",
+                    "webViewFocused",
+                    "browserPageTitle"
+                ],
+                timeout: 12.0
+            ),
+            "Expected setup data including Google-like page state to be written. path=\(dataPath) data=\(loadData() ?? [:])"
+        )
+
+        guard let setup = loadData() else {
+            XCTFail("Missing goto_split setup data")
+            return
+        }
+
+        XCTAssertEqual(setup["webViewFocused"], "true", "Expected WKWebView to be first responder for this test")
+
+        guard let expectedTerminalPaneId = setup["terminalPaneId"] else {
+            XCTFail("Missing terminalPaneId in setup data")
+            return
+        }
+
+        var expectedSearchValue = "cmux google"
+        XCTAssertTrue(
+            waitForGoogleLikeSearchState(expectedValue: expectedSearchValue, timeout: 8.0),
+            "Expected Google-like page input to start focused with the caret at the end. data=\(loadData() ?? [:])"
+        )
+
+        let iterationMarkers = Array("abcdefghijklmnopqrstuvwxyzabcd")
+        for iteration in 1...30 {
+            focusLeftPaneForFindScenario(app, route: .cmdOptionArrows)
+            XCTAssertTrue(
+                waitForDataMatch(timeout: 6.0) { data in
+                    data["focusedPaneId"] == expectedTerminalPaneId &&
+                        data["focusedPanelKind"] == "terminal"
+                },
+                "Expected focus-left shortcut to focus the terminal pane. iteration=\(iteration) data=\(loadData() ?? [:])"
+            )
+
+            focusRightPaneForFindScenario(app, route: .cmdOptionArrows)
+            XCTAssertTrue(
+                waitForDataMatch(timeout: 6.0) { data in
+                    data["focusedPanelKind"] == "browser"
+                },
+                "Expected focus-right shortcut to return to the browser pane. iteration=\(iteration) data=\(loadData() ?? [:])"
+            )
+
+            let marker = String(iterationMarkers[iteration - 1])
+            let typedText = " \(marker)"
+            expectedSearchValue += typedText
+            app.typeText(typedText)
+
+            XCTAssertTrue(
+                waitForGoogleLikeSearchState(expectedValue: expectedSearchValue, timeout: 8.0),
+                "Expected Google-like search input, suggestion text, and caret to include the typed leading space. " +
+                    "iteration=\(iteration) expected=\(expectedSearchValue) data=\(loadData() ?? [:])"
+            )
+        }
+    }
+
     func testWorkspaceRoundTripPreservesFocusedTerminalFindWhenBrowserFindIsAlsoOpen() {
         runSplitFindWorkspaceRoundTripScenario(restoredOwner: .terminal)
     }
@@ -1491,6 +1562,39 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
         )
     }
 
+    private func waitForGoogleLikeSearchState(expectedValue: String, timeout: TimeInterval) -> Bool {
+        waitForDataMatch(timeout: timeout) { data in
+            let state = self.googleLikeSearchState(from: data)
+            let expectedEncoded = self.googleLikeTitleEncoded(expectedValue)
+            let expectedCaret = String(expectedValue.count)
+            return state["value"] == expectedEncoded &&
+                state["suggestion"] == expectedEncoded &&
+                state["start"] == expectedCaret &&
+                state["end"] == expectedCaret &&
+                state["active"] == "q"
+        }
+    }
+
+    private func googleLikeSearchState(from data: [String: String]) -> [String: String] {
+        guard let title = data["browserPageTitle"],
+              title.hasPrefix("cmux-google-like|") else {
+            return [:]
+        }
+
+        return title
+            .split(separator: "|")
+            .dropFirst()
+            .reduce(into: [String: String]()) { result, component in
+                let parts = component.split(separator: "=", maxSplits: 1)
+                guard parts.count == 2 else { return }
+                result[String(parts[0])] = String(parts[1])
+            }
+    }
+
+    private func googleLikeTitleEncoded(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? value
+    }
+
     private func waitForOmnibarToContainExampleDomain(_ omnibar: XCUIElement, timeout: TimeInterval) -> Bool {
         waitForCondition(timeout: timeout) {
             let value = (omnibar.value as? String) ?? ""
@@ -1670,6 +1774,132 @@ final class BrowserPaneNavigationKeybindUITests: XCTestCase {
                 primary.setSelectionRange(end, end);
               }
               updateTitle();
+            }, { once: true });
+          </script>
+        </body>
+        </html>
+        """
+        let encoded = html.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        return "data:text/html,\(encoded)"
+    }
+
+    private var googleLikeSearchPageURL: String {
+        let html = """
+        <!doctype html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>cmux-google-like-loading</title>
+          <style>
+            body {
+              margin: 0;
+              min-height: 100vh;
+              background: #fff;
+              color: #202124;
+              font-family: Arial, sans-serif;
+            }
+            main {
+              width: min(640px, calc(100vw - 48px));
+              margin: 72px auto 0;
+            }
+            input {
+              width: 100%;
+              height: 46px;
+              box-sizing: border-box;
+              padding: 0 16px;
+              border: 1px solid #dfe1e5;
+              border-radius: 23px;
+              font-size: 16px;
+              outline: none;
+            }
+            input:focus {
+              box-shadow: 0 1px 6px rgba(32, 33, 36, 0.28);
+            }
+            #suggestions {
+              margin-top: 8px;
+              padding: 8px 16px;
+              border: 1px solid #dfe1e5;
+              border-radius: 8px;
+              font-size: 14px;
+              min-height: 20px;
+            }
+          </style>
+        </head>
+        <body>
+          <main>
+            <input
+              id="q"
+              type="search"
+              value="cmux google"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-label="Search"
+            >
+            <div id="suggestions"></div>
+          </main>
+          <script>
+            const q = document.getElementById('q');
+            const suggestions = document.getElementById('suggestions');
+            let lastKey = 'none';
+            let lastBeforeInput = 'none';
+            let suggestionMirror = q.value;
+            let suggestionCaret = q.value.length;
+
+            const encode = (value) => encodeURIComponent(String(value || ''));
+            const updateTitle = () => {
+              const start = typeof q.selectionStart === 'number' ? q.selectionStart : -1;
+              const end = typeof q.selectionEnd === 'number' ? q.selectionEnd : -1;
+              const active = document.activeElement === q ? 'q' : 'other';
+              suggestions.textContent = suggestionMirror;
+              document.title = [
+                'cmux-google-like',
+                'value=' + encode(q.value),
+                'suggestion=' + encode(suggestions.textContent),
+                'start=' + start,
+                'end=' + end,
+                'active=' + active,
+                'lastKey=' + encode(lastKey),
+                'before=' + encode(lastBeforeInput)
+              ].join('|');
+            };
+
+            const updateSoon = () => {
+              updateTitle();
+              requestAnimationFrame(updateTitle);
+            };
+
+            q.addEventListener('keydown', (event) => {
+              lastKey = event.key === ' ' ? 'Space' : event.key;
+              updateSoon();
+            }, true);
+            q.addEventListener('beforeinput', (event) => {
+              lastBeforeInput = event.data === ' ' ? 'Space' : (event.data || event.inputType || 'none');
+              if (event.inputType === 'insertText' && typeof event.data === 'string' && event.data.length > 0) {
+                const start = Math.max(0, Math.min(suggestionCaret, suggestionMirror.length));
+                suggestionMirror = suggestionMirror.slice(0, start) + event.data + suggestionMirror.slice(start);
+                suggestionCaret = start + event.data.length;
+              }
+              updateSoon();
+            }, true);
+            q.addEventListener('input', () => {
+              if (q.value === suggestionMirror && typeof q.selectionEnd === 'number') {
+                suggestionCaret = q.selectionEnd;
+              }
+              updateSoon();
+            }, true);
+            q.addEventListener('keyup', updateSoon, true);
+            q.addEventListener('focus', updateSoon, true);
+            q.addEventListener('blur', updateSoon, true);
+            document.addEventListener('selectionchange', updateSoon, true);
+            window.addEventListener('focus', updateSoon, true);
+            window.addEventListener('blur', updateSoon, true);
+            window.addEventListener('load', () => {
+              q.focus({ preventScroll: true });
+              const end = q.value.length;
+              q.setSelectionRange(end, end);
+              updateSoon();
             }, { once: true });
           </script>
         </body>
