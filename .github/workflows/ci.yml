@@ -125,6 +125,7 @@ jobs:
           DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:5432/cmux_test
         run: |
           bun test tests/db-schema.test.ts
+          bun test tests/drizzle-effect.test.ts
           bun test tests/vm-db-read-model.test.ts
 
   tests:

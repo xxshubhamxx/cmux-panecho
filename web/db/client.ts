@@ -3,7 +3,7 @@ import postgres, { type Sql } from "postgres";
 import * as schema from "./schema";
 
 function createDb(sql: Sql) {
-  return drizzle(sql, { schema });
+  return drizzle({ client: sql, schema });
 }
 
 type CloudDb = ReturnType<typeof createDb>;
