@@ -3308,6 +3308,84 @@ struct CMUXCLI {
         explicitPassword: String?,
         jsonOutput: Bool
     ) throws {
+        if try runAgentLauncherCharmTUIIfAvailable(
+            commandArgs: commandArgs,
+            socketPath: socketPath,
+            explicitPassword: explicitPassword,
+            jsonOutput: jsonOutput
+        ) {
+            return
+        }
+
+        try runAgentLauncherBasicTUI(
+            commandArgs: commandArgs,
+            socketPath: socketPath,
+            explicitPassword: explicitPassword,
+            jsonOutput: jsonOutput
+        )
+    }
+
+    private func runAgentLauncherCharmTUIIfAvailable(
+        commandArgs: [String],
+        socketPath: String,
+        explicitPassword: String?,
+        jsonOutput: Bool
+    ) throws -> Bool {
+        if ProcessInfo.processInfo.environment["CMUX_AGENT_LAUNCHER_SWIFT_TUI"] == "1" {
+            return false
+        }
+        guard let helperPath = agentLauncherTUIExecutablePath() else {
+            return false
+        }
+
+        var arguments = [
+            "--cmux", currentCmuxExecutableForLauncher(),
+            "--socket", socketPath
+        ]
+        if let explicitPassword, !explicitPassword.isEmpty {
+            arguments.append(contentsOf: ["--password", explicitPassword])
+        }
+        if jsonOutput {
+            arguments.append("--json")
+        }
+        arguments.append(contentsOf: commandArgs)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: helperPath)
+        process.arguments = arguments
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            throw CLIError(message: "agent-launcher: failed to start Charm TUI at \(helperPath): \(error.localizedDescription)")
+        }
+        guard process.terminationStatus == 0 else {
+            throw CLIError(message: "agent-launcher: Charm TUI exited with status \(process.terminationStatus)")
+        }
+        return true
+    }
+
+    private func agentLauncherTUIExecutablePath() -> String? {
+        let helperName = "cmux-agent-launcher-tui"
+        let fm = FileManager.default
+        if let executableDir = resolvedExecutableURL()?.deletingLastPathComponent() {
+            let candidate = executableDir.appendingPathComponent(helperName, isDirectory: false).path
+            if fm.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return resolveExecutableInSearchPath(
+            helperName,
+            searchPath: ProcessInfo.processInfo.environment["PATH"]
+        )
+    }
+
+    private func runAgentLauncherBasicTUI(
+        commandArgs: [String],
+        socketPath: String,
+        explicitPassword: String?,
+        jsonOutput: Bool
+    ) throws {
         var request = try parseAgentLauncherOptions(commandArgs, defaultPrompt: "")
         var promptLines: [String] = []
 
@@ -7988,14 +8066,14 @@ struct CMUXCLI {
                    cmux agent-launcher install [--name <title>]
                    cmux agent-launcher run --prompt <text> [--image <path> ...] [--claude <n>] [--codex <n>] [--opencode <n>] [--name <title>] [--base <path>] [--no-ai-name]
 
-            Start a terminal launcher for creating agent workspaces.
+            Start the Charm TUI for creating agent workspaces.
 
             The launcher creates git worktrees, then opens a cmux workspace with one pane per agent.
             Defaults to one Claude pane on the left and one Codex pane on the right.
 
             Images pasted or dropped into a cmux terminal are inserted as file paths. The launcher
-            records those paths and passes them to Codex with --image while also listing them in
-            the prompt for Claude and OpenCode.
+            shows those paths as [Image #N] tokens, passes them to Codex with --image, and also
+            lists them in the prompt for Claude and OpenCode.
 
             OpenCode uses Kimi with --model kimi-for-coding/k2p6.
             """
