@@ -54,16 +54,16 @@ const (
 )
 
 type model struct {
-	cfg            config
-	textarea       textarea.Model
-	width          int
-	height         int
-	focus          focusMode
-	selectedConfig int
-	images         []imageAttachment
-	status         string
-	statusKind     string
-	launching      bool
+	cfg             config
+	textarea        textarea.Model
+	width           int
+	height          int
+	focus           focusMode
+	selectedConfig  int
+	images          []imageAttachment
+	status          string
+	statusKind      string
+	pendingLaunches int
 }
 
 type placementOption struct {
@@ -271,7 +271,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 	case launchDoneMsg:
-		m.launching = false
+		if m.pendingLaunches > 0 {
+			m.pendingLaunches--
+		}
 		if msg.err != nil {
 			m.statusKind = "error"
 			m.status = strings.TrimSpace(msg.output)
@@ -285,8 +287,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status == "" {
 			m.status = "workspace created"
 		}
-		m.textarea.Reset()
-		m.images = nil
 		return m, nil
 	case tea.MouseMsg:
 		if msg.Action != tea.MouseActionPress {
@@ -308,10 +308,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		case "tab":
 			m.toggleFocus()
-			return m, nil
-		}
-
-		if m.launching {
 			return m, nil
 		}
 
@@ -392,9 +388,6 @@ func (m model) metrics() layoutMetrics {
 }
 
 func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.launching {
-		return m, nil
-	}
 	metrics := m.metrics()
 	if msg.X < metrics.contentX || msg.X >= metrics.contentX+metrics.width {
 		return m, nil
@@ -550,12 +543,16 @@ func (m model) startLaunch() (tea.Model, tea.Cmd) {
 		m.cfg.claudeCount = 1
 		m.cfg.codexCount = 1
 	}
-	m.launching = true
+	m.pendingLaunches++
 	m.statusKind = ""
-	m.status = "creating cmux layout..."
+	m.status = pendingLaunchStatus(m.pendingLaunches)
 	cfg := m.cfg
 	images := append([]imageAttachment(nil), m.images...)
-	return m, func() tea.Msg {
+	m.textarea.Reset()
+	m.images = nil
+	m.focus = focusPrompt
+	focusCmd := m.textarea.Focus()
+	launchCmd := func() tea.Msg {
 		args := []string{}
 		if cfg.socketPath != "" {
 			args = append(args, "--socket", cfg.socketPath)
@@ -598,6 +595,7 @@ func (m model) startLaunch() (tea.Model, tea.Cmd) {
 		err := cmd.Run()
 		return launchDoneMsg{output: output.String(), err: err}
 	}
+	return m, tea.Batch(focusCmd, launchCmd)
 }
 
 func (m model) View() string {
@@ -769,19 +767,26 @@ func (m model) imageLine(width int) string {
 
 func (m model) statusLine(width int) string {
 	text := m.status
-	if m.launching {
-		text = "creating cmux layout..."
+	if m.pendingLaunches > 0 && m.statusKind != "error" {
+		text = pendingLaunchStatus(m.pendingLaunches)
 	}
 	style := subtle
 	if m.statusKind == "error" {
 		style = errorText
-	} else if m.statusKind == "ok" || m.launching {
+	} else if m.statusKind == "ok" || m.pendingLaunches > 0 {
 		style = hot
 	}
 	if strings.TrimSpace(text) == "" {
 		text = "ready"
 	}
 	return style.Width(width).Align(lipgloss.Center).Render(text)
+}
+
+func pendingLaunchStatus(count int) string {
+	if count <= 1 {
+		return "creating cmux layout in background..."
+	}
+	return fmt.Sprintf("creating %d cmux layouts in background...", count)
 }
 
 func (m *model) replaceImagePaths(input string) (string, bool) {

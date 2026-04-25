@@ -48,6 +48,34 @@ func TestRenderInputFillsEveryLine(t *testing.T) {
 	}
 }
 
+func TestStartLaunchClearsPromptImmediatelyAndKeepsNextDraft(t *testing.T) {
+	m := initialModel(config{cmuxPath: "cmux", claudeCount: 1, codexCount: 1, placement: "splits", isolation: "auto", useAIName: true})
+	m.textarea.SetValue("ship this")
+	m.images = []imageAttachment{{Token: "[Image #1]", Path: "/tmp/image.png", Name: "image.png"}}
+
+	updated, _ := m.startLaunch()
+	m = updated.(model)
+	if value := m.textarea.Value(); value != "" {
+		t.Fatalf("prompt should clear immediately, got %q", value)
+	}
+	if len(m.images) != 0 {
+		t.Fatalf("images should clear immediately, got %d", len(m.images))
+	}
+	if m.pendingLaunches != 1 {
+		t.Fatalf("pending launches = %d, want 1", m.pendingLaunches)
+	}
+
+	m.textarea.SetValue("next draft")
+	updated, _ = m.Update(launchDoneMsg{output: "OK workspace:abc"})
+	m = updated.(model)
+	if value := m.textarea.Value(); value != "next draft" {
+		t.Fatalf("launch completion should not clear next draft, got %q", value)
+	}
+	if m.pendingLaunches != 0 {
+		t.Fatalf("pending launches after completion = %d, want 0", m.pendingLaunches)
+	}
+}
+
 func osWriteFile(name string, data []byte, perm uint32) error {
 	return os.WriteFile(name, data, os.FileMode(perm))
 }

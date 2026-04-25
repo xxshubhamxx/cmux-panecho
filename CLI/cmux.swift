@@ -3855,7 +3855,6 @@ struct CMUXCLI {
             guard let workspaceId = response["workspace_id"] as? String else {
                 throw CLIError(message: "agent-launcher: workspace.create did not return workspace_id")
             }
-            _ = try client.sendV2(method: "workspace.select", params: ["workspace_id": workspaceId])
             createdWorkspaces = [
                 AgentLauncherCreatedWorkspace(
                     name: workspaceName,
@@ -3864,7 +3863,7 @@ struct CMUXCLI {
             ]
         case .workspaces:
             var created: [AgentLauncherCreatedWorkspace] = []
-            for (index, surface) in surfaces.enumerated() {
+            for surface in surfaces {
                 let title = surfaces.count == 1 ? workspaceName : surface.title
                 let response = try client.sendV2(method: "workspace.create", params: [
                     "title": title,
@@ -3874,9 +3873,6 @@ struct CMUXCLI {
                 ])
                 guard let workspaceId = response["workspace_id"] as? String else {
                     throw CLIError(message: "agent-launcher: workspace.create did not return workspace_id")
-                }
-                if index == 0 {
-                    _ = try client.sendV2(method: "workspace.select", params: ["workspace_id": workspaceId])
                 }
                 created.append(AgentLauncherCreatedWorkspace(
                     name: title,
