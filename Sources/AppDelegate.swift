@@ -4699,11 +4699,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 tabManager = nextContext.tabManager
                 sidebarState = nextContext.sidebarState
                 sidebarSelectionState = nextContext.sidebarSelectionState
+                fileExplorerState = nextContext.fileExplorerState
                 TerminalController.shared.setActiveTabManager(nextContext.tabManager)
             } else {
                 tabManager = nil
                 sidebarState = nil
                 sidebarSelectionState = nil
+                fileExplorerState = nil
                 TerminalController.shared.setActiveTabManager(nil)
             }
         }
@@ -5087,6 +5089,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         for context in sortedMainWindowContextsForSessionSnapshot() {
             guard let window = resolvedWindow(for: context) else { continue }
             if shouldActivate {
+                if window.isMiniaturized {
+                    window.deminiaturize(nil)
+                }
                 window.makeKeyAndOrderFront(nil)
                 setActiveMainWindow(window)
             }
@@ -11766,11 +11771,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 tabManager = nextContext.tabManager
                 sidebarState = nextContext.sidebarState
                 sidebarSelectionState = nextContext.sidebarSelectionState
+                fileExplorerState = nextContext.fileExplorerState
                 TerminalController.shared.setActiveTabManager(nextContext.tabManager)
             } else {
                 tabManager = nil
                 sidebarState = nil
                 sidebarSelectionState = nil
+                fileExplorerState = nil
                 TerminalController.shared.setActiveTabManager(nil)
             }
         }
