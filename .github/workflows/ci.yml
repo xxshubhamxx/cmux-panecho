@@ -707,7 +707,7 @@ jobs:
             -disableAutomaticPackageResolution \
             -destination "platform=macOS" \
             -maximum-test-execution-time-allowance 180 \
-            -only-testing:cmuxUITests/BrowserPaneNavigationKeybindUITests/testCmdFFocusesBrowserFindFieldAfterCmdDCmdLNavigation \
+            -only-testing:cmuxUITests/BrowserPaneNavigationKeybindUITests/testCmdFOpensBrowserFindAfterCmdDCmdLNavigation \
             test-without-building
 
       - name: Cleanup persistent virtual display

@@ -2059,6 +2059,9 @@ struct ContentView: View {
     private static let commandPaletteVisiblePreviewCandidateLimit = 192
     private static let minimumSidebarWidth: CGFloat = CGFloat(SessionPersistencePolicy.minimumSidebarWidth)
     private static let maximumSidebarWidthRatio: CGFloat = 1.0 / 3.0
+    private static let minimumRightSidebarWidth: CGFloat = 276
+    private static let maximumRightSidebarWidth: CGFloat = 1200
+    private static let minimumTerminalWidthWithRightSidebar: CGFloat = 360
 
     private enum SidebarResizerHandle: Hashable {
         case divider
@@ -2095,7 +2098,10 @@ struct ContentView: View {
                 captureStart: { fileExplorerDragStartWidth = fileExplorerWidth },
                 updateWidth: { translation in
                     let startWidth = fileExplorerDragStartWidth ?? fileExplorerWidth
-                    let nextWidth = min(500, max(150, startWidth - translation))
+                    let nextWidth = Self.clampedRightSidebarWidth(
+                        startWidth - translation,
+                        availableWidth: availableWidth
+                    )
                     withTransaction(Transaction(animation: nil)) {
                         fileExplorerWidth = nextWidth
                     }
@@ -2106,14 +2112,6 @@ struct ContentView: View {
                 }
             )
         }
-    }
-
-    private var sidebarResizerSidebarHitWidth: CGFloat {
-        SidebarResizeInteraction.sidebarSideHitWidth
-    }
-
-    private var sidebarResizerContentHitWidth: CGFloat {
-        SidebarResizeInteraction.contentSideHitWidth
     }
 
     private func maxSidebarWidth(availableWidth: CGFloat? = nil) -> CGFloat {
@@ -2141,6 +2139,18 @@ struct ContentView: View {
         return max(minimumWidth, min(sanitizedMaximumWidth, candidate))
     }
 
+    static func clampedRightSidebarWidth(_ candidate: CGFloat, availableWidth: CGFloat) -> CGFloat {
+        let minimumWidth = Self.minimumRightSidebarWidth
+        let sanitizedCandidate = candidate.isFinite ? candidate : 220
+        let sanitizedAvailableWidth = availableWidth.isFinite && availableWidth > 0 ? availableWidth : 1920
+        let availableWidthCap = sanitizedAvailableWidth - Self.minimumTerminalWidthWithRightSidebar
+        let maximumWidth = min(
+            Self.maximumRightSidebarWidth,
+            max(minimumWidth, availableWidthCap)
+        )
+        return max(minimumWidth, min(maximumWidth, sanitizedCandidate))
+    }
+
     private func clampSidebarWidthIfNeeded(availableWidth: CGFloat? = nil) {
         let nextWidth = Self.clampedSidebarWidth(
             sidebarWidth,
@@ -2154,6 +2164,47 @@ struct ContentView: View {
 
     private func normalizedSidebarWidth(_ candidate: CGFloat) -> CGFloat {
         Self.clampedSidebarWidth(candidate, maximumWidth: maxSidebarWidth())
+    }
+
+    private func resolvedRightSidebarAvailableWidth(_ availableWidth: CGFloat? = nil) -> CGFloat {
+        if let availableWidth {
+            return availableWidth
+        }
+        if let width = observedWindow?.contentView?.bounds.width {
+            return width
+        }
+        if let width = observedWindow?.contentLayoutRect.width {
+            return width
+        }
+        if let width = NSApp.keyWindow?.contentView?.bounds.width {
+            return width
+        }
+        if let width = NSApp.keyWindow?.contentLayoutRect.width {
+            return width
+        }
+        if let width = NSApp.keyWindow?.screen?.frame.width {
+            return width
+        }
+        if let width = NSScreen.main?.frame.width {
+            return width
+        }
+        return 1920
+    }
+
+    private func normalizedRightSidebarWidth(_ candidate: CGFloat, availableWidth: CGFloat? = nil) -> CGFloat {
+        Self.clampedRightSidebarWidth(
+            candidate,
+            availableWidth: resolvedRightSidebarAvailableWidth(availableWidth)
+        )
+    }
+
+    private func clampRightSidebarWidthIfNeeded(availableWidth: CGFloat? = nil) {
+        let nextWidth = normalizedRightSidebarWidth(fileExplorerWidth, availableWidth: availableWidth)
+        guard abs(nextWidth - fileExplorerWidth) > 0.5 else { return }
+        withTransaction(Transaction(animation: nil)) {
+            fileExplorerWidth = nextWidth
+        }
+        fileExplorerState.width = nextWidth
     }
 
     private func activateSidebarResizerCursor() {
@@ -2189,13 +2240,18 @@ struct ContentView: View {
 
     private func dividerBandContains(pointInContent point: NSPoint, contentBounds: NSRect) -> Bool {
         guard point.y >= contentBounds.minY, point.y <= contentBounds.maxY else { return false }
-        let minX = sidebarWidth - sidebarResizerSidebarHitWidth
-        let maxX = sidebarWidth + sidebarResizerContentHitWidth
-        return point.x >= minX && point.x <= maxX
+        if sidebarState.isVisible,
+           SidebarResizeInteraction.Edge.leading.hitRange(dividerX: sidebarWidth).contains(point.x) {
+            return true
+        }
+
+        let rightDividerX = contentBounds.maxX - rightSidebarWidth
+        return rightSidebarVisible &&
+            SidebarResizeInteraction.Edge.trailing.hitRange(dividerX: rightDividerX).contains(point.x)
     }
 
-    private func updateSidebarResizerBandState(using event: NSEvent? = nil) {
-        guard sidebarState.isVisible,
+    private func updateSidebarResizerBandState(using _: NSEvent? = nil) {
+        guard sidebarState.isVisible || rightSidebarVisible,
               let window = observedWindow,
               let contentView = window.contentView else {
             isResizerBandActive = false
@@ -2360,11 +2416,16 @@ struct ContentView: View {
             .modifier(SidebarResizerAccessibilityModifier(accessibilityIdentifier: accessibilityIdentifier))
     }
 
-    private var sidebarResizerOverlay: some View {
+    private func placedSidebarResizerOverlay(
+        handle: SidebarResizerHandle,
+        edge: SidebarResizeInteraction.Edge,
+        accessibilityIdentifier: String,
+        dividerX: @escaping (CGFloat) -> CGFloat
+    ) -> some View {
         GeometryReader { proxy in
             let totalWidth = max(0, proxy.size.width)
-            let dividerX = min(max(sidebarWidth, 0), totalWidth)
-            let leadingWidth = max(0, dividerX - sidebarResizerSidebarHitWidth)
+            let resolvedDividerX = min(max(dividerX(totalWidth), 0), totalWidth)
+            let leadingWidth = max(0, edge.handleX(dividerX: resolvedDividerX))
 
             HStack(spacing: 0) {
                 Color.clear
@@ -2372,10 +2433,10 @@ struct ContentView: View {
                     .allowsHitTesting(false)
 
                 sidebarResizerHandleOverlay(
-                    .divider,
+                    handle,
                     width: SidebarResizeInteraction.totalHitWidth,
                     availableWidth: totalWidth,
-                    accessibilityIdentifier: "SidebarResizer"
+                    accessibilityIdentifier: accessibilityIdentifier
                 )
 
                 Color.clear
@@ -2383,13 +2444,25 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
             .frame(width: totalWidth, height: proxy.size.height, alignment: .leading)
-            .onAppear {
-                clampSidebarWidthIfNeeded(availableWidth: totalWidth)
-            }
-            .onChange(of: totalWidth) {
-                clampSidebarWidthIfNeeded(availableWidth: totalWidth)
-            }
         }
+    }
+
+    private var sidebarResizerOverlay: some View {
+        placedSidebarResizerOverlay(
+            handle: .divider,
+            edge: .leading,
+            accessibilityIdentifier: "SidebarResizer",
+            dividerX: { totalWidth in min(max(sidebarWidth, 0), totalWidth) }
+        )
+    }
+
+    private var rightSidebarResizerOverlay: some View {
+        placedSidebarResizerOverlay(
+            handle: .explorerDivider,
+            edge: .trailing,
+            accessibilityIdentifier: "RightSidebarResizer",
+            dividerX: { totalWidth in totalWidth - rightSidebarWidth }
+        )
     }
 
     private var sidebarView: some View {
@@ -2586,28 +2659,28 @@ struct ContentView: View {
         .clipped()
         .allowsHitTesting(rightSidebarVisible)
         .accessibilityHidden(!rightSidebarVisible)
-        .overlay(alignment: .leading) {
-            if rightSidebarVisible {
-                fileExplorerResizerHandle
-            }
-        }
         .transaction { $0.animation = nil }
         .onAppear {
-            fileExplorerWidth = fileExplorerState.width
+            let sanitized = normalizedRightSidebarWidth(fileExplorerState.width)
+            fileExplorerWidth = sanitized
+            if abs(fileExplorerState.width - sanitized) > 0.5 {
+                DispatchQueue.main.async {
+                    fileExplorerState.width = sanitized
+                }
+            }
         }
         .onChange(of: fileExplorerState.width) { newValue in
             if fileExplorerDragStartWidth == nil {
-                fileExplorerWidth = newValue
+                let sanitized = normalizedRightSidebarWidth(newValue)
+                if abs(newValue - sanitized) > 0.5 {
+                    DispatchQueue.main.async {
+                        fileExplorerState.width = sanitized
+                    }
+                    return
+                }
+                fileExplorerWidth = sanitized
             }
         }
-    }
-
-    private var fileExplorerResizerHandle: some View {
-        sidebarResizerHandleOverlay(
-            .explorerDivider,
-            width: SidebarResizeInteraction.totalHitWidth,
-            availableWidth: observedWindow?.contentView?.bounds.width ?? 1920
-        )
     }
 
     @AppStorage("sidebarBlendMode") private var sidebarBlendMode = SidebarBlendModeOption.withinWindow.rawValue
@@ -2976,6 +3049,12 @@ struct ContentView: View {
                             .zIndex(1000)
                     }
                 }
+                .overlay(alignment: .leading) {
+                    if rightSidebarVisible {
+                        rightSidebarResizerOverlay
+                            .zIndex(1000)
+                    }
+                }
         )
     }
 
@@ -3084,6 +3163,7 @@ struct ContentView: View {
             tabManager.applyWindowBackgroundForSelectedTab()
             startWorkspaceHandoffIfNeeded(newSelectedId: newValue)
             reconcileMountedWorkspaceIds(selectedId: newValue)
+            AppDelegate.shared?.syncBonsplitTabShortcutHintEligibility(in: observedWindow)
             guard let newValue else { return }
             if selectedTabIds.count <= 1 {
                 selectedTabIds = [newValue]
@@ -3167,8 +3247,26 @@ struct ContentView: View {
                   let focusedPanelId = selectedWorkspace.focusedPanelId,
                   let focusedBrowser = selectedWorkspace.browserPanel(for: focusedPanelId),
                   focusedBrowser.webView === webView else { return }
+            AppDelegate.shared?.noteMainPanelKeyboardFocusIntent(
+                workspaceId: selectedTabId,
+                panelId: focusedPanelId,
+                in: observedWindow ?? webView.window
+            )
             completeWorkspaceHandoffIfNeeded(focusedTabId: selectedTabId, reason: "browser_first_responder")
             attemptCommandPaletteFocusRestoreIfNeeded()
+        })
+
+        view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .webViewDidReceiveClick)) { notification in
+            guard let webView = notification.object as? WKWebView,
+                  let selectedTabId = tabManager.selectedTabId,
+                  let selectedWorkspace = tabManager.selectedWorkspace,
+                  let focusedBrowser = selectedWorkspace.panels.values.compactMap({ $0 as? BrowserPanel })
+                    .first(where: { $0.webView === webView }) else { return }
+            AppDelegate.shared?.noteMainPanelKeyboardFocusIntent(
+                workspaceId: selectedTabId,
+                panelId: focusedBrowser.id,
+                in: observedWindow ?? webView.window
+            )
         })
 
         view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .browserDidFocusAddressBar)) { notification in
@@ -3176,7 +3274,12 @@ struct ContentView: View {
                   let selectedTabId = tabManager.selectedTabId,
                   let selectedWorkspace = tabManager.selectedWorkspace,
                   selectedWorkspace.focusedPanelId == panelId,
-                  selectedWorkspace.browserPanel(for: panelId) != nil else { return }
+                  let focusedBrowser = selectedWorkspace.browserPanel(for: panelId) else { return }
+            AppDelegate.shared?.noteMainPanelKeyboardFocusIntent(
+                workspaceId: selectedTabId,
+                panelId: panelId,
+                in: observedWindow ?? focusedBrowser.webView.window
+            )
             completeWorkspaceHandoffIfNeeded(focusedTabId: selectedTabId, reason: "browser_address_bar")
             attemptCommandPaletteFocusRestoreIfNeeded()
         })
@@ -3436,7 +3539,9 @@ struct ContentView: View {
         view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { notification in
             guard let window = notification.object as? NSWindow,
                   window === observedWindow else { return }
-            clampSidebarWidthIfNeeded(availableWidth: window.contentView?.bounds.width ?? window.contentLayoutRect.width)
+            let availableWidth = window.contentView?.bounds.width ?? window.contentLayoutRect.width
+            clampSidebarWidthIfNeeded(availableWidth: availableWidth)
+            clampRightSidebarWidthIfNeeded(availableWidth: availableWidth)
             updateSidebarResizerBandState()
         })
 
@@ -3459,6 +3564,17 @@ struct ContentView: View {
             schedulePortalGeometrySynchronize()
             updateSidebarResizerBandState()
             syncTrafficLightInset()
+        })
+
+        view = AnyView(view.onChange(of: fileExplorerState.isVisible) { isVisible in
+            if !isVisible {
+                _ = AppDelegate.shared?.restoreTerminalFocusAfterRightSidebarHidden(in: observedWindow)
+            }
+            if let observedWindow {
+                TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronize(for: observedWindow)
+            } else {
+                TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronizeForAllWindows()
+            }
         })
 
         view = AnyView(view.onChange(of: sidebarMatchTerminalBackground) { _ in
@@ -3526,7 +3642,9 @@ struct ContentView: View {
                 DispatchQueue.main.async {
                     observedWindow = window
                     isFullScreen = window.styleMask.contains(.fullScreen)
-                    clampSidebarWidthIfNeeded(availableWidth: window.contentView?.bounds.width ?? window.contentLayoutRect.width)
+                    let availableWidth = window.contentView?.bounds.width ?? window.contentLayoutRect.width
+                    clampSidebarWidthIfNeeded(availableWidth: availableWidth)
+                    clampRightSidebarWidthIfNeeded(availableWidth: availableWidth)
                     syncCommandPaletteDebugStateForObservedWindow()
                     installSidebarResizerPointerMonitorIfNeeded()
                     updateSidebarResizerBandState()
@@ -3582,6 +3700,7 @@ struct ContentView: View {
                 tabManager: tabManager,
                 sidebarState: sidebarState,
                 sidebarSelectionState: sidebarSelectionState,
+                fileExplorerState: fileExplorerState,
                 cmuxConfigStore: cmuxConfigStore
             )
             installFileDropOverlayWhenReady(on: window, tabManager: tabManager)
@@ -9201,7 +9320,7 @@ struct VerticalTabsSidebar: View {
     @Binding var selection: SidebarSelection
     @Binding var selectedTabIds: Set<UUID>
     @Binding var lastSidebarSelectionIndex: Int?
-    @StateObject private var modifierKeyMonitor = SidebarShortcutHintModifierMonitor()
+    @StateObject private var modifierKeyMonitor = WindowScopedShortcutHintModifierMonitor(activation: .commandOnly)
     @StateObject private var dragAutoScrollController = SidebarDragAutoScrollController()
     @StateObject private var dragFailsafeMonitor = SidebarDragFailsafeMonitor()
     @StateObject private var tabItemSettingsStore = SidebarTabItemSettingsStore()
@@ -9626,6 +9745,26 @@ enum ShortcutHintModifierPolicy {
         default:
             return false
         }
+    }
+
+    static func shouldShowControlHints(
+        for modifierFlags: NSEvent.ModifierFlags,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        let normalized = modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function, .capsLock])
+        guard normalized == [.control] else { return false }
+        return ShortcutHintDebugSettings.showHintsOnControlHoldEnabled(defaults: defaults)
+    }
+
+    static func shouldShowCommandHints(
+        for modifierFlags: NSEvent.ModifierFlags,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        let normalized = modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function, .capsLock])
+        guard normalized == [.command] else { return false }
+        return ShortcutHintDebugSettings.showHintsOnCommandHoldEnabled(defaults: defaults)
     }
 
     static func isCurrentWindow(
@@ -10332,10 +10471,32 @@ private struct SidebarExternalDropDelegate: DropDelegate {
     }
 }
 
+enum ShortcutHintModifierActivation {
+    case commandOrControl
+    case commandOnly
+    case controlOnly
+
+    func shouldShowHints(
+        for modifierFlags: NSEvent.ModifierFlags,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        switch self {
+        case .commandOrControl:
+            return ShortcutHintModifierPolicy.shouldShowHints(for: modifierFlags, defaults: defaults)
+        case .commandOnly:
+            return ShortcutHintModifierPolicy.shouldShowCommandHints(for: modifierFlags, defaults: defaults)
+        case .controlOnly:
+            return ShortcutHintModifierPolicy.shouldShowControlHints(for: modifierFlags, defaults: defaults)
+        }
+    }
+}
+
 @MainActor
-private final class SidebarShortcutHintModifierMonitor: ObservableObject {
+final class WindowScopedShortcutHintModifierMonitor: ObservableObject {
     @Published private(set) var isModifierPressed = false
 
+    private let activation: ShortcutHintModifierActivation
+    private let allowsHintsForWindow: (NSWindow) -> Bool
     private weak var hostWindow: NSWindow?
     private var hostWindowDidBecomeKeyObserver: NSObjectProtocol?
     private var hostWindowDidResignKeyObserver: NSObjectProtocol?
@@ -10343,6 +10504,14 @@ private final class SidebarShortcutHintModifierMonitor: ObservableObject {
     private var keyDownMonitor: Any?
     private var appResignObserver: NSObjectProtocol?
     private var pendingShowWorkItem: DispatchWorkItem?
+
+    init(
+        activation: ShortcutHintModifierActivation = .commandOrControl,
+        allowsHintsForWindow: @escaping (NSWindow) -> Bool = { _ in true }
+    ) {
+        self.activation = activation
+        self.allowsHintsForWindow = allowsHintsForWindow
+    }
 
     func setHostWindow(_ window: NSWindow?) {
         guard hostWindow !== window else { return }
@@ -10437,13 +10606,10 @@ private final class SidebarShortcutHintModifierMonitor: ObservableObject {
     }
 
     private func update(from modifierFlags: NSEvent.ModifierFlags, eventWindow: NSWindow?) {
-        guard ShortcutHintModifierPolicy.shouldShowHints(
-            for: modifierFlags,
-            hostWindowNumber: hostWindow?.windowNumber,
-            hostWindowIsKey: hostWindow?.isKeyWindow ?? false,
-            eventWindowNumber: eventWindow?.windowNumber,
-            keyWindowNumber: NSApp.keyWindow?.windowNumber
-        ) else {
+        guard let hostWindow,
+              isCurrentWindow(eventWindow: eventWindow),
+              allowsHintsForWindow(hostWindow),
+              activation.shouldShowHints(for: modifierFlags) else {
             cancelPendingHintShow(resetVisible: true)
             return
         }
@@ -10458,13 +10624,12 @@ private final class SidebarShortcutHintModifierMonitor: ObservableObject {
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingShowWorkItem = nil
-            guard ShortcutHintModifierPolicy.shouldShowHints(
-                for: NSEvent.modifierFlags,
-                hostWindowNumber: self.hostWindow?.windowNumber,
-                hostWindowIsKey: self.hostWindow?.isKeyWindow ?? false,
-                eventWindowNumber: nil,
-                keyWindowNumber: NSApp.keyWindow?.windowNumber
-            ) else { return }
+            guard let hostWindow = self.hostWindow,
+                  self.isCurrentWindow(eventWindow: nil),
+                  self.allowsHintsForWindow(hostWindow),
+                  self.activation.shouldShowHints(for: NSEvent.modifierFlags) else {
+                return
+            }
             self.isModifierPressed = true
         }
 
@@ -10475,7 +10640,7 @@ private final class SidebarShortcutHintModifierMonitor: ObservableObject {
     private func cancelPendingHintShow(resetVisible: Bool) {
         pendingShowWorkItem?.cancel()
         pendingShowWorkItem = nil
-        if resetVisible {
+        if resetVisible, isModifierPressed {
             isModifierPressed = false
         }
     }
@@ -12269,10 +12434,10 @@ private struct TabItemView: View, Equatable {
                                 x: ShortcutHintDebugSettings.clamped(sidebarShortcutHintXOffset),
                                 y: ShortcutHintDebugSettings.clamped(sidebarShortcutHintYOffset)
                             )
-                            .transition(.opacity)
+                            .shortcutHintTransition()
                     }
                 }
-                .animation(.easeOut(duration: 0.12), value: showsModifierShortcutHints || alwaysShowShortcutHints)
+                .shortcutHintVisibilityAnimation(value: showsWorkspaceShortcutHint)
                 .frame(width: trailingAccessoryWidth, height: 16, alignment: .trailing)
             }
 

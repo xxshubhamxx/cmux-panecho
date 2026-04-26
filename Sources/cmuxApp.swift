@@ -356,6 +356,25 @@ struct cmuxApp: App {
                     Button("Debug Window Controls…") {
                         DebugWindowControlsWindowController.shared.show()
                     }
+                    Button("Feed Preview…") {
+                        FeedPreviewWindowController.shared.show()
+                    }
+                    Button(
+                        String(
+                            localized: "debug.menu.feedTextEditorDebug",
+                            defaultValue: "Feed Text Editor Lab…"
+                        )
+                    ) {
+                        FeedTextEditorDebugWindowController.shared.show()
+                    }
+                    Button(
+                        String(
+                            localized: "debug.menu.feedButtonStyleDebug",
+                            defaultValue: "Feed Button Style Debug…"
+                        )
+                    ) {
+                        FeedButtonStyleDebugWindowController.shared.show()
+                    }
                     Button(
                         String(
                             localized: "debug.menu.startupAppearanceDebug",
@@ -522,24 +541,35 @@ struct cmuxApp: App {
             // Find
             CommandGroup(after: .textEditing) {
                 Menu(String(localized: "menu.find.title", defaultValue: "Find")) {
+                    let restoreFindTargetFocus = {
+                        _ = AppDelegate.shared?.restoreFocusedMainPanelFocusFromRightSidebar(
+                            preferredWindow: NSApp.keyWindow ?? NSApp.mainWindow
+                        )
+                    }
+
                     splitCommandButton(title: String(localized: "menu.find.find", defaultValue: "Find…"), shortcut: menuShortcut(for: .find)) {
 #if DEBUG
                         cmuxDebugLog("find.menu Cmd+F fired")
 #endif
-                        activeTabManager.startSearch()
+                        _ = AppDelegate.shared?.performFindShortcutInActiveMainWindow(
+                            preferredWindow: NSApp.keyWindow ?? NSApp.mainWindow
+                        )
                     }
 
                     splitCommandButton(title: String(localized: "menu.find.findNext", defaultValue: "Find Next"), shortcut: menuShortcut(for: .findNext)) {
+                        restoreFindTargetFocus()
                         activeTabManager.findNext()
                     }
 
                     splitCommandButton(title: String(localized: "menu.find.findPrevious", defaultValue: "Find Previous"), shortcut: menuShortcut(for: .findPrevious)) {
+                        restoreFindTargetFocus()
                         activeTabManager.findPrevious()
                     }
 
                     Divider()
 
                     splitCommandButton(title: String(localized: "menu.find.hideFindBar", defaultValue: "Hide Find Bar"), shortcut: menuShortcut(for: .hideFind)) {
+                        restoreFindTargetFocus()
                         activeTabManager.hideFind()
                     }
                     .disabled(!(activeTabManager.isFindVisible))
@@ -547,6 +577,7 @@ struct cmuxApp: App {
                     Divider()
 
                     splitCommandButton(title: String(localized: "menu.find.useSelectionForFind", defaultValue: "Use Selection for Find"), shortcut: menuShortcut(for: .useSelectionForFind)) {
+                        restoreFindTargetFocus()
                         activeTabManager.searchSelection()
                     }
                     .disabled(!(activeTabManager.canUseSelectionForFind))
@@ -558,6 +589,15 @@ struct cmuxApp: App {
                 splitCommandButton(title: String(localized: "menu.view.toggleSidebar", defaultValue: "Toggle Sidebar"), shortcut: menuShortcut(for: .toggleSidebar)) {
                     if AppDelegate.shared?.toggleSidebarInActiveMainWindow() != true {
                         sidebarState.toggle()
+                    }
+                }
+
+                splitCommandButton(title: String(localized: "menu.view.focusRightSidebar", defaultValue: "Focus Right Sidebar"), shortcut: menuShortcut(for: .focusRightSidebar)) {
+                    if AppDelegate.shared?.toggleRightSidebarKeyboardFocusInActiveMainWindow() != true {
+                        fileExplorerState.setVisible(true)
+                        _ = AppDelegate.shared?.focusRightSidebarInActiveMainWindow(
+                            preferredWindow: NSApp.keyWindow ?? NSApp.mainWindow
+                        )
                     }
                 }
 
@@ -1025,6 +1065,9 @@ struct cmuxApp: App {
         BackgroundDebugWindowController.shared.show()
         StartupAppearanceDebugWindowController.shared.show()
         MenuBarExtraDebugWindowController.shared.show()
+        FeedPreviewWindowController.shared.show()
+        FeedTextEditorDebugWindowController.shared.show()
+        FeedButtonStyleDebugWindowController.shared.show()
     }
 }
 
@@ -1684,6 +1727,14 @@ private struct DebugWindowControlsView: View {
                         Button("Menu Bar Extra Debug…") {
                             MenuBarExtraDebugWindowController.shared.show()
                         }
+                        Button(
+                            String(
+                                localized: "debug.menu.feedTextEditorDebug",
+                                defaultValue: "Feed Text Editor Lab…"
+                            )
+                        ) {
+                            FeedTextEditorDebugWindowController.shared.show()
+                        }
                         Button("Open All Debug Windows") {
                             BrowserImportHintDebugWindowController.shared.show()
                             BrowserProfilePopoverDebugWindowController.shared.show()
@@ -1692,6 +1743,7 @@ private struct DebugWindowControlsView: View {
                             BackgroundDebugWindowController.shared.show()
                             StartupAppearanceDebugWindowController.shared.show()
                             MenuBarExtraDebugWindowController.shared.show()
+                            FeedTextEditorDebugWindowController.shared.show()
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
