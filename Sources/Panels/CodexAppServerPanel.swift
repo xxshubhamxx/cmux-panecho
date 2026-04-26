@@ -31,6 +31,13 @@ enum CodexAppServerPanelStatus: Equatable {
             return false
         }
     }
+
+    var isFailed: Bool {
+        if case .failed = self {
+            return true
+        }
+        return false
+    }
 }
 
 enum CodexAppServerTranscriptRole: Equatable, Sendable {
@@ -163,11 +170,21 @@ final class CodexAppServerPanel: Panel, ObservableObject {
     private var lifecycleGeneration = 0
 
     var displayTitle: String {
-        String(localized: "codexAppServer.panel.title", defaultValue: "Codex")
+        if status.isFailed {
+            return String(localized: "codexAppServer.panel.title.failed", defaultValue: "Codex Error")
+        }
+        return String(localized: "codexAppServer.panel.title", defaultValue: "Codex")
     }
 
     var displayIcon: String? {
-        "sparkles"
+        if status.isFailed {
+            return "exclamationmark.triangle.fill"
+        }
+        return "sparkles"
+    }
+
+    var isDirty: Bool {
+        status.isFailed
     }
 
     var canSendPrompt: Bool {

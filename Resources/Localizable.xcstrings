@@ -1294,6 +1294,23 @@
         }
       }
     },
+    "codexAppServer.panel.title.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex Error"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex エラー"
+          }
+        }
+      }
+    },
     "codexAppServer.prompt.placeholder": {
       "extractionState": "manual",
       "localizations": {

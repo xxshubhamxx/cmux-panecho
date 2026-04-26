@@ -8220,15 +8220,40 @@ final class Workspace: Identifiable, ObservableObject {
     }
 
     private func installCodexAppServerPanelSubscription(_ codexPanel: CodexAppServerPanel) {
-        let subscription = codexPanel.$cwd
-            .removeDuplicates()
+        let subscription = Publishers.CombineLatest(
+            codexPanel.$cwd.removeDuplicates(),
+            codexPanel.$status.removeDuplicates()
+        )
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak codexPanel] cwd in
+            .sink { [weak self, weak codexPanel] cwd, _ in
                 guard let self, let codexPanel else { return }
                 self.updatePanelDirectory(panelId: codexPanel.id, directory: cwd)
+                self.updateCodexAppServerPanelDisplay(codexPanel)
             }
         panelSubscriptions[codexPanel.id] = subscription
         updatePanelDirectory(panelId: codexPanel.id, directory: codexPanel.cwd)
+        updateCodexAppServerPanelDisplay(codexPanel)
+    }
+
+    private func updateCodexAppServerPanelDisplay(_ codexPanel: CodexAppServerPanel) {
+        let nextTitle = codexPanel.displayTitle
+        _ = updatePanelTitle(panelId: codexPanel.id, title: nextTitle)
+
+        guard let tabId = surfaceIdFromPanelId(codexPanel.id),
+              let existing = bonsplitController.tab(tabId) else { return }
+
+        let iconUpdate: String?? = existing.icon == codexPanel.displayIcon ? nil : .some(codexPanel.displayIcon)
+        let dirtyUpdate: Bool? = existing.isDirty == codexPanel.isDirty ? nil : codexPanel.isDirty
+        let loadingUpdate: Bool? = existing.isLoading == codexPanel.status.isBusy ? nil : codexPanel.status.isBusy
+
+        guard iconUpdate != nil || dirtyUpdate != nil || loadingUpdate != nil else { return }
+        bonsplitController.updateTab(
+            tabId,
+            icon: iconUpdate,
+            hasCustomTitle: panelCustomTitles[codexPanel.id] != nil,
+            isDirty: dirtyUpdate,
+            isLoading: loadingUpdate
+        )
     }
 
     private func browserRemoteWorkspaceStatusSnapshot() -> BrowserRemoteWorkspaceStatus? {
