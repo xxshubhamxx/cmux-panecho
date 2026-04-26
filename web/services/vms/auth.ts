@@ -1,4 +1,4 @@
-import { stackServerApp } from "../../app/lib/stack";
+import { getStackServerApp, isStackConfigured } from "../../app/lib/stack";
 
 export type AuthedUser = {
   id: string;
@@ -14,6 +14,11 @@ export type AuthedUser = {
  * Returns the resolved user or null if unauthenticated.
  */
 export async function verifyRequest(request: Request): Promise<AuthedUser | null> {
+  if (!isStackConfigured()) {
+    return null;
+  }
+
+  const stackServerApp = getStackServerApp();
   const authHeader = request.headers.get("authorization");
   const refreshHeader = request.headers.get("x-stack-refresh-token");
 
