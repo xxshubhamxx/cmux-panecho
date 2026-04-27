@@ -1128,6 +1128,7 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
 
     func toggleNotificationsPopover(animated: Bool = true, externalAnchor: NSView? = nil) {
         if notificationsPopover.isShown {
+            notificationsPopover.animates = animated
             notificationsPopover.performClose(nil)
             return
         }
