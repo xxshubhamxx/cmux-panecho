@@ -1195,6 +1195,30 @@ final class FilePreviewPDFChromeTests: XCTestCase {
         XCTAssertTrue(try thumbnailItemSelectedState(currentItem))
     }
 
+    func testPDFViewportOriginUsesVisibleClipWidth() {
+        let origin = FilePreviewPDFViewport.clampedClipOrigin(
+            documentPoint: CGPoint(x: 500, y: 700),
+            anchorOffsetInClip: CGPoint(x: 200, y: 300),
+            documentBounds: CGRect(x: 0, y: 0, width: 1_000, height: 1_400),
+            clipSize: CGSize(width: 400, height: 600)
+        )
+
+        XCTAssertEqual(origin.x, 300, accuracy: 0.001)
+        XCTAssertEqual(origin.y, 400, accuracy: 0.001)
+    }
+
+    func testPDFViewportOriginCentersSmallerDocuments() {
+        let origin = FilePreviewPDFViewport.clampedClipOrigin(
+            documentPoint: CGPoint(x: 54, y: 224.5),
+            anchorOffsetInClip: CGPoint(x: 300, y: 400),
+            documentBounds: CGRect(x: 0, y: 0, width: 108, height: 449),
+            clipSize: CGSize(width: 600, height: 800)
+        )
+
+        XCTAssertEqual(origin.x, -246, accuracy: 0.001)
+        XCTAssertEqual(origin.y, -175.5, accuracy: 0.001)
+    }
+
     private func isView(_ view: NSView?, inside container: NSView) -> Bool {
         var current = view
         while let next = current {

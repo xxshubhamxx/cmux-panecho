@@ -773,6 +773,52 @@ final class FilePreviewPDFChromeHostingView: NSHostingView<AnyView> {
     }
 }
 
+enum FilePreviewPDFViewport {
+    static func normalizedAnchorRatio(_ value: CGFloat, length: CGFloat) -> CGFloat {
+        guard length > 1 else { return 0.5 }
+        return min(max(value / length, 0), 1)
+    }
+
+    static func clampedClipOrigin(
+        documentPoint: CGPoint,
+        anchorOffsetInClip: CGPoint,
+        documentBounds: CGRect,
+        clipSize: CGSize
+    ) -> CGPoint {
+        CGPoint(
+            x: clampedAxisOrigin(
+                rawOrigin: documentPoint.x - anchorOffsetInClip.x,
+                documentMin: documentBounds.minX,
+                documentLength: documentBounds.width,
+                clipLength: clipSize.width
+            ),
+            y: clampedAxisOrigin(
+                rawOrigin: documentPoint.y - anchorOffsetInClip.y,
+                documentMin: documentBounds.minY,
+                documentLength: documentBounds.height,
+                clipLength: clipSize.height
+            )
+        )
+    }
+
+    private static func clampedAxisOrigin(
+        rawOrigin: CGFloat,
+        documentMin: CGFloat,
+        documentLength: CGFloat,
+        clipLength: CGFloat
+    ) -> CGFloat {
+        guard documentLength.isFinite, clipLength.isFinite, documentLength > 0, clipLength > 0 else {
+            return documentMin
+        }
+        if documentLength <= clipLength {
+            return documentMin + ((documentLength - clipLength) * 0.5)
+        }
+        let minimumOrigin = documentMin
+        let maximumOrigin = documentMin + documentLength - clipLength
+        return min(max(rawOrigin, minimumOrigin), maximumOrigin)
+    }
+}
+
 private struct FilePreviewPDFSidebarChromeView: View {
     let isSidebarVisible: Bool
     let sidebarMode: FilePreviewPDFSidebarMode
@@ -1852,7 +1898,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         guard pdfView.document != nil else { return }
         guard factor.isFinite, factor > 0 else { return }
         pdfView.autoScales = false
-        setPDFScaleFactor(pdfView.scaleFactor * factor)
+        setPDFScaleFactor(pdfView.scaleFactor * factor, preservingVisibleCenter: true)
     }
 
     private func togglePDFSmartZoom() {
@@ -1897,33 +1943,84 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     private func setPDFScaleFactor(_ nextScale: CGFloat, preservingVisibleCenter: Bool = false) {
         let clamped = min(max(nextScale, pdfView.minScaleFactor), pdfView.maxScaleFactor)
         guard clamped.isFinite else { return }
-        let destination = preservingVisibleCenter ? visibleCenterDestination(targetScale: clamped) : nil
-        pdfView.scaleFactor = clamped
-        if let destination {
-            pdfView.layoutDocumentView()
-            pdfView.go(to: destination)
+        if preservingVisibleCenter {
+            preserveVisiblePDFCenter {
+                pdfView.scaleFactor = clamped
+            }
+        } else {
+            pdfView.scaleFactor = clamped
         }
     }
 
-    private func visibleCenterDestination(targetScale: CGFloat) -> PDFDestination? {
-        guard targetScale.isFinite, targetScale > 0 else { return nil }
-        pdfView.layoutSubtreeIfNeeded()
-        let visibleCenter = CGPoint(x: pdfView.bounds.midX, y: pdfView.bounds.midY)
-        guard let page = pdfView.page(for: visibleCenter, nearest: true) ?? pdfView.currentPage else {
-            return nil
+    private func preserveVisiblePDFCenter(_ scaleChange: () -> Void) {
+        guard let scrollView = pdfScrollView(), let documentView = scrollView.documentView else {
+            scaleChange()
+            return
         }
 
-        let pagePoint = pdfView.convert(visibleCenter, to: page)
-        let visiblePageSize = CGSize(
-            width: max(1, pdfView.bounds.width / targetScale),
-            height: max(1, pdfView.bounds.height / targetScale)
+        contentHost.layoutSubtreeIfNeeded()
+        pdfView.layoutSubtreeIfNeeded()
+        let clipView = scrollView.contentView
+        let clipBounds = clipView.bounds
+        guard clipBounds.width > 1, clipBounds.height > 1 else {
+            scaleChange()
+            return
+        }
+
+        let anchorInClip = CGPoint(x: clipBounds.midX, y: clipBounds.midY)
+        let anchorOffsetInClip = CGPoint(
+            x: anchorInClip.x - clipBounds.origin.x,
+            y: anchorInClip.y - clipBounds.origin.y
         )
-        let pageBounds = page.bounds(for: pdfView.displayBox)
-        let destinationPoint = CGPoint(
-            x: min(max(pagePoint.x - (visiblePageSize.width * 0.5), pageBounds.minX), pageBounds.maxX),
-            y: min(max(pagePoint.y + (visiblePageSize.height * 0.5), pageBounds.minY), pageBounds.maxY)
+        let oldDocumentBounds = documentView.bounds
+        let anchorInDocument = documentView.convert(anchorInClip, from: clipView)
+        let anchorRatio = CGPoint(
+            x: FilePreviewPDFViewport.normalizedAnchorRatio(
+                anchorInDocument.x - oldDocumentBounds.minX,
+                length: oldDocumentBounds.width
+            ),
+            y: FilePreviewPDFViewport.normalizedAnchorRatio(
+                anchorInDocument.y - oldDocumentBounds.minY,
+                length: oldDocumentBounds.height
+            )
         )
-        return PDFDestination(page: page, at: destinationPoint)
+
+        scaleChange()
+        pdfView.layoutDocumentView()
+        pdfView.layoutSubtreeIfNeeded()
+
+        guard let updatedScrollView = pdfScrollView(),
+              let updatedDocumentView = updatedScrollView.documentView else { return }
+        let updatedClipView = updatedScrollView.contentView
+        let updatedDocumentBounds = updatedDocumentView.bounds
+        let targetDocumentPoint = CGPoint(
+            x: updatedDocumentBounds.minX + (updatedDocumentBounds.width * anchorRatio.x),
+            y: updatedDocumentBounds.minY + (updatedDocumentBounds.height * anchorRatio.y)
+        )
+        let nextOrigin = FilePreviewPDFViewport.clampedClipOrigin(
+            documentPoint: targetDocumentPoint,
+            anchorOffsetInClip: anchorOffsetInClip,
+            documentBounds: updatedDocumentBounds,
+            clipSize: updatedClipView.bounds.size
+        )
+        updatedClipView.scroll(to: nextOrigin)
+        updatedScrollView.reflectScrolledClipView(updatedClipView)
+    }
+
+    private func pdfScrollView() -> NSScrollView? {
+        firstScrollView(in: pdfView)
+    }
+
+    private func firstScrollView(in view: NSView) -> NSScrollView? {
+        if let scrollView = view as? NSScrollView {
+            return scrollView
+        }
+        for subview in view.subviews {
+            if let scrollView = firstScrollView(in: subview) {
+                return scrollView
+            }
+        }
+        return nil
     }
 
     private func normalizedRotation(_ degrees: Int) -> Int {
