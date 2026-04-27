@@ -18,6 +18,7 @@ enum BonsplitTabBarPassThrough {
         case .leftMouseDown, .leftMouseUp,
              .rightMouseDown, .rightMouseUp,
              .otherMouseDown, .otherMouseUp,
+             .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
              .mouseMoved, .mouseEntered,
              .mouseExited, .cursorUpdate:
             return true

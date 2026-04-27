@@ -559,9 +559,13 @@ struct HiddenTitlebarSidebarControlsView: View {
     let onNewTab: () -> Void
     @StateObject private var viewModel = TitlebarControlsViewModel()
     @State private var isHoveringHost = false
+    @State private var isNotificationsPopoverShown = false
 
     private let hostWidth: CGFloat = 124
     private let hostHeight: CGFloat = 28
+    private var shouldPinControls: Bool {
+        isHoveringHost || isNotificationsPopoverShown
+    }
 
     var body: some View {
         TitlebarControlsView(
@@ -572,7 +576,7 @@ struct HiddenTitlebarSidebarControlsView: View {
                 onToggleNotifications(viewModel.notificationsAnchorView)
             },
             onNewTab: onNewTab,
-            visibilityMode: isHoveringHost ? .alwaysVisible : .onHover
+            visibilityMode: shouldPinControls ? .alwaysVisible : .onHover
         )
         .frame(width: hostWidth, height: hostHeight, alignment: .leading)
         .background(
@@ -580,8 +584,15 @@ struct HiddenTitlebarSidebarControlsView: View {
                 isHoveringHost = isHovering
             }
         )
+        .onAppear {
+            isNotificationsPopoverShown = AppDelegate.shared?.isNotificationsPopoverShown() ?? false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cmuxNotificationsPopoverVisibilityDidChange)) { notification in
+            isNotificationsPopoverShown = (notification.userInfo?[NotificationsPopoverVisibilityUserInfoKey.isShown] as? Bool) ?? false
+        }
         .onDisappear {
             isHoveringHost = false
+            isNotificationsPopoverShown = false
         }
     }
 }
@@ -656,7 +667,7 @@ private struct PassthroughHoverTrackingView: NSViewRepresentable {
         private func installLocalMouseMonitorIfNeeded() {
             guard localMouseMonitor == nil else { return }
             localMouseMonitor = NSEvent.addLocalMonitorForEvents(
-                matching: [.mouseMoved, .leftMouseDown, .leftMouseDragged]
+                matching: [.mouseMoved, .mouseEntered, .mouseExited, .leftMouseDown, .leftMouseDragged]
             ) { [weak self] event in
                 self?.updateHover(from: event)
                 return event
@@ -671,12 +682,17 @@ private struct PassthroughHoverTrackingView: NSViewRepresentable {
         }
 
         private func updateHover(from event: NSEvent) {
-            guard let window, event.window === window else {
+            updateHoverFromCurrentMouseLocation()
+        }
+
+        private func updateHoverFromCurrentMouseLocation() {
+            guard let window else {
                 emitHoverChanged(false)
                 return
             }
-            let point = convert(event.locationInWindow, from: nil)
-            emitHoverChanged(bounds.contains(point))
+            let rectInWindow = convert(bounds, to: nil)
+            let rectInScreen = window.convertToScreen(rectInWindow)
+            emitHoverChanged(rectInScreen.contains(NSEvent.mouseLocation))
         }
 
         private func emitHoverChanged(_ newValue: Bool) {
