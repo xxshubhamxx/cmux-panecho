@@ -36,11 +36,14 @@ enum BonsplitTabBarPassThrough {
         in portalHost: NSView,
         eventType: NSEvent.EventType?
     ) -> (windowPoint: NSPoint, result: Bool, registryHit: Bool)? {
-        guard isPassThroughPointerEvent(eventType) else { return nil }
         let windowPoint = portalHost.convert(point, to: nil)
         let registryHit = portalHost.window.map {
             BonsplitTabBarHitRegionRegistry.containsWindowPoint(windowPoint, in: $0)
         } ?? false
+        if eventType == nil {
+            return registryHit ? (windowPoint, true, true) : nil
+        }
+        guard isPassThroughPointerEvent(eventType) else { return nil }
         if registryHit {
             return (windowPoint, true, true)
         }

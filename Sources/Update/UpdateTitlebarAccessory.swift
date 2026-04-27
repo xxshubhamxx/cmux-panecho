@@ -625,13 +625,22 @@ private struct PassthroughHoverTrackingView: NSViewRepresentable {
             removeLocalMouseMonitor()
         }
 
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard bounds.contains(point) else { return nil }
+            switch NSApp.currentEvent?.type {
+            case .mouseMoved, .mouseEntered, .mouseExited, .cursorUpdate:
+                return self
+            default:
+                return nil
+            }
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             if let window {
                 window.acceptsMouseMovedEvents = true
                 installLocalMouseMonitorIfNeeded()
+                updateHoverFromCurrentMouseLocation()
             } else {
                 removeLocalMouseMonitor()
                 emitHoverChanged(false)
@@ -653,11 +662,11 @@ private struct PassthroughHoverTrackingView: NSViewRepresentable {
         }
 
         override func mouseEntered(with event: NSEvent) {
-            emitHoverChanged(true)
+            updateHover(from: event)
         }
 
         override func mouseExited(with event: NSEvent) {
-            emitHoverChanged(false)
+            updateHover(from: event)
         }
 
         override func mouseMoved(with event: NSEvent) {
