@@ -1,11 +1,11 @@
-import { and, desc, eq, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { cloudDb } from "../../db/client";
 import { cloudVmLeases, cloudVms, cloudVmUsageEvents } from "../../db/schema";
 import type { ProviderId } from "./drivers";
-import { VmDatabaseError } from "./errors";
+import { VmDatabaseError, VmLimitExceededError, isVmLimitExceededError } from "./errors";
 
 export type CloudVmRow = typeof cloudVms.$inferSelect;
 export type CloudVmLeaseRow = typeof cloudVmLeases.$inferSelect;
@@ -19,10 +19,13 @@ export type VmRepositoryShape = {
   readonly listUserVms: (userId: string) => Effect.Effect<CloudVmRow[], VmDatabaseError>;
   readonly beginCreate: (input: {
     readonly userId: string;
+    readonly billingTeamId: string;
+    readonly billingPlanId: string;
     readonly provider: ProviderId;
     readonly image: string;
+    readonly maxActiveVms: number;
     readonly idempotencyKey?: string;
-  }) => Effect.Effect<BeginCreateResult, VmDatabaseError>;
+  }) => Effect.Effect<BeginCreateResult, VmDatabaseError | VmLimitExceededError>;
   readonly markCreateRunning: (input: {
     readonly id: string;
     readonly providerVmId: string;
@@ -53,6 +56,8 @@ export type VmRepositoryShape = {
   readonly markLeasesRevoked: (ids: readonly string[]) => Effect.Effect<void, VmDatabaseError>;
   readonly recordUsageEvent: (input: {
     readonly userId: string;
+    readonly billingTeamId?: string | null;
+    readonly billingPlanId?: string | null;
     readonly vmId?: string | null;
     readonly eventType: string;
     readonly provider?: ProviderId;
@@ -108,34 +113,69 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
     }),
 
   beginCreate: (input) =>
-    dbEffect("beginCreate", async () => {
-      const idempotencyKey = input.idempotencyKey?.trim() || undefined;
-      if (idempotencyKey) {
-        const existing = await findByIdempotencyKey(input.userId, idempotencyKey);
-        if (existing) return { inserted: false, vm: existing };
-      }
+    Effect.tryPromise({
+      try: async () => {
+        const idempotencyKey = input.idempotencyKey?.trim() || undefined;
+        const db = cloudDb();
+        try {
+          return await db.transaction(async (tx) => {
+            if (idempotencyKey) {
+              const [existing] = await tx
+                .select()
+                .from(cloudVms)
+                .where(and(eq(cloudVms.userId, input.userId), eq(cloudVms.idempotencyKey, idempotencyKey)))
+                .limit(1);
+              if (existing) return { inserted: false as const, vm: existing };
+            }
 
-      const db = cloudDb();
-      try {
-        const [vm] = await db
-          .insert(cloudVms)
-          .values({
-            userId: input.userId,
-            provider: input.provider,
-            imageId: input.image,
-            status: "provisioning",
-            idempotencyKey,
-          })
-          .returning();
-        if (!vm) throw new Error("insert returned no VM row");
-        return { inserted: true, vm };
-      } catch (err) {
-        if (idempotencyKey && pgErrorCode(err) === "23505") {
-          const existing = await findByIdempotencyKey(input.userId, idempotencyKey);
-          if (existing) return { inserted: false, vm: existing };
+            await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${input.billingTeamId}, 0))`);
+            const [active] = await tx
+              .select({ total: count() })
+              .from(cloudVms)
+              .where(
+                and(
+                  inArray(cloudVms.status, ["provisioning", "running", "paused"]),
+                  or(
+                    eq(cloudVms.billingTeamId, input.billingTeamId),
+                    and(isNull(cloudVms.billingTeamId), eq(cloudVms.userId, input.userId)),
+                  ),
+                ),
+              );
+            const activeCount = Number(active?.total ?? 0);
+            if (activeCount >= input.maxActiveVms) {
+              throw new VmLimitExceededError({
+                kind: "active_vms",
+                billingTeamId: input.billingTeamId,
+                limit: input.maxActiveVms,
+              });
+            }
+
+            const [vm] = await tx
+              .insert(cloudVms)
+              .values({
+                userId: input.userId,
+                billingTeamId: input.billingTeamId,
+                billingPlanId: input.billingPlanId,
+                provider: input.provider,
+                imageId: input.image,
+                status: "provisioning",
+                idempotencyKey,
+              })
+              .returning();
+            if (!vm) throw new Error("insert returned no VM row");
+            return { inserted: true as const, vm };
+          });
+        } catch (err) {
+          if (idempotencyKey && pgErrorCode(err) === "23505") {
+            const existing = await findByIdempotencyKey(input.userId, idempotencyKey);
+            if (existing) return { inserted: false as const, vm: existing };
+          }
+          throw err;
         }
-        throw err;
-      }
+      },
+      catch: (cause) => isVmLimitExceededError(cause)
+        ? cause
+        : new VmDatabaseError({ operation: "beginCreate", cause }),
     }),
 
   markCreateRunning: (input) =>
@@ -280,6 +320,8 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
       const db = cloudDb();
       await db.insert(cloudVmUsageEvents).values({
         userId: input.userId,
+        billingTeamId: input.billingTeamId ?? null,
+        billingPlanId: input.billingPlanId ?? null,
         vmId: input.vmId ?? null,
         eventType: input.eventType,
         provider: input.provider,

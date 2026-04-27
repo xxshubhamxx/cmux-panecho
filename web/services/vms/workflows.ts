@@ -48,6 +48,9 @@ export function listUserVms(userId: string) {
 
 export function createVm(input: {
   readonly userId: string;
+  readonly billingTeamId: string;
+  readonly billingPlanId: string;
+  readonly maxActiveVms: number;
   readonly provider: ProviderId;
   readonly image: string;
   readonly idempotencyKey?: string;
@@ -75,13 +78,36 @@ export function createVm(input: {
       return vmEntryFromRow(existing);
     }
 
+    yield* repo.recordUsageEvent({
+      userId: input.userId,
+      billingTeamId: input.billingTeamId,
+      billingPlanId: input.billingPlanId,
+      vmId: create.vm.id,
+      eventType: "vm.create.requested",
+      provider: input.provider,
+      imageId: input.image,
+      metadata: { idempotencyKeySet: !!input.idempotencyKey },
+    }).pipe(Effect.catchAll(() => Effect.void));
+
     const handle = yield* providers.create(input.provider, { image: input.image }).pipe(
       Effect.tapError((err) =>
-        repo.markCreateFailed({
-          id: create.vm.id,
-          code: err.operation,
-          message: errorMessage(err.cause),
-        }).pipe(Effect.catchAll(() => Effect.void))
+        Effect.all([
+          repo.markCreateFailed({
+            id: create.vm.id,
+            code: err.operation,
+            message: errorMessage(err.cause),
+          }),
+          repo.recordUsageEvent({
+            userId: input.userId,
+            billingTeamId: input.billingTeamId,
+            billingPlanId: input.billingPlanId,
+            vmId: create.vm.id,
+            eventType: "vm.create.failed",
+            provider: input.provider,
+            imageId: input.image,
+            metadata: { operation: err.operation, message: errorMessage(err.cause) },
+          }),
+        ], { discard: true }).pipe(Effect.catchAll(() => Effect.void))
       ),
     );
 
@@ -107,6 +133,8 @@ export function createVm(input: {
 
     yield* repo.recordUsageEvent({
       userId: input.userId,
+      billingTeamId: running.billingTeamId,
+      billingPlanId: running.billingPlanId,
       vmId: running.id,
       eventType: "vm.created",
       provider: running.provider,
@@ -134,6 +162,8 @@ export function destroyVm(input: { readonly userId: string; readonly providerVmI
     yield* repo.markDestroyed(vm.id);
     yield* repo.recordUsageEvent({
       userId: input.userId,
+      billingTeamId: vm.billingTeamId,
+      billingPlanId: vm.billingPlanId,
       vmId: vm.id,
       eventType: "vm.destroyed",
       provider: vm.provider,
@@ -157,6 +187,8 @@ export function execVm(input: {
     });
     yield* repo.recordUsageEvent({
       userId: input.userId,
+      billingTeamId: vm.billingTeamId,
+      billingPlanId: vm.billingPlanId,
       vmId: vm.id,
       eventType: "vm.exec",
       provider: vm.provider,
@@ -187,6 +219,8 @@ export function openAttachEndpoint(input: {
     );
     yield* repo.recordUsageEvent({
       userId: input.userId,
+      billingTeamId: vm.billingTeamId,
+      billingPlanId: vm.billingPlanId,
       vmId: vm.id,
       eventType: "vm.attach",
       provider: vm.provider,
@@ -220,6 +254,8 @@ export function openSshEndpoint(input: {
     );
     yield* repo.recordUsageEvent({
       userId: input.userId,
+      billingTeamId: vm.billingTeamId,
+      billingPlanId: vm.billingPlanId,
       vmId: vm.id,
       eventType: "vm.ssh_endpoint",
       provider: vm.provider,

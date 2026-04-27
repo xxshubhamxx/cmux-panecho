@@ -25,12 +25,19 @@ export class VmCreateFailedError extends Data.TaggedError("VmCreateFailedError")
   readonly message: string;
 }> {}
 
+export class VmLimitExceededError extends Data.TaggedError("VmLimitExceededError")<{
+  readonly kind: "active_vms";
+  readonly billingTeamId: string;
+  readonly limit: number;
+}> {}
+
 export type VmWorkflowError =
   | VmDatabaseError
   | VmProviderOperationError
   | VmNotFoundError
   | VmCreateInProgressError
-  | VmCreateFailedError;
+  | VmCreateFailedError
+  | VmLimitExceededError;
 
 export function isVmNotFoundError(err: unknown): err is VmNotFoundError {
   return (err as { _tag?: string } | null)?._tag === "VmNotFoundError";
@@ -42,4 +49,8 @@ export function isVmCreateInProgressError(err: unknown): err is VmCreateInProgre
 
 export function isVmCreateFailedError(err: unknown): err is VmCreateFailedError {
   return (err as { _tag?: string } | null)?._tag === "VmCreateFailedError";
+}
+
+export function isVmLimitExceededError(err: unknown): err is VmLimitExceededError {
+  return (err as { _tag?: string } | null)?._tag === "VmLimitExceededError";
 }

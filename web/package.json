@@ -48,6 +48,7 @@
     "react-dom": "19.2.3",
     "react-tweet": "^3.3.0",
     "react-wrap-balancer": "^1.1.1",
+    "redis": "^5.12.1",
     "resend": "^6.9.3",
     "shiki": "^3.22.0",
     "ws": "^8.20.0",

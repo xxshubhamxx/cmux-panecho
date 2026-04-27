@@ -20,6 +20,12 @@ cmux_existing_db_password_set="${CMUX_DB_PASSWORD+x}"
 cmux_existing_db_password="${CMUX_DB_PASSWORD-}"
 cmux_existing_db_name_set="${CMUX_DB_NAME+x}"
 cmux_existing_db_name="${CMUX_DB_NAME-}"
+cmux_existing_redis_port_offset_set="${CMUX_REDIS_PORT_OFFSET+x}"
+cmux_existing_redis_port_offset="${CMUX_REDIS_PORT_OFFSET-}"
+cmux_existing_redis_port_set="${CMUX_REDIS_PORT+x}"
+cmux_existing_redis_port="${CMUX_REDIS_PORT-}"
+cmux_existing_redis_url_set="${REDIS_URL+x}"
+cmux_existing_redis_url="${REDIS_URL-}"
 
 cmux_extra_secret_file="${CMUXTERM_EXTRA_ENV_FILE:-${CMUX_WEB_EXTRA_ENV_FILE:-}}"
 if [[ -z "$cmux_extra_secret_file" && -f "$HOME/.secrets/cmux.env" ]]; then
@@ -67,6 +73,9 @@ if [[ -n "$cmux_existing_db_port_set" ]]; then export CMUX_DB_PORT="$cmux_existi
 if [[ -n "$cmux_existing_db_user_set" ]]; then export CMUX_DB_USER="$cmux_existing_db_user"; fi
 if [[ -n "$cmux_existing_db_password_set" ]]; then export CMUX_DB_PASSWORD="$cmux_existing_db_password"; fi
 if [[ -n "$cmux_existing_db_name_set" ]]; then export CMUX_DB_NAME="$cmux_existing_db_name"; fi
+if [[ -n "$cmux_existing_redis_port_offset_set" ]]; then export CMUX_REDIS_PORT_OFFSET="$cmux_existing_redis_port_offset"; fi
+if [[ -n "$cmux_existing_redis_port_set" ]]; then export CMUX_REDIS_PORT="$cmux_existing_redis_port"; fi
+if [[ -n "$cmux_existing_redis_url_set" ]]; then export REDIS_URL="$cmux_existing_redis_url"; fi
 
 cmux_port="${CMUX_PORT:-${PORT:-3777}}"
 if [[ ! "$cmux_port" =~ ^[0-9]+$ ]]; then
@@ -87,6 +96,14 @@ export CMUX_DB_PASSWORD="${CMUX_DB_PASSWORD:-cmux}"
 export CMUX_DB_NAME="${CMUX_DB_NAME:-cmux}"
 export CMUX_DB_PORT="${CMUX_DB_PORT:-$((cmux_port + cmux_db_offset))}"
 
+cmux_redis_offset="${CMUX_REDIS_PORT_OFFSET:-20000}"
+if [[ ! "$cmux_redis_offset" =~ ^[0-9]+$ ]]; then
+  echo "CMUX_REDIS_PORT_OFFSET must be numeric, got: $cmux_redis_offset" >&2
+  return 2 2>/dev/null || exit 2
+fi
+export CMUX_REDIS_PORT_OFFSET="$cmux_redis_offset"
+export CMUX_REDIS_PORT="${CMUX_REDIS_PORT:-$((cmux_port + cmux_redis_offset))}"
+
 if [[ "${CMUX_DEV_USE_EXTERNAL_DATABASE_URL:-0}" != "1" ]]; then
   export DATABASE_URL="postgres://${CMUX_DB_USER}:${CMUX_DB_PASSWORD}@localhost:${CMUX_DB_PORT}/${CMUX_DB_NAME}"
   export DIRECT_DATABASE_URL="$DATABASE_URL"
@@ -94,9 +111,19 @@ elif [[ -z "${DIRECT_DATABASE_URL:-}" && -n "${DATABASE_URL:-}" ]]; then
   export DIRECT_DATABASE_URL="$DATABASE_URL"
 fi
 
+if [[ "${CMUX_DEV_USE_EXTERNAL_REDIS_URL:-0}" != "1" ]]; then
+  export REDIS_URL="redis://localhost:${CMUX_REDIS_PORT}"
+fi
+
 if [[ "${CMUX_DEV_USE_EXTERNAL_VM_API_BASE_URL:-0}" != "1" ]]; then
   export CMUX_VM_API_BASE_URL="http://localhost:${CMUX_PORT}"
 fi
+
+# Local dev should not require a checked-in or per-worktree .env.local just to pass
+# startup validation for routes the developer is not exercising.
+export RESEND_API_KEY="${RESEND_API_KEY:-cmux-local-dev}"
+export CMUX_FEEDBACK_FROM_EMAIL="${CMUX_FEEDBACK_FROM_EMAIL:-dev@example.invalid}"
+export CMUX_FEEDBACK_RATE_LIMIT_ID="${CMUX_FEEDBACK_RATE_LIMIT_ID:-cmux-feedback-local}"
 
 export CMUX_WEB_SECRET_ENV_FILE="$cmux_secret_file"
 export CMUX_WEB_EXTRA_SECRET_ENV_FILE="$cmux_extra_secret_file"

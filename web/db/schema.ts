@@ -27,6 +27,8 @@ export const cloudVms = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     userId: text("user_id").notNull(),
+    billingTeamId: text("billing_team_id"),
+    billingPlanId: text("billing_plan_id"),
     provider: vmProvider("provider").notNull(),
     providerVmId: text("provider_vm_id"),
     imageId: text("image_id").notNull(),
@@ -41,6 +43,7 @@ export const cloudVms = pgTable(
   },
   (table) => [
     index("cloud_vms_user_status_idx").on(table.userId, table.status),
+    index("cloud_vms_billing_team_status_idx").on(table.billingTeamId, table.status),
     uniqueIndex("cloud_vms_user_idempotency_key_unique")
       .on(table.userId, table.idempotencyKey)
       .where(sql`${table.idempotencyKey} is not null`),
@@ -82,6 +85,8 @@ export const cloudVmUsageEvents = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     userId: text("user_id").notNull(),
+    billingTeamId: text("billing_team_id"),
+    billingPlanId: text("billing_plan_id"),
     vmId: uuid("vm_id").references(() => cloudVms.id, { onDelete: "set null" }),
     eventType: text("event_type").notNull(),
     provider: vmProvider("provider"),
@@ -91,6 +96,7 @@ export const cloudVmUsageEvents = pgTable(
   },
   (table) => [
     index("cloud_vm_usage_events_user_created_idx").on(table.userId, table.createdAt),
+    index("cloud_vm_usage_events_billing_team_created_idx").on(table.billingTeamId, table.createdAt),
     index("cloud_vm_usage_events_vm_created_idx").on(table.vmId, table.createdAt),
     index("cloud_vm_usage_events_type_created_idx").on(table.eventType, table.createdAt),
   ],

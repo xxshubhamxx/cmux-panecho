@@ -42,13 +42,13 @@ owns_dev_lock() {
   [[ -n "$dev_lock_file" && -f "$dev_lock_file" && "$(cat "$dev_lock_file" 2>/dev/null)" == "$$" ]]
 }
 
-stop_local_db() {
+stop_local_services() {
   if ! owns_dev_lock; then
-    echo "cmux web dev: skipped Postgres stop because another dev process owns CMUX_PORT=$CMUX_PORT"
+    echo "cmux web dev: skipped local service stop because another dev process owns CMUX_PORT=$CMUX_PORT"
     return
   fi
   bash "$ROOT_DIR/scripts/db-local.sh" down >/dev/null 2>&1 || true
-  echo "cmux web dev: stopped local Postgres for CMUX_PORT=$CMUX_PORT"
+  echo "cmux web dev: stopped local Postgres/Redis for CMUX_PORT=$CMUX_PORT"
 }
 
 start_cleanup_watcher() {
@@ -79,7 +79,7 @@ start_db_watchdog() {
     trap '' INT HUP
     while kill -0 "$parent_pid" >/dev/null 2>&1; do
       if owns_dev_lock && ! bash "$ROOT_DIR/scripts/db-local.sh" ready >/dev/null 2>&1; then
-        echo "cmux web dev: local Postgres unavailable; restarting for CMUX_PORT=$CMUX_PORT"
+        echo "cmux web dev: local Postgres/Redis unavailable; restarting for CMUX_PORT=$CMUX_PORT"
         if bash "$ROOT_DIR/scripts/db-local.sh" up >/dev/null 2>&1; then
           bunx drizzle-kit migrate --config "$ROOT_DIR/drizzle.config.ts" >/dev/null
         fi
@@ -109,7 +109,7 @@ cleanup() {
       kill "$cleanup_watcher_pid" >/dev/null 2>&1 || true
       wait "$cleanup_watcher_pid" >/dev/null 2>&1 || true
     fi
-    stop_local_db
+    stop_local_services
   fi
 
   if owns_dev_lock; then
@@ -138,6 +138,7 @@ cmux web dev
   CMUX_PORT=$CMUX_PORT
   CMUX_VM_API_BASE_URL=$CMUX_VM_API_BASE_URL
   DATABASE_URL=$redacted_database_url
+  REDIS_URL=redis://localhost:${CMUX_REDIS_PORT}
   CMUX_WEB_SECRET_ENV_FILE=$CMUX_WEB_SECRET_ENV_FILE
   CMUX_WEB_EXTRA_SECRET_ENV_FILE=${CMUX_WEB_EXTRA_SECRET_ENV_FILE:-}
 EOF

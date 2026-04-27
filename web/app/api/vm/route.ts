@@ -10,8 +10,12 @@ import {
 import {
   isVmCreateFailedError,
   isVmCreateInProgressError,
+  isVmLimitExceededError,
 } from "../../../services/vms/errors";
+import { vmCreateRateLimitPolicies } from "../../../services/rateLimit";
+import { resolveVmEntitlements } from "../../../services/vms/entitlements";
 import {
+  enforceVmRateLimit,
   jsonResponse,
   withAuthedVmApiRoute,
 } from "../../../services/vms/routeHelpers";
@@ -113,15 +117,40 @@ export async function POST(request: Request): Promise<Response> {
         "cmux.idempotency_key_set": !!idempotencyKey,
       });
 
+      const createRateLimitFailure = await enforceVmRateLimit(user, vmCreateRateLimitPolicies(), span);
+      if (createRateLimitFailure) return createRateLimitFailure;
+
+      const entitlements = resolveVmEntitlements(user);
+      setSpanAttributes(span, {
+        "cmux.billing.team_id_set": !!entitlements.billingTeamId,
+        "cmux.billing.plan_id": entitlements.planId,
+        "cmux.vm.max_active": entitlements.maxActiveVms,
+      });
+
       let created;
       try {
-        created = await runVmWorkflow(createVm({ userId: user.id, image, provider, idempotencyKey }));
+        created = await runVmWorkflow(createVm({
+          userId: user.id,
+          billingTeamId: entitlements.billingTeamId,
+          billingPlanId: entitlements.planId,
+          maxActiveVms: entitlements.maxActiveVms,
+          image,
+          provider,
+          idempotencyKey,
+        }));
       } catch (err) {
         if (isVmCreateInProgressError(err)) {
           return jsonResponse({ error: "vm create already in progress" }, 409);
         }
         if (isVmCreateFailedError(err)) {
           return jsonResponse({ error: err.message }, 500);
+        }
+        if (isVmLimitExceededError(err)) {
+          return jsonResponse({
+            error: "vm_active_limit_exceeded",
+            limit: err.limit,
+            billingTeamId: err.billingTeamId,
+          }, 402);
         }
         throw err;
       }

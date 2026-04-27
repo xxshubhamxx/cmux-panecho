@@ -5,6 +5,7 @@ import postgres, { type Sql } from "postgres";
 import { closeCloudDbForTests } from "../db/client";
 import { VmProviderGateway, type VmProviderGatewayShape } from "../services/vms/providerGateway";
 import { VmRepositoryLive } from "../services/vms/repository";
+import { VmLimitExceededError, VmNotFoundError } from "../services/vms/errors";
 import {
   createVm,
   openAttachEndpoint,
@@ -65,6 +66,9 @@ describe("VM Effect workflows", () => {
 
     const program = createVm({
       userId: "user-workflow-idem",
+      billingTeamId: "team-workflow-idem",
+      billingPlanId: "free",
+      maxActiveVms: 1,
       provider: "e2b",
       image: "cmuxd-ws:test",
       idempotencyKey: "idem-1",
@@ -148,6 +152,95 @@ describe("VM Effect workflows", () => {
     expect(leases[0]).toMatchObject({ providerIdentityHandle: "identity-1" });
     expect(leases[0]?.revokedAt).toBeInstanceOf(Date);
     expect(leases[1]).toMatchObject({ providerIdentityHandle: "identity-2", revokedAt: null });
+  });
+
+  dbTest("enforces active VM limits per billing team before provider create", async () => {
+    if (!sql) throw new Error("test database not initialized");
+    await sql`truncate cloud_vm_usage_events, cloud_vm_leases, cloud_vms restart identity cascade`;
+    await sql`
+      insert into cloud_vms (user_id, billing_team_id, billing_plan_id, provider, provider_vm_id, image_id, status)
+      values ('user-workflow-limit-owner', 'team-workflow-limit', 'free', 'e2b', 'provider-vm-limit-1', 'cmuxd-ws:test', 'running')
+    `;
+
+    let createCalls = 0;
+    const provider: VmProviderGatewayShape = {
+      create: () =>
+        Effect.sync(() => {
+          createCalls += 1;
+          return {
+            provider: "e2b" as const,
+            providerVmId: "provider-vm-limit-2",
+            status: "running" as const,
+            image: "cmuxd-ws:test",
+            createdAt: Date.now(),
+          };
+        }),
+      destroy: () => Effect.void,
+      exec: () => Effect.succeed({ exitCode: 0, stdout: "", stderr: "" }),
+      openAttach: () => Effect.fail(new Error("unused") as never),
+      openSSH: () => Effect.fail(new Error("unused") as never),
+      revokeSSHIdentity: () => Effect.void,
+    };
+
+    const error = await Effect.runPromise(
+      createVm({
+        userId: "user-workflow-limit-new",
+        billingTeamId: "team-workflow-limit",
+        billingPlanId: "free",
+        maxActiveVms: 1,
+        provider: "e2b",
+        image: "cmuxd-ws:test",
+        idempotencyKey: "limit-new-1",
+      }).pipe(
+        Effect.flip,
+        Effect.provide(providerLayer(provider)),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(VmLimitExceededError);
+    expect(createCalls).toBe(0);
+  });
+
+  dbTest("does not attach another user's VM", async () => {
+    if (!sql) throw new Error("test database not initialized");
+    await sql`truncate cloud_vm_usage_events, cloud_vm_leases, cloud_vms restart identity cascade`;
+    await sql`
+      insert into cloud_vms (user_id, billing_team_id, billing_plan_id, provider, provider_vm_id, image_id, status)
+      values ('user-workflow-owner', 'team-workflow-owner', 'free', 'freestyle', 'provider-vm-private-1', 'snapshot-test', 'running')
+    `;
+
+    let attachCalls = 0;
+    const provider: VmProviderGatewayShape = {
+      create: () => Effect.fail(new Error("unused") as never),
+      destroy: () => Effect.void,
+      exec: () => Effect.succeed({ exitCode: 0, stdout: "", stderr: "" }),
+      openAttach: () =>
+        Effect.sync(() => {
+          attachCalls += 1;
+          return {
+            transport: "websocket" as const,
+            url: "wss://example.invalid/pty",
+            headers: {},
+            token: "pty-token",
+            sessionId: "pty-session",
+            expiresAtUnix: Math.floor(Date.now() / 1000) + 300,
+          };
+        }),
+      openSSH: () => Effect.fail(new Error("unused") as never),
+      revokeSSHIdentity: () => Effect.void,
+    };
+
+    const error = await Effect.runPromise(
+      openAttachEndpoint({
+        userId: "user-workflow-attacker",
+        providerVmId: "provider-vm-private-1",
+      }).pipe(
+        Effect.flip,
+        Effect.provide(providerLayer(provider)),
+      ),
+    );
+    expect(error).toBeInstanceOf(VmNotFoundError);
+    expect(attachCalls).toBe(0);
   });
 
   dbTest("records repeated attach RPC leases idempotently when provider returns a stable daemon token", async () => {

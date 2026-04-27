@@ -149,7 +149,10 @@ Production and staging Cloud VM Postgres should use the Vercel Marketplace AWS A
 OIDC/RDS IAM path. Runtime env names are `CMUX_DB_DRIVER=aws-rds-iam`, `AWS_ROLE_ARN`,
 `AWS_REGION`, `PGHOST`, `PGPORT`, `PGUSER`, and `PGDATABASE`. Run production/staging migrations
 with `bun db:migrate:aws-rds-iam`; never run Drizzle migrations from Vercel build or route startup.
-Local development keeps using the `CMUX_PORT`-derived Docker Postgres path from `bun dev`.
+Local development keeps using the `CMUX_PORT`-derived Docker Postgres and Redis path from `bun dev`.
+Redis backs Cloud VM rate limits locally; production/staging should use Upstash Redis REST env vars
+(`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`) or the Vercel Marketplace names
+(`KV_REST_API_URL`, `KV_REST_API_TOKEN`). A normal Redis URL in `REDIS_URL` also works.
 
 ## Debug event log
 

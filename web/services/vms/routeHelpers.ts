@@ -1,5 +1,15 @@
 import type { Span } from "@opentelemetry/api";
 import { recordSpanError, withApiRouteSpan, type MaybeAttributes } from "../telemetry";
+import {
+  enforceRateLimits,
+  isRateLimitExceededError,
+  isRateLimitStoreError,
+  rateLimitResponse,
+  rateLimitUnavailableResponse,
+  runRateLimit,
+  type RateLimitPolicy,
+  vmControlRateLimitPolicies,
+} from "../rateLimit";
 import { unauthorized, verifyRequest, type AuthedUser } from "./auth";
 
 /** Bearer + refresh token pair the mac app stashes in keychain. */
@@ -35,6 +45,8 @@ export async function withAuthedVmApiRoute(
       try {
         const user = await verifyRequest(request);
         if (!user) return unauthorized();
+        const rateLimitFailure = await enforceVmRateLimit(user, vmControlRateLimitPolicies(), span);
+        if (rateLimitFailure) return rateLimitFailure;
         return await handler({ user, span });
       } catch (err) {
         recordSpanError(span, err);
@@ -43,6 +55,25 @@ export async function withAuthedVmApiRoute(
       }
     },
   );
+}
+
+export async function enforceVmRateLimit(
+  user: AuthedUser,
+  policies: readonly RateLimitPolicy[],
+  span?: Span,
+): Promise<Response | null> {
+  try {
+    const decisions = await runRateLimit(enforceRateLimits({ identity: user.id, policies }));
+    for (const decision of decisions) {
+      span?.setAttribute(`cmux.rate_limit.${decision.scope}.remaining`, decision.remaining);
+      span?.setAttribute(`cmux.rate_limit.${decision.scope}.reset_unix`, Math.ceil(decision.resetAt.getTime() / 1000));
+    }
+    return null;
+  } catch (err) {
+    if (isRateLimitExceededError(err)) return rateLimitResponse(err);
+    if (isRateLimitStoreError(err)) return rateLimitUnavailableResponse();
+    throw err;
+  }
 }
 
 /**
