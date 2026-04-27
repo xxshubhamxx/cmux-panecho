@@ -7755,7 +7755,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }) {
                 let screenFrame = mainWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
                 if let screenFrame {
-                    let targetSize = NSSize(width: min(960, screenFrame.width - 80), height: min(720, screenFrame.height - 80))
+                    let targetSize: NSSize
+                    if let rawSize = env["CMUX_UI_TEST_BONSPLIT_WINDOW_SIZE"] {
+                        let parts = rawSize
+                            .split(separator: "x", maxSplits: 1)
+                            .compactMap { Double(String($0).trimmingCharacters(in: .whitespacesAndNewlines)) }
+                        if parts.count == 2 {
+                            targetSize = NSSize(
+                                width: min(max(320, parts[0]), screenFrame.width - 80),
+                                height: min(max(240, parts[1]), screenFrame.height - 80)
+                            )
+                        } else {
+                            targetSize = NSSize(width: min(960, screenFrame.width - 80), height: min(720, screenFrame.height - 80))
+                        }
+                    } else {
+                        targetSize = NSSize(width: min(960, screenFrame.width - 80), height: min(720, screenFrame.height - 80))
+                    }
                     let targetOrigin = NSPoint(
                         x: screenFrame.minX + 40,
                         y: screenFrame.maxY - 40 - targetSize.height

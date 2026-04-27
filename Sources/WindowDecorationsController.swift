@@ -4,12 +4,24 @@ final class WindowDecorationsController {
     private var observers: [NSObjectProtocol] = []
     private var didStart = false
     private var trafficLightBaseFrames: [ObjectIdentifier: [NSWindow.ButtonType: NSRect]] = [:]
+    private var minimalModeTitlebarDoubleClickMonitor: Any?
+
+    deinit {
+        let center = NotificationCenter.default
+        for observer in observers {
+            center.removeObserver(observer)
+        }
+        if let minimalModeTitlebarDoubleClickMonitor {
+            NSEvent.removeMonitor(minimalModeTitlebarDoubleClickMonitor)
+        }
+    }
 
     func start() {
         guard !didStart else { return }
         didStart = true
         attachToExistingWindows()
         installObservers()
+        installMinimalModeTitlebarDoubleClickMonitor()
     }
 
     func apply(to window: NSWindow) {
@@ -26,6 +38,24 @@ final class WindowDecorationsController {
         }
         observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main, using: handler))
         observers.append(center.addObserver(forName: NSWindow.didBecomeMainNotification, object: nil, queue: .main, using: handler))
+    }
+
+    private func installMinimalModeTitlebarDoubleClickMonitor() {
+        guard minimalModeTitlebarDoubleClickMonitor == nil else { return }
+        minimalModeTitlebarDoubleClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
+            guard event.clickCount >= 2, let window = event.window else { return event }
+            guard shouldHandleMinimalModeWindowTitlebarDoubleClick(window: window, event: event) else {
+                return event
+            }
+
+            let result = handleTitlebarDoubleClick(window: window, behavior: .standardAction)
+#if DEBUG
+            cmuxDebugLog(
+                "titlebar.minimalWindowDoubleClick.result=\(String(describing: result)) point=\(NSStringFromPoint(event.locationInWindow)) band=\(String(format: "%.1f", minimalModeTitlebarDoubleClickBandHeight(for: window)))"
+            )
+#endif
+            return result.consumesEvent ? nil : event
+        }
     }
 
     private func attachToExistingWindows() {

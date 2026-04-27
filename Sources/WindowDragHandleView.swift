@@ -574,6 +574,59 @@ func shouldHandleMinimalModeTitlebarDoubleClick(
     return point.y >= bounds.maxY - clampedHeight
 }
 
+func minimalModeTitlebarDoubleClickBandHeight(for window: NSWindow) -> CGFloat {
+    let titlebarHeight = window.frame.height - window.contentLayoutRect.height
+    guard titlebarHeight.isFinite, titlebarHeight > 0 else {
+        return 30
+    }
+    return max(30, min(titlebarHeight, 72))
+}
+
+func isMainWorkspaceWindow(_ window: NSWindow) -> Bool {
+    guard let raw = window.identifier?.rawValue else { return false }
+    return raw == "cmux.main" || raw.hasPrefix("cmux.main.")
+}
+
+func shouldHandleMinimalModeWindowTitlebarDoubleClick(
+    isMinimalMode: Bool,
+    isFullScreen: Bool,
+    isMainWindow: Bool,
+    clickCount: Int,
+    locationInWindow: NSPoint,
+    contentBounds: NSRect,
+    titlebarBandHeight: CGFloat
+) -> Bool {
+    shouldHandleMinimalModeTitlebarDoubleClick(
+        isEnabled: isMinimalMode && !isFullScreen && isMainWindow,
+        clickCount: clickCount,
+        point: locationInWindow,
+        bounds: contentBounds,
+        topStripHeight: titlebarBandHeight
+    )
+}
+
+func shouldHandleMinimalModeWindowTitlebarDoubleClick(
+    window: NSWindow,
+    event: NSEvent,
+    defaults: UserDefaults = .standard
+) -> Bool {
+    let contentBounds = window.contentView?.bounds ?? NSRect(
+        x: 0,
+        y: 0,
+        width: window.frame.width,
+        height: window.frame.height
+    )
+    return shouldHandleMinimalModeWindowTitlebarDoubleClick(
+        isMinimalMode: WorkspacePresentationModeSettings.isMinimal(defaults: defaults),
+        isFullScreen: window.styleMask.contains(.fullScreen),
+        isMainWindow: isMainWorkspaceWindow(window),
+        clickCount: event.clickCount,
+        locationInWindow: event.locationInWindow,
+        contentBounds: contentBounds,
+        titlebarBandHeight: minimalModeTitlebarDoubleClickBandHeight(for: window)
+    )
+}
+
 struct MinimalModeTitlebarDoubleClickHandlerView: NSViewRepresentable {
     var isEnabled: Bool
     var topStripHeight: CGFloat

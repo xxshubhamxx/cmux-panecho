@@ -122,7 +122,7 @@ final class BonsplitTabDragUITests: XCTestCase {
     }
 
     func testMinimalModeTitlebarDoubleClickZoomsWindow() {
-        let (app, dataPath) = launchConfiguredApp()
+        let (app, dataPath) = launchConfiguredApp(windowSize: "640x420")
 
         XCTAssertTrue(
             ensureForegroundAfterLaunch(app, timeout: launchTimeout),
@@ -472,7 +472,8 @@ final class BonsplitTabDragUITests: XCTestCase {
 
     private func launchConfiguredApp(
         startWithHiddenSidebar: Bool = false,
-        presentationMode: WorkspacePresentationMode = .minimal
+        presentationMode: WorkspacePresentationMode = .minimal,
+        windowSize: String? = nil
     ) -> (XCUIApplication, String) {
         let app = XCUIApplication()
         let dataPath = "/tmp/cmux-ui-test-bonsplit-tab-drag-\(UUID().uuidString).json"
@@ -483,6 +484,9 @@ final class BonsplitTabDragUITests: XCTestCase {
         app.launchEnvironment["CMUX_UI_TEST_BONSPLIT_TAB_DRAG_PATH"] = dataPath
         if startWithHiddenSidebar {
             app.launchEnvironment["CMUX_UI_TEST_BONSPLIT_START_WITH_HIDDEN_SIDEBAR"] = "1"
+        }
+        if let windowSize {
+            app.launchEnvironment["CMUX_UI_TEST_BONSPLIT_WINDOW_SIZE"] = windowSize
         }
         app.launchArguments += ["-workspacePresentationMode", presentationMode.rawValue]
         let options = XCTExpectedFailure.Options()

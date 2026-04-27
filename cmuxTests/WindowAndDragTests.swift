@@ -713,6 +713,66 @@ final class WindowDragHandleHitTests: XCTestCase {
         )
     }
 
+    func testMinimalModeWindowDoubleClickRequiresMainTopStrip() {
+        let bounds = NSRect(x: 0, y: 0, width: 400, height: 300)
+
+        XCTAssertTrue(
+            shouldHandleMinimalModeWindowTitlebarDoubleClick(
+                isMinimalMode: true,
+                isFullScreen: false,
+                isMainWindow: true,
+                clickCount: 2,
+                locationInWindow: NSPoint(x: 200, y: 292),
+                contentBounds: bounds,
+                titlebarBandHeight: 30
+            )
+        )
+        XCTAssertFalse(
+            shouldHandleMinimalModeWindowTitlebarDoubleClick(
+                isMinimalMode: false,
+                isFullScreen: false,
+                isMainWindow: true,
+                clickCount: 2,
+                locationInWindow: NSPoint(x: 200, y: 292),
+                contentBounds: bounds,
+                titlebarBandHeight: 30
+            )
+        )
+        XCTAssertFalse(
+            shouldHandleMinimalModeWindowTitlebarDoubleClick(
+                isMinimalMode: true,
+                isFullScreen: true,
+                isMainWindow: true,
+                clickCount: 2,
+                locationInWindow: NSPoint(x: 200, y: 292),
+                contentBounds: bounds,
+                titlebarBandHeight: 30
+            )
+        )
+        XCTAssertFalse(
+            shouldHandleMinimalModeWindowTitlebarDoubleClick(
+                isMinimalMode: true,
+                isFullScreen: false,
+                isMainWindow: false,
+                clickCount: 2,
+                locationInWindow: NSPoint(x: 200, y: 292),
+                contentBounds: bounds,
+                titlebarBandHeight: 30
+            )
+        )
+        XCTAssertFalse(
+            shouldHandleMinimalModeWindowTitlebarDoubleClick(
+                isMinimalMode: true,
+                isFullScreen: false,
+                isMainWindow: true,
+                clickCount: 2,
+                locationInWindow: NSPoint(x: 200, y: 240),
+                contentBounds: bounds,
+                titlebarBandHeight: 30
+            )
+        )
+    }
+
     func testDragHandleIgnoresPassiveHostSiblingHit() {
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 36))
         let dragHandle = NSView(frame: container.bounds)
