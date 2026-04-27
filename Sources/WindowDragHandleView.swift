@@ -692,9 +692,6 @@ func isMinimalModeWindowTitlebarClickCandidate(
     event: NSEvent,
     defaults: UserDefaults = .standard
 ) -> Bool {
-    if BonsplitTabBarHitRegionRegistry.containsWindowPoint(event.locationInWindow, in: window) {
-        return false
-    }
     let contentBounds = window.contentView?.bounds ?? NSRect(
         x: 0,
         y: 0,
@@ -757,8 +754,7 @@ struct MinimalModeTitlebarDoubleClickHandlerView: NSViewRepresentable {
 
             let point = view.convert(event.locationInWindow, from: nil)
             let windowPoint = view.convert(point, to: nil)
-            guard !BonsplitTabBarHitRegionRegistry.containsWindowPoint(windowPoint, in: window),
-                  isPointInMinimalModeTitlebarBand(
+            guard isPointInMinimalModeTitlebarBand(
                 isEnabled: coordinator.isEnabled,
                 point: point,
                 bounds: view.bounds,

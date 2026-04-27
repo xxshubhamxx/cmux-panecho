@@ -618,7 +618,8 @@ private struct PassthroughHoverTrackingView: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if window != nil {
+            if let window {
+                window.acceptsMouseMovedEvents = true
                 installLocalMouseMonitorIfNeeded()
             } else {
                 removeLocalMouseMonitor()
