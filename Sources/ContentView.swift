@@ -1526,6 +1526,7 @@ struct ContentView: View {
     @EnvironmentObject var sidebarSelectionState: SidebarSelectionState
     @EnvironmentObject var cmuxConfigStore: CmuxConfigStore
     @EnvironmentObject var fileExplorerState: FileExplorerState
+    @Environment(\.colorScheme) private var colorScheme
     @State private var sidebarWidth: CGFloat = 200
     @State private var hoveredResizerHandles: Set<SidebarResizerHandle> = []
     @State private var isResizerDragging = false
@@ -2027,6 +2028,9 @@ struct ContentView: View {
     private static let commandPaletteVisiblePreviewCandidateLimit = 192
     private static let minimumSidebarWidth: CGFloat = CGFloat(SessionPersistencePolicy.minimumSidebarWidth)
     private static let maximumSidebarWidthRatio: CGFloat = 1.0 / 3.0
+    private static let minimumRightSidebarWidth: CGFloat = 276
+    private static let maximumRightSidebarWidth: CGFloat = 1200
+    private static let minimumTerminalWidthWithRightSidebar: CGFloat = 360
 
     private enum SidebarResizerHandle: Hashable {
         case divider
@@ -2063,7 +2067,10 @@ struct ContentView: View {
                 captureStart: { fileExplorerDragStartWidth = fileExplorerWidth },
                 updateWidth: { translation in
                     let startWidth = fileExplorerDragStartWidth ?? fileExplorerWidth
-                    let nextWidth = min(500, max(150, startWidth - translation))
+                    let nextWidth = Self.clampedRightSidebarWidth(
+                        startWidth - translation,
+                        availableWidth: availableWidth
+                    )
                     withTransaction(Transaction(animation: nil)) {
                         fileExplorerWidth = nextWidth
                     }
@@ -2074,14 +2081,6 @@ struct ContentView: View {
                 }
             )
         }
-    }
-
-    private var sidebarResizerSidebarHitWidth: CGFloat {
-        SidebarResizeInteraction.sidebarSideHitWidth
-    }
-
-    private var sidebarResizerContentHitWidth: CGFloat {
-        SidebarResizeInteraction.contentSideHitWidth
     }
 
     private func maxSidebarWidth(availableWidth: CGFloat? = nil) -> CGFloat {
@@ -2109,6 +2108,18 @@ struct ContentView: View {
         return max(minimumWidth, min(sanitizedMaximumWidth, candidate))
     }
 
+    static func clampedRightSidebarWidth(_ candidate: CGFloat, availableWidth: CGFloat) -> CGFloat {
+        let minimumWidth = Self.minimumRightSidebarWidth
+        let sanitizedCandidate = candidate.isFinite ? candidate : 220
+        let sanitizedAvailableWidth = availableWidth.isFinite && availableWidth > 0 ? availableWidth : 1920
+        let availableWidthCap = sanitizedAvailableWidth - Self.minimumTerminalWidthWithRightSidebar
+        let maximumWidth = min(
+            Self.maximumRightSidebarWidth,
+            max(minimumWidth, availableWidthCap)
+        )
+        return max(minimumWidth, min(maximumWidth, sanitizedCandidate))
+    }
+
     private func clampSidebarWidthIfNeeded(availableWidth: CGFloat? = nil) {
         let nextWidth = Self.clampedSidebarWidth(
             sidebarWidth,
@@ -2122,6 +2133,47 @@ struct ContentView: View {
 
     private func normalizedSidebarWidth(_ candidate: CGFloat) -> CGFloat {
         Self.clampedSidebarWidth(candidate, maximumWidth: maxSidebarWidth())
+    }
+
+    private func resolvedRightSidebarAvailableWidth(_ availableWidth: CGFloat? = nil) -> CGFloat {
+        if let availableWidth {
+            return availableWidth
+        }
+        if let width = observedWindow?.contentView?.bounds.width {
+            return width
+        }
+        if let width = observedWindow?.contentLayoutRect.width {
+            return width
+        }
+        if let width = NSApp.keyWindow?.contentView?.bounds.width {
+            return width
+        }
+        if let width = NSApp.keyWindow?.contentLayoutRect.width {
+            return width
+        }
+        if let width = NSApp.keyWindow?.screen?.frame.width {
+            return width
+        }
+        if let width = NSScreen.main?.frame.width {
+            return width
+        }
+        return 1920
+    }
+
+    private func normalizedRightSidebarWidth(_ candidate: CGFloat, availableWidth: CGFloat? = nil) -> CGFloat {
+        Self.clampedRightSidebarWidth(
+            candidate,
+            availableWidth: resolvedRightSidebarAvailableWidth(availableWidth)
+        )
+    }
+
+    private func clampRightSidebarWidthIfNeeded(availableWidth: CGFloat? = nil) {
+        let nextWidth = normalizedRightSidebarWidth(fileExplorerWidth, availableWidth: availableWidth)
+        guard abs(nextWidth - fileExplorerWidth) > 0.5 else { return }
+        withTransaction(Transaction(animation: nil)) {
+            fileExplorerWidth = nextWidth
+        }
+        fileExplorerState.width = nextWidth
     }
 
     private func activateSidebarResizerCursor() {
@@ -2157,13 +2209,18 @@ struct ContentView: View {
 
     private func dividerBandContains(pointInContent point: NSPoint, contentBounds: NSRect) -> Bool {
         guard point.y >= contentBounds.minY, point.y <= contentBounds.maxY else { return false }
-        let minX = sidebarWidth - sidebarResizerSidebarHitWidth
-        let maxX = sidebarWidth + sidebarResizerContentHitWidth
-        return point.x >= minX && point.x <= maxX
+        if sidebarState.isVisible,
+           SidebarResizeInteraction.Edge.leading.hitRange(dividerX: sidebarWidth).contains(point.x) {
+            return true
+        }
+
+        let rightDividerX = contentBounds.maxX - rightSidebarWidth
+        return rightSidebarVisible &&
+            SidebarResizeInteraction.Edge.trailing.hitRange(dividerX: rightDividerX).contains(point.x)
     }
 
-    private func updateSidebarResizerBandState(using event: NSEvent? = nil) {
-        guard sidebarState.isVisible,
+    private func updateSidebarResizerBandState(using _: NSEvent? = nil) {
+        guard sidebarState.isVisible || rightSidebarVisible,
               let window = observedWindow,
               let contentView = window.contentView else {
             isResizerBandActive = false
@@ -2328,11 +2385,16 @@ struct ContentView: View {
             .modifier(SidebarResizerAccessibilityModifier(accessibilityIdentifier: accessibilityIdentifier))
     }
 
-    private var sidebarResizerOverlay: some View {
+    private func placedSidebarResizerOverlay(
+        handle: SidebarResizerHandle,
+        edge: SidebarResizeInteraction.Edge,
+        accessibilityIdentifier: String,
+        dividerX: @escaping (CGFloat) -> CGFloat
+    ) -> some View {
         GeometryReader { proxy in
             let totalWidth = max(0, proxy.size.width)
-            let dividerX = min(max(sidebarWidth, 0), totalWidth)
-            let leadingWidth = max(0, dividerX - sidebarResizerSidebarHitWidth)
+            let resolvedDividerX = min(max(dividerX(totalWidth), 0), totalWidth)
+            let leadingWidth = max(0, edge.handleX(dividerX: resolvedDividerX))
 
             HStack(spacing: 0) {
                 Color.clear
@@ -2340,10 +2402,10 @@ struct ContentView: View {
                     .allowsHitTesting(false)
 
                 sidebarResizerHandleOverlay(
-                    .divider,
+                    handle,
                     width: SidebarResizeInteraction.totalHitWidth,
                     availableWidth: totalWidth,
-                    accessibilityIdentifier: "SidebarResizer"
+                    accessibilityIdentifier: accessibilityIdentifier
                 )
 
                 Color.clear
@@ -2351,13 +2413,25 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
             .frame(width: totalWidth, height: proxy.size.height, alignment: .leading)
-            .onAppear {
-                clampSidebarWidthIfNeeded(availableWidth: totalWidth)
-            }
-            .onChange(of: totalWidth) {
-                clampSidebarWidthIfNeeded(availableWidth: totalWidth)
-            }
         }
+    }
+
+    private var sidebarResizerOverlay: some View {
+        placedSidebarResizerOverlay(
+            handle: .divider,
+            edge: .leading,
+            accessibilityIdentifier: "SidebarResizer",
+            dividerX: { totalWidth in min(max(sidebarWidth, 0), totalWidth) }
+        )
+    }
+
+    private var rightSidebarResizerOverlay: some View {
+        placedSidebarResizerOverlay(
+            handle: .explorerDivider,
+            edge: .trailing,
+            accessibilityIdentifier: "RightSidebarResizer",
+            dividerX: { totalWidth in totalWidth - rightSidebarWidth }
+        )
     }
 
     private var sidebarView: some View {
@@ -2406,7 +2480,7 @@ struct ContentView: View {
         return -max(0, min(titlebarPadding, hostingSafeAreaTop))
     }
 
-    private var terminalContent: some View {
+    private func terminalContent(appearance: WindowAppearanceSnapshot) -> some View {
         let mountedWorkspaceIdSet = Set(mountedWorkspaceIds)
         let mountedWorkspaces = tabManager.tabs.filter { mountedWorkspaceIdSet.contains($0.id) }
         let selectedWorkspaceId = tabManager.selectedTabId
@@ -2467,13 +2541,13 @@ struct ContentView: View {
         .overlay(alignment: .top) {
             if !isMinimalMode {
                 // Titlebar overlay is only over terminal content, not the sidebar.
-                customTitlebar
+                customTitlebar(appearance: appearance)
             }
         }
     }
 
-    private var terminalContentWithSidebarDropOverlay: some View {
-        terminalContent
+    private func terminalContentWithSidebarDropOverlay(appearance: WindowAppearanceSnapshot) -> some View {
+        terminalContent(appearance: appearance)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
             .overlay {
@@ -2481,16 +2555,13 @@ struct ContentView: View {
             }
     }
 
-    private var terminalContentWithRightSidebarPanel: some View {
+    private func terminalContentWithRightSidebarPanel(appearance: WindowAppearanceSnapshot) -> some View {
         // File explorer is always in the view tree. Visibility is controlled by
         // frame width (0 when hidden), avoiding SwiftUI view insertion/removal
         // and all associated transition animations.
         return HStack(spacing: 0) {
-            terminalContentWithSidebarDropOverlay
-            if rightSidebarVisible {
-                Divider()
-            }
-            rightSidebarPanelWithBackdrop
+            terminalContentWithSidebarDropOverlay(appearance: appearance)
+            rightSidebarPanelWithBackdrop(appearance: appearance)
         }
     }
 
@@ -2502,10 +2573,15 @@ struct ContentView: View {
         rightSidebarVisible ? fileExplorerWidth : 0
     }
 
-    private func sidebarBackdropLayer(width: CGFloat) -> some View {
-        SidebarBackdrop()
+    private func sidebarBackdropLayer(
+        width: CGFloat,
+        role: WindowBackdropRole,
+        appearance: WindowAppearanceSnapshot
+    ) -> some View {
+        WindowBackdropLayer(role: role, snapshot: appearance)
             .ignoresSafeArea()
             .frame(width: width)
+            .clipShape(RoundedRectangle(cornerRadius: appearance.sidebarSettings.materialPolicy.cornerRadius, style: .continuous))
             .clipped()
             .allowsHitTesting(false)
     }
@@ -2513,24 +2589,31 @@ struct ContentView: View {
     private func sidebarPanelContainer<Content: View>(
         width: CGFloat,
         alignment: Alignment,
+        role: WindowBackdropRole,
+        appearance: WindowAppearanceSnapshot,
         @ViewBuilder content: () -> Content
     ) -> some View {
         ZStack(alignment: alignment) {
-            sidebarBackdropLayer(width: width)
+            sidebarBackdropLayer(width: width, role: role, appearance: appearance)
             content()
         }
         .frame(width: width)
     }
 
-    private var sidebarPanelWithBackdrop: some View {
-        sidebarPanelContainer(width: sidebarWidth, alignment: .leading) {
+    private func sidebarPanelWithBackdrop(appearance: WindowAppearanceSnapshot) -> some View {
+        sidebarPanelContainer(width: sidebarWidth, alignment: .leading, role: .leftSidebar, appearance: appearance) {
             sidebarView
         }
     }
 
-    private var rightSidebarPanelWithBackdrop: some View {
-        sidebarPanelContainer(width: rightSidebarWidth, alignment: .trailing) {
+    private func rightSidebarPanelWithBackdrop(appearance: WindowAppearanceSnapshot) -> some View {
+        sidebarPanelContainer(width: rightSidebarWidth, alignment: .trailing, role: .rightSidebar, appearance: appearance) {
             rightSidebarPanel
+        }
+        .overlay(alignment: .leading) {
+            if rightSidebarVisible {
+                WindowChromeBorder(orientation: .vertical)
+            }
         }
     }
 
@@ -2547,32 +2630,40 @@ struct ContentView: View {
         .clipped()
         .allowsHitTesting(rightSidebarVisible)
         .accessibilityHidden(!rightSidebarVisible)
-        .overlay(alignment: .leading) {
-            if rightSidebarVisible {
-                fileExplorerResizerHandle
-            }
-        }
         .transaction { $0.animation = nil }
         .onAppear {
-            fileExplorerWidth = fileExplorerState.width
+            let sanitized = normalizedRightSidebarWidth(fileExplorerState.width)
+            fileExplorerWidth = sanitized
+            if abs(fileExplorerState.width - sanitized) > 0.5 {
+                DispatchQueue.main.async {
+                    fileExplorerState.width = sanitized
+                }
+            }
         }
         .onChange(of: fileExplorerState.width) { newValue in
             if fileExplorerDragStartWidth == nil {
-                fileExplorerWidth = newValue
+                let sanitized = normalizedRightSidebarWidth(newValue)
+                if abs(newValue - sanitized) > 0.5 {
+                    DispatchQueue.main.async {
+                        fileExplorerState.width = sanitized
+                    }
+                    return
+                }
+                fileExplorerWidth = sanitized
             }
         }
-    }
-
-    private var fileExplorerResizerHandle: some View {
-        sidebarResizerHandleOverlay(
-            .explorerDivider,
-            width: SidebarResizeInteraction.totalHitWidth,
-            availableWidth: observedWindow?.contentView?.bounds.width ?? 1920
-        )
     }
 
     @AppStorage("sidebarBlendMode") private var sidebarBlendMode = SidebarBlendModeOption.withinWindow.rawValue
     @AppStorage("sidebarMatchTerminalBackground") private var sidebarMatchTerminalBackground = false
+    @AppStorage("sidebarTintOpacity") private var sidebarTintOpacity = SidebarTintDefaults.opacity
+    @AppStorage("sidebarTintHex") private var sidebarTintHex = SidebarTintDefaults.hex
+    @AppStorage("sidebarTintHexLight") private var sidebarTintHexLight: String?
+    @AppStorage("sidebarTintHexDark") private var sidebarTintHexDark: String?
+    @AppStorage("sidebarMaterial") private var sidebarMaterial = SidebarMaterialOption.sidebar.rawValue
+    @AppStorage("sidebarState") private var sidebarStateSetting = SidebarStateOption.followWindow.rawValue
+    @AppStorage("sidebarCornerRadius") private var sidebarCornerRadius = 0.0
+    @AppStorage("sidebarBlurOpacity") private var sidebarBlurOpacity = 1.0
 
     // Background glass settings
     @AppStorage("bgGlassTintHex") private var bgGlassTintHex = "#000000"
@@ -2582,9 +2673,28 @@ struct ContentView: View {
 
     @State private var titlebarLeadingInset: CGFloat = 12
     private var windowIdentifier: String { "cmux.main.\(windowId.uuidString)" }
-    private var fakeTitlebarTextColor: Color {
+    private var windowAppearanceSnapshot: WindowAppearanceSnapshot {
         _ = titlebarThemeGeneration
-        let ghosttyBackground = GhosttyApp.shared.defaultBackgroundColor
+        return WindowAppearanceSnapshot.current(
+            unifySurfaceBackdrops: sidebarMatchTerminalBackground,
+            colorScheme: colorScheme,
+            sidebarMaterial: sidebarMaterial,
+            sidebarBlendMode: sidebarBlendMode,
+            sidebarState: sidebarStateSetting,
+            sidebarTintHex: sidebarTintHex,
+            sidebarTintHexLight: sidebarTintHexLight,
+            sidebarTintHexDark: sidebarTintHexDark,
+            sidebarTintOpacity: sidebarTintOpacity,
+            sidebarCornerRadius: sidebarCornerRadius,
+            sidebarBlurOpacity: sidebarBlurOpacity,
+            bgGlassEnabled: bgGlassEnabled,
+            bgGlassTintHex: bgGlassTintHex,
+            bgGlassTintOpacity: bgGlassTintOpacity
+        )
+    }
+
+    private func fakeTitlebarTextColor(appearance: WindowAppearanceSnapshot) -> Color {
+        let ghosttyBackground = appearance.terminalBackgroundColor
         return ghosttyBackground.isLightColor
             ? Color.black.opacity(0.78)
             : Color.white.opacity(0.82)
@@ -2610,7 +2720,7 @@ struct ContentView: View {
         )
     }
 
-    private var customTitlebar: some View {
+    private func customTitlebar(appearance: WindowAppearanceSnapshot) -> some View {
         ZStack {
             // Enable window dragging from the titlebar strip without making the entire content
             // view draggable (which breaks drag gestures like tab reordering).
@@ -2632,7 +2742,7 @@ struct ContentView: View {
 
                 Text(titlebarText)
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(fakeTitlebarTextColor)
+                    .foregroundColor(fakeTitlebarTextColor(appearance: appearance))
                     .lineLimit(1)
                     .allowsHitTesting(false)
 
@@ -2648,20 +2758,9 @@ struct ContentView: View {
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
         .background(TitlebarDoubleClickMonitorView())
-        .background({
-            // The terminal background is provided by a single CALayer
-            // (backgroundView in GhosttySurfaceScrollView), so the titlebar
-            // opacity matches the configured value directly.
-            let alpha = CGFloat(GhosttyApp.shared.defaultBackgroundOpacity)
-            return TitlebarLayerBackground(
-                backgroundColor: GhosttyApp.shared.defaultBackgroundColor,
-                opacity: alpha
-            )
-        }())
+        .background(WindowBackdropLayer(role: .titlebar, snapshot: appearance))
         .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(height: 1)
+            WindowChromeBorder(orientation: .horizontal)
         }
     }
 
@@ -2862,7 +2961,7 @@ struct ContentView: View {
         return dir.isEmpty ? nil : dir
     }
 
-    private var contentAndSidebarLayout: AnyView {
+    private func contentAndSidebarLayout(appearance: WindowAppearanceSnapshot) -> AnyView {
         let layout: AnyView
         // When matching terminal background, use HStack so both sidebar and terminal
         // sit directly on the window background with no intermediate layers.
@@ -2875,17 +2974,14 @@ struct ContentView: View {
             layout = AnyView(
                 ZStack(alignment: .leading) {
                     HStack(spacing: 0) {
-                        terminalContentWithSidebarDropOverlay
+                        terminalContentWithSidebarDropOverlay(appearance: appearance)
                             .padding(.leading, sidebarState.isVisible ? sidebarWidth : 0)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
-                        if rightSidebarVisible {
-                            Divider()
-                        }
-                        rightSidebarPanelWithBackdrop
+                        rightSidebarPanelWithBackdrop(appearance: appearance)
                     }
                     if sidebarState.isVisible {
-                        sidebarPanelWithBackdrop
+                        sidebarPanelWithBackdrop(appearance: appearance)
                     }
                 }
             )
@@ -2894,9 +2990,9 @@ struct ContentView: View {
             layout = AnyView(
                 HStack(spacing: 0) {
                     if sidebarState.isVisible {
-                        sidebarPanelWithBackdrop
+                        sidebarPanelWithBackdrop(appearance: appearance)
                     }
-                    terminalContentWithRightSidebarPanel
+                    terminalContentWithRightSidebarPanel(appearance: appearance)
                 }
             )
         }
@@ -2909,12 +3005,19 @@ struct ContentView: View {
                             .zIndex(1000)
                     }
                 }
+                .overlay(alignment: .leading) {
+                    if rightSidebarVisible {
+                        rightSidebarResizerOverlay
+                            .zIndex(1000)
+                    }
+                }
         )
     }
 
     var body: some View {
+        let appearance = windowAppearanceSnapshot
         var view = AnyView(
-            contentAndSidebarLayout
+            contentAndSidebarLayout(appearance: appearance)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .overlay(alignment: .topLeading) {
                     if isFullScreen && sidebarState.isVisible && !isMinimalMode {
@@ -3011,6 +3114,7 @@ struct ContentView: View {
             tabManager.applyWindowBackgroundForSelectedTab()
             startWorkspaceHandoffIfNeeded(newSelectedId: newValue)
             reconcileMountedWorkspaceIds(selectedId: newValue)
+            AppDelegate.shared?.syncBonsplitTabShortcutHintEligibility(in: observedWindow)
             guard let newValue else { return }
             if selectedTabIds.count <= 1 {
                 selectedTabIds = [newValue]
@@ -3060,6 +3164,18 @@ struct ContentView: View {
             scheduleTitlebarTextRefresh()
         })
 
+        view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .ghosttyDefaultBackgroundDidChange)) { notification in
+            let payloadHex = (notification.userInfo?[GhosttyNotificationKey.backgroundColor] as? NSColor)?.hexString()
+            let eventId = (notification.userInfo?[GhosttyNotificationKey.backgroundEventId] as? NSNumber)?.uint64Value
+            let source = notification.userInfo?[GhosttyNotificationKey.backgroundSource] as? String
+            scheduleTitlebarThemeRefresh(
+                reason: "ghosttyDefaultBackgroundDidChange",
+                backgroundEventId: eventId,
+                backgroundSource: source,
+                notificationPayloadHex: payloadHex
+            )
+        })
+
         view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .ghosttyDidFocusTab)) { _ in
             sidebarSelectionState.selection = .tabs
             scheduleTitlebarTextRefresh()
@@ -3094,8 +3210,26 @@ struct ContentView: View {
                   let focusedPanelId = selectedWorkspace.focusedPanelId,
                   let focusedBrowser = selectedWorkspace.browserPanel(for: focusedPanelId),
                   focusedBrowser.webView === webView else { return }
+            AppDelegate.shared?.noteMainPanelKeyboardFocusIntent(
+                workspaceId: selectedTabId,
+                panelId: focusedPanelId,
+                in: observedWindow ?? webView.window
+            )
             completeWorkspaceHandoffIfNeeded(focusedTabId: selectedTabId, reason: "browser_first_responder")
             attemptCommandPaletteFocusRestoreIfNeeded()
+        })
+
+        view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .webViewDidReceiveClick)) { notification in
+            guard let webView = notification.object as? WKWebView,
+                  let selectedTabId = tabManager.selectedTabId,
+                  let selectedWorkspace = tabManager.selectedWorkspace,
+                  let focusedBrowser = selectedWorkspace.panels.values.compactMap({ $0 as? BrowserPanel })
+                    .first(where: { $0.webView === webView }) else { return }
+            AppDelegate.shared?.noteMainPanelKeyboardFocusIntent(
+                workspaceId: selectedTabId,
+                panelId: focusedBrowser.id,
+                in: observedWindow ?? webView.window
+            )
         })
 
         view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: .browserDidFocusAddressBar)) { notification in
@@ -3103,7 +3237,12 @@ struct ContentView: View {
                   let selectedTabId = tabManager.selectedTabId,
                   let selectedWorkspace = tabManager.selectedWorkspace,
                   selectedWorkspace.focusedPanelId == panelId,
-                  selectedWorkspace.browserPanel(for: panelId) != nil else { return }
+                  let focusedBrowser = selectedWorkspace.browserPanel(for: panelId) else { return }
+            AppDelegate.shared?.noteMainPanelKeyboardFocusIntent(
+                workspaceId: selectedTabId,
+                panelId: panelId,
+                in: observedWindow ?? focusedBrowser.webView.window
+            )
             completeWorkspaceHandoffIfNeeded(focusedTabId: selectedTabId, reason: "browser_address_bar")
             attemptCommandPaletteFocusRestoreIfNeeded()
         })
@@ -3363,7 +3502,9 @@ struct ContentView: View {
         view = AnyView(view.onReceive(NotificationCenter.default.publisher(for: NSWindow.didResizeNotification)) { notification in
             guard let window = notification.object as? NSWindow,
                   window === observedWindow else { return }
-            clampSidebarWidthIfNeeded(availableWidth: window.contentView?.bounds.width ?? window.contentLayoutRect.width)
+            let availableWidth = window.contentView?.bounds.width ?? window.contentLayoutRect.width
+            clampSidebarWidthIfNeeded(availableWidth: availableWidth)
+            clampRightSidebarWidthIfNeeded(availableWidth: availableWidth)
             updateSidebarResizerBandState()
         })
 
@@ -3396,7 +3537,19 @@ struct ContentView: View {
             syncTrafficLightInset()
         })
 
+        view = AnyView(view.onChange(of: fileExplorerState.isVisible) { isVisible in
+            if !isVisible {
+                _ = AppDelegate.shared?.restoreTerminalFocusAfterRightSidebarHidden(in: observedWindow)
+            }
+            if let observedWindow {
+                TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronize(for: observedWindow)
+            } else {
+                TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronizeForAllWindows()
+            }
+        })
+
         view = AnyView(view.onChange(of: sidebarMatchTerminalBackground) { _ in
+            tabManager.applyWindowBackdropModeForAllTabs(reason: "sidebarMatchTerminalBackgroundChanged")
             guard sidebarState.isVisible,
                   sidebarBlendMode == SidebarBlendModeOption.withinWindow.rawValue else { return }
             if let observedWindow {
@@ -3440,8 +3593,9 @@ struct ContentView: View {
             removeSidebarResizerPointerMonitor()
         })
 
-        view = AnyView(view.background(WindowAccessor { [sidebarBlendMode, bgGlassEnabled, bgGlassTintHex, bgGlassTintOpacity] window in
+        view = AnyView(view.background(WindowAccessor { [appearance] window in
             window.identifier = NSUserInterfaceItemIdentifier(windowIdentifier)
+            window.isRestorable = false
             window.titlebarAppearsTransparent = true
             // Keep window immovable; the sidebar's WindowDragHandleView handles
             // drag-to-move via performDrag with temporary movable override.
@@ -3456,7 +3610,9 @@ struct ContentView: View {
                 DispatchQueue.main.async {
                     observedWindow = window
                     isFullScreen = window.styleMask.contains(.fullScreen)
-                    clampSidebarWidthIfNeeded(availableWidth: window.contentView?.bounds.width ?? window.contentLayoutRect.width)
+                    let availableWidth = window.contentView?.bounds.width ?? window.contentLayoutRect.width
+                    clampSidebarWidthIfNeeded(availableWidth: availableWidth)
+                    clampRightSidebarWidthIfNeeded(availableWidth: availableWidth)
                     syncCommandPaletteDebugStateForObservedWindow()
                     installSidebarResizerPointerMonitorIfNeeded()
                     updateSidebarResizerBandState()
@@ -3486,14 +3642,9 @@ struct ContentView: View {
             // User settings decide whether window glass is active. The native Tahoe
             // NSGlassEffectView path vs the older NSVisualEffectView fallback is chosen
             // inside WindowGlassEffect.apply.
-            let currentThemeBackground = GhosttyBackgroundTheme.currentColor()
-            let shouldApplyWindowGlass = cmuxShouldApplyWindowGlass(
-                sidebarBlendMode: sidebarBlendMode,
-                bgGlassEnabled: bgGlassEnabled,
-                glassEffectAvailable: WindowGlassEffect.isAvailable
-            )
-            let shouldForceTransparentHosting =
-                shouldApplyWindowGlass || currentThemeBackground.alphaComponent < 0.999
+            let currentThemeBackground = appearance.compositedTerminalBackgroundColor
+            let shouldApplyWindowGlass = appearance.windowGlassSettings.shouldApply()
+            let shouldForceTransparentHosting = appearance.shouldUseTransparentHosting()
 
             if shouldForceTransparentHosting {
                 window.isOpaque = false
@@ -3513,8 +3664,7 @@ struct ContentView: View {
 
             if shouldApplyWindowGlass {
                 // Apply liquid glass effect to the window with tint from settings
-                let tintColor = (NSColor(hex: bgGlassTintHex) ?? .black).withAlphaComponent(bgGlassTintOpacity)
-                WindowGlassEffect.apply(to: window, tintColor: tintColor)
+                WindowGlassEffect.apply(to: window, tintColor: appearance.windowGlassSettings.tintColor)
             } else {
                 WindowGlassEffect.remove(from: window)
             }
@@ -3526,6 +3676,7 @@ struct ContentView: View {
                 tabManager: tabManager,
                 sidebarState: sidebarState,
                 sidebarSelectionState: sidebarSelectionState,
+                fileExplorerState: fileExplorerState,
                 cmuxConfigStore: cmuxConfigStore
             )
             installFileDropOverlayWhenReady(on: window, tabManager: tabManager)
@@ -3558,17 +3709,22 @@ struct ContentView: View {
             isCycleHot: isCycleHot,
             maxMounted: maxMounted
         )
+        let removedIds = previousMountedIds.filter { !mountedWorkspaceIds.contains($0) }
+        hidePortalViewsForUnmountedWorkspaces(
+            removedIds,
+            tabs: currentTabs,
+            selectedId: effectiveSelectedId
+        )
 #if DEBUG
         if mountedWorkspaceIds != previousMountedIds {
             let added = mountedWorkspaceIds.filter { !previousMountedIds.contains($0) }
-            let removed = previousMountedIds.filter { !mountedWorkspaceIds.contains($0) }
             if let snapshot = tabManager.debugCurrentWorkspaceSwitchSnapshot() {
                 let dtMs = (CACurrentMediaTime() - snapshot.startedAt) * 1000
                 cmuxDebugLog(
                     "ws.mount.reconcile id=\(snapshot.id) dt=\(debugMsText(dtMs)) hot=\(isCycleHot ? 1 : 0) " +
                     "selected=\(debugShortWorkspaceId(effectiveSelectedId)) " +
                     "mounted=\(debugShortWorkspaceIds(mountedWorkspaceIds)) " +
-                    "added=\(debugShortWorkspaceIds(added)) removed=\(debugShortWorkspaceIds(removed))"
+                    "added=\(debugShortWorkspaceIds(added)) removed=\(debugShortWorkspaceIds(removedIds))"
                 )
             } else {
                 cmuxDebugLog(
@@ -3578,6 +3734,19 @@ struct ContentView: View {
             }
         }
 #endif
+    }
+
+    private func hidePortalViewsForUnmountedWorkspaces(
+        _ workspaceIds: [UUID],
+        tabs: [Workspace],
+        selectedId: UUID?
+    ) {
+        guard !workspaceIds.isEmpty else { return }
+        let unmountedIds = Set(workspaceIds)
+        for workspace in tabs where unmountedIds.contains(workspace.id) && workspace.id != selectedId {
+            workspace.hideAllTerminalPortalViews()
+            workspace.hideAllBrowserPortalViews()
+        }
     }
 
     private enum BackgroundWorkspacePrimeState {
@@ -8709,6 +8878,13 @@ struct ContentView: View {
         lastSidebarSelectionIndex = lastIndex
         tabManager.selectWorkspace(tabs[lastIndex])
         sidebarSelectionState.selection = .tabs
+#if DEBUG
+        UITestRecorder.record([
+            "sidebarSelectedWorkspaceCount": String(selectedIds.count),
+            "sidebarSelectedWorkspaceLastIndex": String(lastIndex),
+            "sidebarWorkspaceCount": String(tabs.count),
+        ])
+#endif
         didApplyUITestSidebarSelection = true
 #endif
     }
@@ -9117,7 +9293,7 @@ struct VerticalTabsSidebar: View {
     @Binding var selection: SidebarSelection
     @Binding var selectedTabIds: Set<UUID>
     @Binding var lastSidebarSelectionIndex: Int?
-    @StateObject private var modifierKeyMonitor = SidebarShortcutHintModifierMonitor()
+    @StateObject private var modifierKeyMonitor = WindowScopedShortcutHintModifierMonitor(activation: .commandOnly)
     @StateObject private var dragAutoScrollController = SidebarDragAutoScrollController()
     @StateObject private var dragFailsafeMonitor = SidebarDragFailsafeMonitor()
     @StateObject private var tabItemSettingsStore = SidebarTabItemSettingsStore()
@@ -9126,13 +9302,21 @@ struct VerticalTabsSidebar: View {
     @State private var dropIndicator: SidebarDropIndicator?
     @State private var frozenTabItemPresentation: SidebarTabItemPresentationSnapshot?
     @State private var terminalScrollBarVisibilityGeneration: UInt64 = 0
+    @State private var laidOutWorkspaceRowIds: Set<UUID> = []
+    @State private var pendingSelectedWorkspaceScrollId: UUID?
     @AppStorage(WorkspacePresentationModeSettings.modeKey)
     private var workspacePresentationMode = WorkspacePresentationModeSettings.defaultMode.rawValue
+    @AppStorage("sidebarMatchTerminalBackground")
+    private var sidebarMatchTerminalBackground = false
 
     /// Space at top of sidebar for traffic light buttons
     private let trafficLightPadding: CGFloat = 28
     private let tabRowSpacing: CGFloat = 2
     private let hiddenTitlebarControlsLeadingInset: CGFloat = 72
+
+    private var workspaceScrollTopVisibilityInset: CGFloat {
+        trafficLightPadding + 8
+    }
 
     private var isMinimalMode: Bool {
         WorkspacePresentationModeSettings.mode(for: workspacePresentationMode) == .minimal
@@ -9145,6 +9329,58 @@ struct VerticalTabsSidebar: View {
     private var workspaceNumberShortcut: StoredShortcut {
         let _ = keyboardShortcutSettingsObserver.revision
         return KeyboardShortcutSettings.shortcut(for: .selectWorkspaceByNumber)
+    }
+
+    private func requestSelectedWorkspaceScroll(_ proxy: ScrollViewProxy, workspaceIds: [UUID]) {
+        guard let selectedWorkspaceId = tabManager.selectedTabId,
+              workspaceIds.contains(selectedWorkspaceId) else {
+            pendingSelectedWorkspaceScrollId = nil
+            return
+        }
+
+        pendingSelectedWorkspaceScrollId = selectedWorkspaceId
+        flushPendingSelectedWorkspaceScroll(proxy)
+    }
+
+    private func flushPendingSelectedWorkspaceScroll(
+        _ proxy: ScrollViewProxy,
+        laidOutWorkspaceRowIds: Set<UUID>? = nil
+    ) {
+        guard let selectedWorkspaceId = pendingSelectedWorkspaceScrollId else { return }
+        let rowIds = laidOutWorkspaceRowIds ?? self.laidOutWorkspaceRowIds
+        guard rowIds.contains(selectedWorkspaceId) else { return }
+
+        // No anchor means SwiftUI scrolls the minimum needed to reveal the row.
+        proxy.scrollTo(selectedWorkspaceId)
+        pendingSelectedWorkspaceScrollId = nil
+    }
+
+    private func shouldRequestSelectedWorkspaceScrollAfterWorkspaceIdsChange(
+        from oldWorkspaceIds: [UUID],
+        to newWorkspaceIds: [UUID]
+    ) -> Bool {
+        guard let selectedWorkspaceId = tabManager.selectedTabId else {
+            return false
+        }
+        return !oldWorkspaceIds.contains(selectedWorkspaceId) && newWorkspaceIds.contains(selectedWorkspaceId)
+    }
+
+    private struct WorkspaceListRenderContext {
+        let tabs: [Workspace]
+        let workspaceCount: Int
+        let canCloseWorkspace: Bool
+        let workspaceNumberShortcut: StoredShortcut
+        let tabItemSettings: SidebarTabItemSettingsSnapshot
+        let tabIndexById: [UUID: Int]
+        let selectedContextTargetIds: [UUID]
+        let selectedRemoteContextMenuWorkspaceIds: [UUID]
+        let allSelectedRemoteContextMenuTargetsConnecting: Bool
+        let allSelectedRemoteContextMenuTargetsDisconnected: Bool
+        let workspaceTerminalScrollBarHiddenById: [UUID: Bool]
+
+        var workspaceIds: [UUID] {
+            tabs.map(\.id)
+        }
     }
 
     var body: some View {
@@ -9168,135 +9404,22 @@ struct VerticalTabsSidebar: View {
             selectedRemoteContextMenuTargets.allSatisfy { $0.remoteConnectionState == .connecting }
         let allSelectedRemoteContextMenuTargetsDisconnected = !selectedRemoteContextMenuTargets.isEmpty &&
             selectedRemoteContextMenuTargets.allSatisfy { $0.remoteConnectionState == .disconnected }
+        let renderContext = WorkspaceListRenderContext(
+            tabs: tabs,
+            workspaceCount: workspaceCount,
+            canCloseWorkspace: canCloseWorkspace,
+            workspaceNumberShortcut: workspaceNumberShortcut,
+            tabItemSettings: tabItemSettings,
+            tabIndexById: tabIndexById,
+            selectedContextTargetIds: selectedContextTargetIds,
+            selectedRemoteContextMenuWorkspaceIds: selectedRemoteContextMenuWorkspaceIds,
+            allSelectedRemoteContextMenuTargetsConnecting: allSelectedRemoteContextMenuTargetsConnecting,
+            allSelectedRemoteContextMenuTargetsDisconnected: allSelectedRemoteContextMenuTargetsDisconnected,
+            workspaceTerminalScrollBarHiddenById: workspaceTerminalScrollBarHiddenById
+        )
 
         VStack(spacing: 0) {
-            GeometryReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        // Space for traffic lights / fullscreen controls
-                        Spacer()
-                            .frame(height: trafficLightPadding)
-
-                        // Workspaces are bounded, so prefer a non-lazy stack here.
-                        // LazyVStack + drag-state invalidations can recurse through layout.
-                        VStack(spacing: tabRowSpacing) {
-                            ForEach(tabs, id: \.id) { tab in
-                                let index = tabIndexById[tab.id] ?? 0
-                                let usesSelectedContextMenuTargets = selectedTabIds.contains(tab.id)
-                                let contextMenuWorkspaceIds = usesSelectedContextMenuTargets
-                                    ? selectedContextTargetIds
-                                    : [tab.id]
-                                let remoteContextMenuWorkspaceIds = usesSelectedContextMenuTargets
-                                    ? selectedRemoteContextMenuWorkspaceIds
-                                    : (tab.isRemoteWorkspace ? [tab.id] : [])
-                                let allRemoteContextMenuTargetsConnecting = usesSelectedContextMenuTargets
-                                    ? allSelectedRemoteContextMenuTargetsConnecting
-                                    : (tab.isRemoteWorkspace && tab.remoteConnectionState == .connecting)
-                                let allRemoteContextMenuTargetsDisconnected = usesSelectedContextMenuTargets
-                                    ? allSelectedRemoteContextMenuTargetsDisconnected
-                                    : (tab.isRemoteWorkspace && tab.remoteConnectionState == .disconnected)
-                                let allContextMenuWorkspacesHideTerminalScrollBar = !contextMenuWorkspaceIds.isEmpty &&
-                                    contextMenuWorkspaceIds.allSatisfy { workspaceId in
-                                        workspaceTerminalScrollBarHiddenById[workspaceId] == true
-                                    }
-                                let liveUnreadCount = notificationStore.unreadCount(forTabId: tab.id)
-                                let liveLatestNotificationText: String? = {
-                                    guard showsSidebarNotificationMessage,
-                                          let notification = notificationStore.latestNotification(forTabId: tab.id) else {
-                                        return nil
-                                    }
-                                    let text = notification.body.isEmpty ? notification.title : notification.body
-                                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    return trimmed.isEmpty ? nil : trimmed
-                                }()
-                                let liveShowsModifierShortcutHints = modifierKeyMonitor.isModifierPressed
-                                let livePresentation = SidebarTabItemPresentationSnapshot(
-                                    tabId: tab.id,
-                                    unreadCount: liveUnreadCount,
-                                    latestNotificationText: liveLatestNotificationText,
-                                    showsModifierShortcutHints: liveShowsModifierShortcutHints
-                                )
-                                let frozenPresentation = frozenTabItemPresentation?.tabId == tab.id
-                                    ? frozenTabItemPresentation
-                                    : nil
-                                TabItemView(
-                                    tabManager: tabManager,
-                                    notificationStore: notificationStore,
-                                    tab: tab,
-                                    index: index,
-                                    isActive: tabManager.selectedTabId == tab.id,
-                                    workspaceShortcutDigit: WorkspaceShortcutMapper.digitForWorkspace(
-                                        at: index,
-                                        workspaceCount: workspaceCount
-                                    ),
-                                    workspaceShortcutModifierSymbol: workspaceNumberShortcut.numberedDigitHintPrefix,
-                                    canCloseWorkspace: canCloseWorkspace,
-                                    accessibilityWorkspaceCount: workspaceCount,
-                                    unreadCount: frozenPresentation?.unreadCount ?? liveUnreadCount,
-                                    latestNotificationText: frozenPresentation?.latestNotificationText ?? liveLatestNotificationText,
-                                    rowSpacing: tabRowSpacing,
-                                    setSelectionToTabs: { selection = .tabs },
-                                    selectedTabIds: $selectedTabIds,
-                                    lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
-                                    showsModifierShortcutHints: frozenPresentation?.showsModifierShortcutHints ?? liveShowsModifierShortcutHints,
-                                    dragAutoScrollController: dragAutoScrollController,
-                                    draggedTabId: $draggedTabId,
-                                    dropIndicator: $dropIndicator,
-                                    contextMenuWorkspaceIds: contextMenuWorkspaceIds,
-                                    remoteContextMenuWorkspaceIds: remoteContextMenuWorkspaceIds,
-                                    allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
-                                    allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
-                                    allContextMenuWorkspacesHideTerminalScrollBar: allContextMenuWorkspacesHideTerminalScrollBar,
-                                    settings: tabItemSettings,
-                                    livePresentation: livePresentation,
-                                    frozenPresentation: $frozenTabItemPresentation
-                                )
-                                .equatable()
-                            }
-                        }
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        SidebarEmptyArea(
-                            rowSpacing: tabRowSpacing,
-                            selection: $selection,
-                            selectedTabIds: $selectedTabIds,
-                            lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
-                            dragAutoScrollController: dragAutoScrollController,
-                            draggedTabId: $draggedTabId,
-                            dropIndicator: $dropIndicator
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .frame(minHeight: proxy.size.height, alignment: .top)
-                }
-                .background(
-                    SidebarScrollViewResolver { scrollView in
-                        dragAutoScrollController.attach(scrollView: scrollView)
-                    }
-                    .frame(width: 0, height: 0)
-                )
-                .overlay(alignment: .top) {
-                    SidebarTopScrim(height: trafficLightPadding + 20)
-                        .allowsHitTesting(false)
-                }
-                .overlay(alignment: .top) {
-                    // Match native titlebar behavior in the sidebar top strip:
-                    // drag-to-move and double-click action (zoom/minimize).
-                    WindowDragHandleView()
-                        .frame(height: trafficLightPadding)
-                        .background(TitlebarDoubleClickMonitorView())
-                }
-                .overlay(alignment: .topLeading) {
-                    if isMinimalMode {
-                        HiddenTitlebarSidebarControlsView(notificationStore: notificationStore)
-                            .padding(.leading, hiddenTitlebarControlsLeadingInset)
-                            .padding(.top, 2)
-                    }
-                }
-                .background(Color.clear)
-                .modifier(ClearScrollBackground())
-            }
+            workspaceScrollArea(renderContext: renderContext)
             SidebarFooter(updateViewModel: updateViewModel, fileExplorerState: fileExplorerState, onSendFeedback: onSendFeedback)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -9378,9 +9501,194 @@ struct VerticalTabsSidebar: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    private func workspaceScrollArea(renderContext: WorkspaceListRenderContext) -> some View {
+        GeometryReader { geometryProxy in
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    workspaceScrollContent(
+                        renderContext: renderContext,
+                        minHeight: geometryProxy.size.height
+                    )
+                }
+                .background(
+                    SidebarScrollViewResolver { scrollView in
+                        dragAutoScrollController.attach(scrollView: scrollView)
+                    }
+                    .frame(width: 0, height: 0)
+                )
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    Color.clear
+                        .frame(height: workspaceScrollTopVisibilityInset)
+                        .allowsHitTesting(false)
+                }
+                .overlay(alignment: .top) {
+                    SidebarTopScrim(
+                        height: trafficLightPadding + 20,
+                        isSharingTerminalBackground: sidebarMatchTerminalBackground
+                    )
+                        .allowsHitTesting(false)
+                }
+                .overlay(alignment: .top) {
+                    // Match native titlebar behavior in the sidebar top strip:
+                    // drag-to-move and double-click action (zoom/minimize).
+                    WindowDragHandleView()
+                        .frame(height: trafficLightPadding)
+                        .background(TitlebarDoubleClickMonitorView())
+                }
+                .overlay(alignment: .topLeading) {
+                    if isMinimalMode {
+                        HiddenTitlebarSidebarControlsView(notificationStore: notificationStore)
+                            .padding(.leading, hiddenTitlebarControlsLeadingInset)
+                            .padding(.top, 2)
+                    }
+                }
+                .background(Color.clear)
+                .modifier(ClearScrollBackground())
+                .onAppear {
+                    requestSelectedWorkspaceScroll(scrollProxy, workspaceIds: renderContext.workspaceIds)
+                }
+                .onChange(of: tabManager.selectedTabId) { _, _ in
+                    requestSelectedWorkspaceScroll(scrollProxy, workspaceIds: renderContext.workspaceIds)
+                }
+                .onChange(of: renderContext.workspaceIds) { oldWorkspaceIds, newWorkspaceIds in
+                    guard shouldRequestSelectedWorkspaceScrollAfterWorkspaceIdsChange(
+                        from: oldWorkspaceIds,
+                        to: newWorkspaceIds
+                    ) else { return }
+                    requestSelectedWorkspaceScroll(scrollProxy, workspaceIds: newWorkspaceIds)
+                }
+                .onPreferenceChange(SidebarWorkspaceRowIdsPreferenceKey.self) { rowIds in
+                    laidOutWorkspaceRowIds = rowIds
+                    flushPendingSelectedWorkspaceScroll(scrollProxy, laidOutWorkspaceRowIds: rowIds)
+                }
+            }
+        }
+    }
+
+    private func workspaceScrollContent(
+        renderContext: WorkspaceListRenderContext,
+        minHeight: CGFloat
+    ) -> some View {
+        VStack(spacing: 0) {
+            workspaceRows(renderContext: renderContext)
+
+            SidebarEmptyArea(
+                rowSpacing: tabRowSpacing,
+                selection: $selection,
+                selectedTabIds: $selectedTabIds,
+                lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
+                dragAutoScrollController: dragAutoScrollController,
+                draggedTabId: $draggedTabId,
+                dropIndicator: $dropIndicator
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minHeight: minHeight, alignment: .top)
+    }
+
+    private func workspaceRows(renderContext: WorkspaceListRenderContext) -> some View {
+        // Workspaces are bounded, so prefer a non-lazy stack here.
+        // LazyVStack + drag-state invalidations can recurse through layout.
+        VStack(spacing: tabRowSpacing) {
+            ForEach(renderContext.tabs, id: \.id) { tab in
+                workspaceRow(tab, renderContext: renderContext)
+            }
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func workspaceRow(
+        _ tab: Workspace,
+        renderContext: WorkspaceListRenderContext
+    ) -> some View {
+        let index = renderContext.tabIndexById[tab.id] ?? 0
+        let usesSelectedContextMenuTargets = selectedTabIds.contains(tab.id)
+        let contextMenuWorkspaceIds = usesSelectedContextMenuTargets
+            ? renderContext.selectedContextTargetIds
+            : [tab.id]
+        let remoteContextMenuWorkspaceIds = usesSelectedContextMenuTargets
+            ? renderContext.selectedRemoteContextMenuWorkspaceIds
+            : (tab.isRemoteWorkspace ? [tab.id] : [])
+        let allRemoteContextMenuTargetsConnecting = usesSelectedContextMenuTargets
+            ? renderContext.allSelectedRemoteContextMenuTargetsConnecting
+            : (tab.isRemoteWorkspace && tab.remoteConnectionState == .connecting)
+        let allRemoteContextMenuTargetsDisconnected = usesSelectedContextMenuTargets
+            ? renderContext.allSelectedRemoteContextMenuTargetsDisconnected
+            : (tab.isRemoteWorkspace && tab.remoteConnectionState == .disconnected)
+        let allContextMenuWorkspacesHideTerminalScrollBar = !contextMenuWorkspaceIds.isEmpty &&
+            contextMenuWorkspaceIds.allSatisfy { workspaceId in
+                renderContext.workspaceTerminalScrollBarHiddenById[workspaceId] == true
+            }
+        let liveUnreadCount = notificationStore.unreadCount(forTabId: tab.id)
+        let liveLatestNotificationText: String? = {
+            guard showsSidebarNotificationMessage,
+                  let notification = notificationStore.latestNotification(forTabId: tab.id) else {
+                return nil
+            }
+            let text = notification.body.isEmpty ? notification.title : notification.body
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }()
+        let liveShowsModifierShortcutHints = modifierKeyMonitor.isModifierPressed
+        let livePresentation = SidebarTabItemPresentationSnapshot(
+            tabId: tab.id,
+            unreadCount: liveUnreadCount,
+            latestNotificationText: liveLatestNotificationText,
+            showsModifierShortcutHints: liveShowsModifierShortcutHints
+        )
+        let frozenPresentation = frozenTabItemPresentation?.tabId == tab.id
+            ? frozenTabItemPresentation
+            : nil
+
+        return TabItemView(
+            tabManager: tabManager,
+            notificationStore: notificationStore,
+            tab: tab,
+            index: index,
+            isActive: tabManager.selectedTabId == tab.id,
+            workspaceShortcutDigit: WorkspaceShortcutMapper.digitForWorkspace(
+                at: index,
+                workspaceCount: renderContext.workspaceCount
+            ),
+            workspaceShortcutModifierSymbol: renderContext.workspaceNumberShortcut.numberedDigitHintPrefix,
+            canCloseWorkspace: renderContext.canCloseWorkspace,
+            accessibilityWorkspaceCount: renderContext.workspaceCount,
+            unreadCount: frozenPresentation?.unreadCount ?? liveUnreadCount,
+            latestNotificationText: frozenPresentation?.latestNotificationText ?? liveLatestNotificationText,
+            rowSpacing: tabRowSpacing,
+            setSelectionToTabs: { selection = .tabs },
+            selectedTabIds: $selectedTabIds,
+            lastSidebarSelectionIndex: $lastSidebarSelectionIndex,
+            showsModifierShortcutHints: frozenPresentation?.showsModifierShortcutHints ?? liveShowsModifierShortcutHints,
+            dragAutoScrollController: dragAutoScrollController,
+            draggedTabId: $draggedTabId,
+            dropIndicator: $dropIndicator,
+            contextMenuWorkspaceIds: contextMenuWorkspaceIds,
+            remoteContextMenuWorkspaceIds: remoteContextMenuWorkspaceIds,
+            allRemoteContextMenuTargetsConnecting: allRemoteContextMenuTargetsConnecting,
+            allRemoteContextMenuTargetsDisconnected: allRemoteContextMenuTargetsDisconnected,
+            allContextMenuWorkspacesHideTerminalScrollBar: allContextMenuWorkspacesHideTerminalScrollBar,
+            settings: renderContext.tabItemSettings,
+            livePresentation: livePresentation,
+            frozenPresentation: $frozenTabItemPresentation
+        )
+        .equatable()
+        .id(tab.id)
+        .preference(key: SidebarWorkspaceRowIdsPreferenceKey.self, value: Set([tab.id]))
+    }
+
     private func debugShortSidebarTabId(_ id: UUID?) -> String {
         guard let id else { return "nil" }
         return String(id.uuidString.prefix(5))
+    }
+}
+
+private struct SidebarWorkspaceRowIdsPreferenceKey: PreferenceKey {
+    static let defaultValue: Set<UUID> = []
+
+    static func reduce(value: inout Set<UUID>, nextValue: () -> Set<UUID>) {
+        value.formUnion(nextValue())
     }
 }
 
@@ -9401,6 +9709,26 @@ enum ShortcutHintModifierPolicy {
         default:
             return false
         }
+    }
+
+    static func shouldShowControlHints(
+        for modifierFlags: NSEvent.ModifierFlags,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        let normalized = modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function, .capsLock])
+        guard normalized == [.control] else { return false }
+        return ShortcutHintDebugSettings.showHintsOnControlHoldEnabled(defaults: defaults)
+    }
+
+    static func shouldShowCommandHints(
+        for modifierFlags: NSEvent.ModifierFlags,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        let normalized = modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function, .capsLock])
+        guard normalized == [.command] else { return false }
+        return ShortcutHintDebugSettings.showHintsOnCommandHoldEnabled(defaults: defaults)
     }
 
     static func isCurrentWindow(
@@ -10107,10 +10435,32 @@ private struct SidebarExternalDropDelegate: DropDelegate {
     }
 }
 
+enum ShortcutHintModifierActivation {
+    case commandOrControl
+    case commandOnly
+    case controlOnly
+
+    func shouldShowHints(
+        for modifierFlags: NSEvent.ModifierFlags,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        switch self {
+        case .commandOrControl:
+            return ShortcutHintModifierPolicy.shouldShowHints(for: modifierFlags, defaults: defaults)
+        case .commandOnly:
+            return ShortcutHintModifierPolicy.shouldShowCommandHints(for: modifierFlags, defaults: defaults)
+        case .controlOnly:
+            return ShortcutHintModifierPolicy.shouldShowControlHints(for: modifierFlags, defaults: defaults)
+        }
+    }
+}
+
 @MainActor
-private final class SidebarShortcutHintModifierMonitor: ObservableObject {
+final class WindowScopedShortcutHintModifierMonitor: ObservableObject {
     @Published private(set) var isModifierPressed = false
 
+    private let activation: ShortcutHintModifierActivation
+    private let allowsHintsForWindow: (NSWindow) -> Bool
     private weak var hostWindow: NSWindow?
     private var hostWindowDidBecomeKeyObserver: NSObjectProtocol?
     private var hostWindowDidResignKeyObserver: NSObjectProtocol?
@@ -10118,6 +10468,14 @@ private final class SidebarShortcutHintModifierMonitor: ObservableObject {
     private var keyDownMonitor: Any?
     private var appResignObserver: NSObjectProtocol?
     private var pendingShowWorkItem: DispatchWorkItem?
+
+    init(
+        activation: ShortcutHintModifierActivation = .commandOrControl,
+        allowsHintsForWindow: @escaping (NSWindow) -> Bool = { _ in true }
+    ) {
+        self.activation = activation
+        self.allowsHintsForWindow = allowsHintsForWindow
+    }
 
     func setHostWindow(_ window: NSWindow?) {
         guard hostWindow !== window else { return }
@@ -10212,13 +10570,10 @@ private final class SidebarShortcutHintModifierMonitor: ObservableObject {
     }
 
     private func update(from modifierFlags: NSEvent.ModifierFlags, eventWindow: NSWindow?) {
-        guard ShortcutHintModifierPolicy.shouldShowHints(
-            for: modifierFlags,
-            hostWindowNumber: hostWindow?.windowNumber,
-            hostWindowIsKey: hostWindow?.isKeyWindow ?? false,
-            eventWindowNumber: eventWindow?.windowNumber,
-            keyWindowNumber: NSApp.keyWindow?.windowNumber
-        ) else {
+        guard let hostWindow,
+              isCurrentWindow(eventWindow: eventWindow),
+              allowsHintsForWindow(hostWindow),
+              activation.shouldShowHints(for: modifierFlags) else {
             cancelPendingHintShow(resetVisible: true)
             return
         }
@@ -10233,13 +10588,12 @@ private final class SidebarShortcutHintModifierMonitor: ObservableObject {
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingShowWorkItem = nil
-            guard ShortcutHintModifierPolicy.shouldShowHints(
-                for: NSEvent.modifierFlags,
-                hostWindowNumber: self.hostWindow?.windowNumber,
-                hostWindowIsKey: self.hostWindow?.isKeyWindow ?? false,
-                eventWindowNumber: nil,
-                keyWindowNumber: NSApp.keyWindow?.windowNumber
-            ) else { return }
+            guard let hostWindow = self.hostWindow,
+                  self.isCurrentWindow(eventWindow: nil),
+                  self.allowsHintsForWindow(hostWindow),
+                  self.activation.shouldShowHints(for: NSEvent.modifierFlags) else {
+                return
+            }
             self.isModifierPressed = true
         }
 
@@ -10250,7 +10604,7 @@ private final class SidebarShortcutHintModifierMonitor: ObservableObject {
     private func cancelPendingHintShow(resetVisible: Bool) {
         pendingShowWorkItem?.cancel()
         pendingShowWorkItem = nil
-        if resetVisible {
+        if resetVisible, isModifierPressed {
             isModifierPressed = false
         }
     }
@@ -11433,22 +11787,28 @@ private struct SidebarDevFooter: View {
 
 private struct SidebarTopScrim: View {
     let height: CGFloat
+    let isSharingTerminalBackground: Bool
 
     var body: some View {
-        SidebarTopBlurEffect()
-            .frame(height: height)
-            .mask(
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.95),
-                        Color.black.opacity(0.75),
-                        Color.black.opacity(0.35),
-                        Color.clear
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
+        if isSharingTerminalBackground {
+            Color.clear
+                .frame(height: height)
+        } else {
+            SidebarTopBlurEffect()
+                .frame(height: height)
+                .mask(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.95),
+                            Color.black.opacity(0.75),
+                            Color.black.opacity(0.35),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 )
-            )
+        }
     }
 }
 
@@ -12045,10 +12405,10 @@ private struct TabItemView: View, Equatable {
                                 x: ShortcutHintDebugSettings.clamped(sidebarShortcutHintXOffset),
                                 y: ShortcutHintDebugSettings.clamped(sidebarShortcutHintYOffset)
                             )
-                            .transition(.opacity)
+                            .shortcutHintTransition()
                     }
                 }
-                .animation(.easeOut(duration: 0.12), value: showsModifierShortcutHints || alwaysShowShortcutHints)
+                .shortcutHintVisibilityAnimation(value: showsWorkspaceShortcutHint)
                 .frame(width: trailingAccessoryWidth, height: 16, alignment: .trailing)
             }
 
@@ -14726,31 +15086,8 @@ private struct TitlebarLeadingInsetReader: NSViewRepresentable {
     }
 }
 
-/// 1px trailing border on the sidebar, derived from the terminal chrome background
-/// using the same logic as bonsplit's TabBarColors.nsColorSeparator:
-/// dark bg → lighten RGB by 0.16 at 0.36 alpha; light bg → darken by 0.12 at 0.26 alpha.
-private struct SidebarTrailingBorder: View {
-    @AppStorage("sidebarMatchTerminalBackground") private var matchTerminalBackground = false
-    @State private var separatorColor: NSColor = chromeSeparatorColor()
-
-    var body: some View {
-        if matchTerminalBackground {
-            Rectangle()
-                .fill(Color(nsColor: separatorColor))
-                .frame(width: 1)
-                .ignoresSafeArea()
-                .onAppear {
-                    separatorColor = Self.chromeSeparatorColor()
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .ghosttyDefaultBackgroundDidChange)) { _ in
-                    separatorColor = Self.chromeSeparatorColor()
-                }
-        }
-    }
-
-    /// Replicates bonsplit TabBarColors.nsColorSeparator derivation from chrome background.
-    private static func chromeSeparatorColor() -> NSColor {
-        let chrome = GhosttyBackgroundTheme.currentColor()
+enum WindowChromeSeparatorColor {
+    static func color(forChromeBackground chrome: NSColor) -> NSColor {
         let srgb = chrome.usingColorSpace(.sRGB) ?? chrome
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         srgb.getRed(&r, green: &g, blue: &b, alpha: &a)
@@ -14765,113 +15102,98 @@ private struct SidebarTrailingBorder: View {
             alpha: alpha
         )
     }
-}
 
-/// Sidebar background that uses the same technique as TitlebarLayerBackground:
-/// fully opaque layer color + layer-level opacity. This matches how the terminal's
-/// Metal surface composites its background.
-private struct SidebarTerminalBackgroundView: NSViewRepresentable {
-    let backgroundColor: NSColor
-    let opacity: CGFloat
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = backgroundColor.withAlphaComponent(1.0).cgColor
-        view.layer?.opacity = Float(opacity)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.layer?.backgroundColor = backgroundColor.withAlphaComponent(1.0).cgColor
-        nsView.layer?.opacity = Float(opacity)
+    static func current() -> NSColor {
+        color(forChromeBackground: GhosttyBackgroundTheme.currentColor())
     }
 }
 
-struct SidebarBackdrop: View {
-    @AppStorage("sidebarMatchTerminalBackground") private var matchTerminalBackground = false
-    @AppStorage("sidebarTintOpacity") private var sidebarTintOpacity = SidebarTintDefaults.opacity
-    @AppStorage("sidebarTintHex") private var sidebarTintHex = SidebarTintDefaults.hex
-    @AppStorage("sidebarTintHexLight") private var sidebarTintHexLight: String?
-    @AppStorage("sidebarTintHexDark") private var sidebarTintHexDark: String?
-    @AppStorage("sidebarMaterial") private var sidebarMaterial = SidebarMaterialOption.sidebar.rawValue
-    @AppStorage("sidebarBlendMode") private var sidebarBlendMode = SidebarBlendModeOption.withinWindow.rawValue
-    @AppStorage("sidebarState") private var sidebarState = SidebarStateOption.followWindow.rawValue
-    @AppStorage("sidebarCornerRadius") private var sidebarCornerRadius = 0.0
-    @AppStorage("sidebarBlurOpacity") private var sidebarBlurOpacity = 1.0
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var terminalBackgroundColor: NSColor = GhosttyApp.shared.defaultBackgroundColor
-    @State private var terminalBackgroundOpacity: Double = GhosttyApp.shared.defaultBackgroundOpacity
+struct WindowChromeBorder: View {
+    enum Orientation {
+        case vertical
+        case horizontal
+    }
+
+    let orientation: Orientation
+    var ignoresSafeArea = true
+    @State private var separatorColor = WindowChromeSeparatorColor.current()
 
     var body: some View {
-        let cornerRadius = CGFloat(max(0, sidebarCornerRadius))
-        let terminalBackground = SidebarTerminalBackgroundView(
-            backgroundColor: terminalBackgroundColor,
-            opacity: CGFloat(terminalBackgroundOpacity)
-        )
-
-        if matchTerminalBackground {
-            // The terminal background is provided by a single CALayer, so
-            // the sidebar uses the configured opacity directly.
-            return AnyView(
-                terminalBackground
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .onAppear(perform: refreshTerminalBackground)
-                .onReceive(NotificationCenter.default.publisher(for: .ghosttyDefaultBackgroundDidChange)) { _ in
-                    refreshTerminalBackground()
-                }
-            )
+        if ignoresSafeArea {
+            border.ignoresSafeArea()
+        } else {
+            border
         }
-
-        let materialOption = SidebarMaterialOption(rawValue: sidebarMaterial)
-        let blendingMode = SidebarBlendModeOption(rawValue: sidebarBlendMode)?.mode ?? .behindWindow
-        let state = SidebarStateOption(rawValue: sidebarState)?.state ?? .active
-        let resolvedHex: String = {
-            if colorScheme == .dark, let dark = sidebarTintHexDark {
-                return dark
-            } else if colorScheme == .light, let light = sidebarTintHexLight {
-                return light
-            }
-            return sidebarTintHex
-        }()
-        let tintColor = (NSColor(hex: resolvedHex) ?? NSColor(hex: sidebarTintHex) ?? .black).withAlphaComponent(sidebarTintOpacity)
-        let useLiquidGlass = materialOption?.usesLiquidGlass ?? false
-        let useWindowLevelGlass = useLiquidGlass && blendingMode == .behindWindow
-
-        return AnyView(
-            ZStack {
-                if let material = materialOption?.material {
-                    // When using liquidGlass + behindWindow, window handles glass + tint
-                    // Sidebar is fully transparent
-                    if !useWindowLevelGlass {
-                        SidebarVisualEffectBackground(
-                            material: material,
-                            blendingMode: blendingMode,
-                            state: state,
-                            opacity: sidebarBlurOpacity,
-                            tintColor: tintColor,
-                            cornerRadius: cornerRadius,
-                            preferLiquidGlass: useLiquidGlass
-                        )
-                        // Tint overlay for NSVisualEffectView fallback
-                        if !useLiquidGlass {
-                            Color(nsColor: tintColor)
-                        }
-                    }
-                }
-                // When material is none or useWindowLevelGlass, render nothing
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .onAppear(perform: refreshTerminalBackground)
-            .onReceive(NotificationCenter.default.publisher(for: .ghosttyDefaultBackgroundDidChange)) { _ in
-                refreshTerminalBackground()
-            }
-        )
     }
 
-    private func refreshTerminalBackground() {
-        terminalBackgroundColor = GhosttyApp.shared.defaultBackgroundColor
-        terminalBackgroundOpacity = GhosttyApp.shared.defaultBackgroundOpacity
+    private var border: some View {
+        Rectangle()
+            .fill(Color(nsColor: separatorColor))
+            .frame(
+                maxWidth: orientation == .horizontal ? .infinity : nil,
+                maxHeight: orientation == .vertical ? .infinity : nil
+            )
+            .frame(
+                width: orientation == .vertical ? 1 : nil,
+                height: orientation == .horizontal ? 1 : nil
+            )
+            .onAppear {
+                separatorColor = WindowChromeSeparatorColor.current()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .ghosttyDefaultBackgroundDidChange)) { _ in
+                separatorColor = WindowChromeSeparatorColor.current()
+            }
+    }
+}
+
+/// 1px trailing border on the sidebar, derived from the terminal chrome background.
+private struct SidebarTrailingBorder: View {
+    var body: some View {
+        WindowChromeBorder(orientation: .vertical)
+    }
+}
+
+private struct WindowBackdropLayer: View {
+    let role: WindowBackdropRole
+    let snapshot: WindowAppearanceSnapshot
+
+    var body: some View {
+        backdrop(for: snapshot.policy(for: role))
+    }
+
+    @ViewBuilder
+    private func backdrop(for policy: WindowBackdropPolicy) -> some View {
+        switch policy {
+        case let .ghosttyTerminalBackdrop(color, opacity, _):
+            // Renderer-owned background images currently cannot be shared outside
+            // the terminal Metal pass, so non-terminal roles use Ghostty's fallback
+            // color/opacity until cmux grows a host image backdrop renderer.
+            Color(nsColor: color.withAlphaComponent(opacity))
+        case let .sidebarMaterial(materialPolicy):
+            ZStack {
+                let usingNativeLiquidGlass = materialPolicy.preferLiquidGlass &&
+                    SidebarVisualEffectBackground.liquidGlassAvailable
+                if let material = materialPolicy.material,
+                   !materialPolicy.usesWindowLevelGlass {
+                    SidebarVisualEffectBackground(
+                        material: material,
+                        blendingMode: materialPolicy.blendingMode,
+                        state: materialPolicy.state,
+                        opacity: materialPolicy.opacity,
+                        tintColor: materialPolicy.tintColor,
+                        cornerRadius: materialPolicy.cornerRadius,
+                        preferLiquidGlass: materialPolicy.preferLiquidGlass
+                    )
+                }
+                // Tint overlay for tint-only materials and NSVisualEffectView
+                // fallback. Native liquid glass receives its tint in AppKit.
+                if !materialPolicy.usesWindowLevelGlass && !usingNativeLiquidGlass {
+                    Color(nsColor: materialPolicy.tintColor)
+                }
+            }
+        case .clear:
+            Color.clear
+        }
     }
 }
 

@@ -1798,8 +1798,12 @@ class GhosttyApp {
 
         // Load default config (includes user config). If this fails hard (e.g. due to
         // invalid user config), ghostty_app_new may return nil; we fall back below.
-        loadDefaultConfigFilesWithLegacyFallback(primaryConfig)
-        updateDefaultBackground(from: primaryConfig, source: "initialize.primaryConfig")
+        let primaryRenderingModeChanged = loadDefaultConfigFilesWithLegacyFallback(primaryConfig)
+        updateDefaultBackground(
+            from: primaryConfig,
+            source: "initialize.primaryConfig",
+            forceNotify: primaryRenderingModeChanged
+        )
 
         // Create runtime config with callbacks
         var runtimeConfig = ghostty_runtime_config_s()
@@ -1926,9 +1930,16 @@ class GhosttyApp {
                 prefix: "cmux-shell-integration-override",
                 logLabel: "shell integration override (fallback)"
             )
-            usesHostLayerBackground = true
+            let fallbackRenderingModeChanged = setUsesHostLayerBackground(
+                true,
+                source: "initialize.fallbackConfig"
+            )
             ghostty_config_finalize(fallbackConfig)
-            updateDefaultBackground(from: fallbackConfig, source: "initialize.fallbackConfig")
+            updateDefaultBackground(
+                from: fallbackConfig,
+                source: "initialize.fallbackConfig",
+                forceNotify: fallbackRenderingModeChanged
+            )
 
             guard let created = ghostty_app_new(&runtimeConfig, fallbackConfig) else {
                 #if DEBUG
@@ -2042,7 +2053,7 @@ class GhosttyApp {
         return !String(cString: backgroundImage).isEmpty
     }
 
-    private func loadDefaultConfigFilesWithLegacyFallback(_ config: ghostty_config_t) {
+    private func loadDefaultConfigFilesWithLegacyFallback(_ config: ghostty_config_t) -> Bool {
         #if DEBUG
         let startupPreviewProfile = GhosttyStartupAppearancePreviewState.profile
         if startupPreviewProfile.loadsRealUserConfig {
@@ -2067,7 +2078,10 @@ class GhosttyApp {
         #endif
         loadCJKFontFallbackIfNeeded(config)
         let useHostLayerBackground = !hasConfiguredBackgroundImage(config)
-        usesHostLayerBackground = useHostLayerBackground
+        let renderingModeChanged = setUsesHostLayerBackground(
+            useHostLayerBackground,
+            source: "loadDefaultConfigFilesWithLegacyFallback"
+        )
         if !useHostLayerBackground {
             // Background images need Ghostty's fullscreen background pass. Force
             // the layer-backed solid-color shortcut back off even if the user
@@ -2114,6 +2128,7 @@ class GhosttyApp {
         )
 
         ghostty_config_finalize(config)
+        return renderingModeChanged
     }
 
     /// When the user has not configured `font-codepoint-map` for CJK ranges
@@ -2907,12 +2922,13 @@ class GhosttyApp {
             logThemeAction("reload skipped source=\(source) soft=\(soft) reason=config_alloc_failed")
             return
         }
-        loadDefaultConfigFilesWithLegacyFallback(newConfig)
+        let renderingModeChanged = loadDefaultConfigFilesWithLegacyFallback(newConfig)
         ghostty_app_update_config(app, newConfig)
         updateDefaultBackground(
             from: newConfig,
             source: "reloadConfiguration(source=\(source))",
-            scope: .unscoped
+            scope: .unscoped,
+            forceNotify: renderingModeChanged
         )
         DispatchQueue.main.async {
             self.applyBackgroundToKeyWindow()
@@ -2995,10 +3011,24 @@ class GhosttyApp {
         }
     }
 
+    @discardableResult
+    private func setUsesHostLayerBackground(_ newValue: Bool, source: String) -> Bool {
+        let previous = usesHostLayerBackground
+        usesHostLayerBackground = newValue
+        let hasChanged = previous != newValue
+        if hasChanged, backgroundLogEnabled {
+            logBackground(
+                "terminal rendering mode changed source=\(source) usesHostLayerBackground=\(newValue) previous=\(previous)"
+            )
+        }
+        return hasChanged
+    }
+
     private func updateDefaultBackground(
         from config: ghostty_config_t?,
         source: String,
-        scope: GhosttyDefaultBackgroundUpdateScope = .unscoped
+        scope: GhosttyDefaultBackgroundUpdateScope = .unscoped,
+        forceNotify: Bool = false
     ) {
         guard let config else { return }
 
@@ -3022,7 +3052,8 @@ class GhosttyApp {
             color: resolvedColor,
             opacity: opacity,
             source: source,
-            scope: scope
+            scope: scope,
+            forceNotify: forceNotify
         )
     }
 
@@ -3108,7 +3139,8 @@ class GhosttyApp {
         color: NSColor,
         opacity: Double,
         source: String,
-        scope: GhosttyDefaultBackgroundUpdateScope
+        scope: GhosttyDefaultBackgroundUpdateScope,
+        forceNotify: Bool = false
     ) {
         let previousScope = defaultBackgroundUpdateScope
         let previousScopeSource = defaultBackgroundScopeSource
@@ -3128,14 +3160,15 @@ class GhosttyApp {
         let previousOpacity = defaultBackgroundOpacity
         defaultBackgroundColor = color
         defaultBackgroundOpacity = opacity
-        let hasChanged = previousHex != defaultBackgroundColor.hexString() ||
+        let hasChanged = forceNotify ||
+            previousHex != defaultBackgroundColor.hexString() ||
             abs(previousOpacity - defaultBackgroundOpacity) > 0.0001
         if hasChanged {
             notifyDefaultBackgroundDidChange(source: source)
         }
         if backgroundLogEnabled {
             logBackground(
-                "default background updated source=\(source) scope=\(scope.logLabel) previousScope=\(previousScope.logLabel) previousScopeSource=\(previousScopeSource) previousColor=\(previousHex) previousOpacity=\(String(format: "%.3f", previousOpacity)) color=\(defaultBackgroundColor) opacity=\(String(format: "%.3f", defaultBackgroundOpacity)) changed=\(hasChanged)"
+                "default background updated source=\(source) scope=\(scope.logLabel) previousScope=\(previousScope.logLabel) previousScopeSource=\(previousScopeSource) previousColor=\(previousHex) previousOpacity=\(String(format: "%.3f", previousOpacity)) color=\(defaultBackgroundColor) opacity=\(String(format: "%.3f", defaultBackgroundOpacity)) changed=\(hasChanged) forced=\(forceNotify)"
             )
         }
     }
@@ -5826,8 +5859,23 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
     }
 
     func applySurfaceBackground() {
-        let useHostLayerBackground = GhosttyApp.shared.usesHostLayerBackground
-        let color = useHostLayerBackground ? effectiveBackgroundColor() : .clear
+        let renderingMode = WindowAppearanceSnapshot.terminalRenderingMode(
+            usesHostLayerBackground: GhosttyApp.shared.usesHostLayerBackground
+        )
+        let sharesWindowBackdrop = Workspace.usesSharedSurfaceBackdrop()
+        let usesBonsplitPaneBackdrop = Workspace.usesBonsplitPaneTerminalBackdrop(
+            renderingMode: renderingMode,
+            sharesWindowBackdrop: sharesWindowBackdrop
+        )
+        // Window/Bonsplit backdrops are the single surface fill for solid-color
+        // terminal backgrounds. Painting the terminal host layer too
+        // double-composites it against the surrounding chrome.
+        let usesHostLayerFill = renderingMode.usesHostLayerFill &&
+            !sharesWindowBackdrop &&
+            !usesBonsplitPaneBackdrop
+        let color = usesHostLayerFill
+            ? effectiveBackgroundColor()
+            : .clear
         if let layer {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -5839,15 +5887,21 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         }
         terminalSurface?.hostedView.setBackgroundColor(color)
         if GhosttyApp.shared.backgroundLogEnabled {
-            let signature = "\(useHostLayerBackground ? color.hexString() : "ghostty-native"):\(String(format: "%.3f", color.alphaComponent))"
+            let signature = "\(usesHostLayerFill ? color.hexString() : "transparent-host"):\(String(format: "%.3f", color.alphaComponent)):\(sharesWindowBackdrop ? "shared" : (usesBonsplitPaneBackdrop ? "bonsplit-pane" : "terminal"))"
             if signature != lastLoggedSurfaceBackgroundSignature {
                 lastLoggedSurfaceBackgroundSignature = signature
                 let hasOverride = backgroundColor != nil
                 let overrideHex = backgroundColor?.hexString() ?? "nil"
                 let defaultHex = GhosttyApp.shared.defaultBackgroundColor.hexString()
-                let source = useHostLayerBackground ? (hasOverride ? "surfaceOverride" : "defaultBackground") : "ghosttyNativeBackground"
+                let source = usesHostLayerFill
+                    ? (hasOverride ? "surfaceOverride" : "defaultBackground")
+                    : (
+                        sharesWindowBackdrop
+                            ? "sharedWindowBackdrop"
+                            : (usesBonsplitPaneBackdrop ? "bonsplitPaneBackdrop" : "ghosttyNativeBackground")
+                    )
                 GhosttyApp.shared.logBackground(
-                    "surface background applied tab=\(tabId?.uuidString ?? "unknown") surface=\(terminalSurface?.id.uuidString ?? "unknown") source=\(source) override=\(overrideHex) default=\(defaultHex) color=\(color.hexString()) opacity=\(String(format: "%.3f", color.alphaComponent))"
+                    "surface background applied tab=\(tabId?.uuidString ?? "unknown") surface=\(terminalSurface?.id.uuidString ?? "unknown") source=\(source) override=\(overrideHex) default=\(defaultHex) sharedWindowBackdrop=\(sharesWindowBackdrop ? 1 : 0) bonsplitPaneBackdrop=\(usesBonsplitPaneBackdrop ? 1 : 0) color=\(color.hexString()) opacity=\(String(format: "%.3f", color.alphaComponent))"
                 )
             }
         }
@@ -6703,6 +6757,20 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         let result = super.becomeFirstResponder()
         var shouldApplySurfaceFocus = false
         if result {
+            if let terminalSurface,
+               AppDelegate.shared?.allowsTerminalKeyboardFocus(
+                   workspaceId: terminalSurface.tabId,
+                   panelId: terminalSurface.id,
+                   in: window
+               ) == false {
+                desiredFocus = false
+                terminalSurface.recordExternalFocusState(false)
+#if DEBUG
+                dlog("focus.firstResponder SUPPRESSED (coordinator) surface=\(terminalSurface.id.uuidString.prefix(5))")
+#endif
+                return result
+            }
+
             // If we become first responder before the ghostty surface exists (e.g. during
             // split/tab creation while the surface is still being created), record the desired focus.
             desiredFocus = true
@@ -7845,6 +7913,13 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         // Split reparent/layout churn can suppress the later `becomeFirstResponder -> onFocus`
         // callback. Treat pointer-down as explicit focus intent so clicking a ghost pane still
         // repairs workspace/pane active state before key routing runs.
+        if let terminalSurface {
+            AppDelegate.shared?.noteTerminalKeyboardFocusIntent(
+                workspaceId: terminalSurface.tabId,
+                panelId: terminalSurface.id,
+                in: window
+            )
+        }
         requestPointerFocusRecovery()
         window?.makeFirstResponder(self)
         if let terminalSurface {
@@ -10885,6 +10960,7 @@ final class GhosttySurfaceScrollView: NSView {
 #if DEBUG
             let before = String(describing: window.firstResponder)
 #endif
+            guard self.canRequestSurfaceFirstResponder(in: window, reason: "moveFocus") else { return }
             if let previous, previous !== self {
                 _ = previous.surfaceView.resignFirstResponder()
             }
@@ -11040,7 +11116,11 @@ final class GhosttySurfaceScrollView: NSView {
     }
     #endif
 
-    func ensureFocus(for tabId: UUID, surfaceId: UUID) {
+    func ensureFocus(
+        for tabId: UUID,
+        surfaceId: UUID,
+        respectForeignFirstResponder: Bool = true
+    ) {
         let hasUsablePortalGeometry: Bool = {
             let size = bounds.size
             return size.width > 1 && size.height > 1
@@ -11093,6 +11173,13 @@ final class GhosttySurfaceScrollView: NSView {
             return
         }
 
+        guard delegate.allowsTerminalKeyboardFocus(workspaceId: tabId, panelId: surfaceId, in: window) else {
+#if DEBUG
+            dlog("focus.ensure.skip surface=\(surfaceView.terminalSurface?.id.uuidString.prefix(5) ?? "nil") reason=coordinatorRightSidebar")
+#endif
+            return
+        }
+
         // Search focus restoration — only after confirming this is the active tab/pane.
         if surfaceView.terminalSurface?.searchState != nil {
 #if DEBUG
@@ -11109,6 +11196,20 @@ final class GhosttySurfaceScrollView: NSView {
         if let fr = window.firstResponder as? NSView,
            fr === surfaceView || fr.isDescendant(of: surfaceView) {
             reassertTerminalSurfaceFocus(reason: "ensureFocus.alreadyFirstResponder")
+            return
+        }
+
+        // Layout and visibility reconciliation can ask the active terminal to
+        // reassert focus after a sidebar/text owner has already accepted focus.
+        // Respect those explicit AppKit first responders unless the terminal
+        // surface already owns focus.
+        if respectForeignFirstResponder,
+           let firstResponder = window.firstResponder,
+           firstResponder is NSText || AppDelegate.shared?.isRightSidebarFocusResponder(firstResponder, in: window) == true {
+#if DEBUG
+            let reason = firstResponder is NSText ? "textEditorFocused" : "rightSidebarFocused"
+            dlog("focus.ensure.skip surface=\(surfaceView.terminalSurface?.id.uuidString.prefix(5) ?? "nil") reason=\(reason)")
+#endif
             return
         }
 
@@ -11138,6 +11239,16 @@ final class GhosttySurfaceScrollView: NSView {
         } else {
             reassertTerminalSurfaceFocus(reason: "ensureFocus.afterMakeFirstResponder")
         }
+    }
+
+    func yieldTerminalSurfaceFocusForForeignResponder(reason: String) {
+        surfaceView.desiredFocus = false
+        guard let terminalSurface = surfaceView.terminalSurface else { return }
+        terminalSurface.setFocus(false)
+#if DEBUG
+        dlog("focus.surface.yield surface=\(terminalSurface.id.uuidString.prefix(5)) reason=\(reason)")
+#endif
+        terminalSurface.forceRefresh(reason: "focus.surface.\(reason)")
     }
 
     private func matchesCurrentTerminalFocusTarget(tabId: UUID, surfaceId: UUID) -> Bool {
@@ -11194,7 +11305,8 @@ final class GhosttySurfaceScrollView: NSView {
                 "firstResponder=\(String(describing: window.firstResponder))"
             )
 #endif
-            guard window.makeFirstResponder(surfaceView), isSurfaceViewFirstResponder() else { return }
+            guard requestSurfaceFirstResponder(in: window, reason: "clearSuppressReparentFocus"),
+                  isSurfaceViewFirstResponder() else { return }
         }
 #if DEBUG
         cmuxDebugLog("focus.reparent.resume surface=\(surfaceShort) firstResponder=\(String(describing: window.firstResponder))")
@@ -11208,6 +11320,34 @@ final class GhosttySurfaceScrollView: NSView {
     func isSurfaceViewFirstResponder() -> Bool {
         guard let window, let fr = window.firstResponder as? NSView else { return false }
         return fr === surfaceView || fr.isDescendant(of: surfaceView)
+    }
+
+    private func canRequestSurfaceFirstResponder(in window: NSWindow, reason: String) -> Bool {
+        guard let terminalSurface = surfaceView.terminalSurface else {
+            return true
+        }
+        let allowed = AppDelegate.shared?.allowsTerminalKeyboardFocus(
+            workspaceId: terminalSurface.tabId,
+            panelId: terminalSurface.id,
+            in: window
+        ) ?? true
+#if DEBUG
+        if !allowed {
+            dlog(
+                "focus.apply.skip surface=\(terminalSurface.id.uuidString.prefix(5)) " +
+                "reason=\(reason).coordinatorRightSidebar"
+            )
+        }
+#endif
+        return allowed
+    }
+
+    @discardableResult
+    private func requestSurfaceFirstResponder(in window: NSWindow, reason: String) -> Bool {
+        guard canRequestSurfaceFirstResponder(in: window, reason: reason) else {
+            return false
+        }
+        return window.makeFirstResponder(surfaceView)
     }
 
     private func scheduleAutomaticFirstResponderApply(reason: String) {
@@ -11282,6 +11422,12 @@ final class GhosttySurfaceScrollView: NSView {
 #endif
             return
         }
+        if AppDelegate.shared?.allowsTerminalKeyboardFocus(workspaceId: tabId, panelId: panelId, in: window) == false {
+#if DEBUG
+            dlog("find.applyFirstResponder SKIP surface=\(surfaceShort) reason=coordinatorRightSidebar")
+#endif
+            return
+        }
         if AppDelegate.shared?.isCommandPaletteEffectivelyVisible(for: window) == true {
 #if DEBUG
             cmuxDebugLog("find.applyFirstResponder SKIP surface=\(surfaceShort) reason=commandPaletteVisible")
@@ -11305,14 +11451,14 @@ final class GhosttySurfaceScrollView: NSView {
 #endif
             return
         }
-        // Don't steal focus from an active text editor (NSTextField/NSTextView/field editor).
-        // The terminal surface uses its own GhosttyNSView for input, never NSText, so this is
-        // safe. Without this guard, a popover (e.g. session-index search) loses its text-field
-        // focus instantly because applyFirstResponderIfNeeded runs on a deferred async tick and
-        // sees the field editor as a "foreign" responder to clobber.
-        if window.firstResponder is NSText {
+        // Don't steal focus from active non-terminal input owners. The terminal surface uses its
+        // own GhosttyNSView for input, so NSText and the feed focus host are always foreign focus
+        // owners that should survive deferred terminal visibility applies.
+        if let firstResponder = window.firstResponder,
+           firstResponder is NSText || AppDelegate.shared?.isRightSidebarFocusResponder(firstResponder, in: window) == true {
 #if DEBUG
-            cmuxDebugLog("find.applyFirstResponder SKIP surface=\(surfaceShort) reason=textEditorFocused")
+            let reason = firstResponder is NSText ? "textEditorFocused" : "rightSidebarFocused"
+            cmuxDebugLog("find.applyFirstResponder SKIP surface=\(surfaceShort) reason=\(reason)")
 #endif
             return
         }
@@ -11372,7 +11518,7 @@ final class GhosttySurfaceScrollView: NSView {
             )
 #endif
         case .terminal:
-            let result = window.makeFirstResponder(surfaceView)
+            let result = requestSurfaceFirstResponder(in: window, reason: "restoreSearchFocus.terminal")
 #if DEBUG
             cmuxDebugLog(
                 "find.restoreSearchFocus surface=\(surfaceShort) target=terminal " +

@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import { getStackServerApp, isStackConfigured } from "../../lib/stack";
+import { notFound, redirect } from "next/navigation";
+import { stackServerApp } from "../../lib/stack";
 import { env } from "../../env";
 import { OpenNativeClient } from "./OpenNativeClient";
 
@@ -72,10 +72,12 @@ type Props = {
 };
 
 export default async function AfterSignInPage({ searchParams: searchParamsPromise }: Props) {
+  const projectId = env.NEXT_PUBLIC_STACK_PROJECT_ID;
+  if (!stackServerApp || !projectId) notFound();
+
   const stackCookies = await cookies();
-  const rawRefreshCookie = env.NEXT_PUBLIC_STACK_PROJECT_ID
-    ? findStackCookie(stackCookies, `stack-refresh-${env.NEXT_PUBLIC_STACK_PROJECT_ID}`)
-    : undefined;
+  const refreshBaseName = `stack-refresh-${projectId}`;
+  const rawRefreshCookie = findStackCookie(stackCookies, refreshBaseName);
   const rawAccessCookie = findStackCookie(stackCookies, "stack-access");
   const parsedAccess = decodeAccessCookie(rawAccessCookie);
   const parsedRefresh = decodeRefreshCookie(rawRefreshCookie);
@@ -85,18 +87,16 @@ export default async function AfterSignInPage({ searchParams: searchParamsPromis
   let accessCookie = rawAccessCookie ? (rawAccessCookie.includes("%") ? decodeURIComponent(rawAccessCookie) : rawAccessCookie) : undefined;
 
   // Create a fresh session to get valid tokens for the native app
-  if (isStackConfigured()) {
-    try {
-      const user = await getStackServerApp().getUser({ or: "return-null" });
-      if (user) {
-        const session = await user.createSession({ expiresInMillis: 30 * 24 * 60 * 60 * 1000 });
-        const tokens = await session.getTokens();
-        if (tokens.refreshToken) refreshToken = tokens.refreshToken;
-        if (tokens.accessToken) accessToken = tokens.accessToken;
-      }
-    } catch (error) {
-      console.error("[After Sign In] Failed to create fresh session", error);
+  try {
+    const user = await stackServerApp.getUser({ or: "return-null" });
+    if (user) {
+      const session = await user.createSession({ expiresInMillis: 30 * 24 * 60 * 60 * 1000 });
+      const tokens = await session.getTokens();
+      if (tokens.refreshToken) refreshToken = tokens.refreshToken;
+      if (tokens.accessToken) accessToken = tokens.accessToken;
     }
+  } catch (error) {
+    console.error("[After Sign In] Failed to create fresh session", error);
   }
 
   if (refreshToken && accessToken) {
