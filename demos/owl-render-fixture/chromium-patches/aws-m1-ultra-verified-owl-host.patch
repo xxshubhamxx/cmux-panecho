@@ -70,7 +70,7 @@ index 0530ac4075..d358a0d070 100644
  
  #endif  // CONTENT_BROWSER_RENDERER_HOST_POPUP_MENU_HELPER_MAC_H_
 diff --git a/content/browser/renderer_host/popup_menu_helper_mac.mm b/content/browser/renderer_host/popup_menu_helper_mac.mm
-index c56f5f4428..bc5235cffc 100644
+index c56f5f4428..f1ba8461ea 100644
 --- a/content/browser/renderer_host/popup_menu_helper_mac.mm
 +++ b/content/browser/renderer_host/popup_menu_helper_mac.mm
 @@ -4,6 +4,10 @@
@@ -130,7 +130,7 @@ index c56f5f4428..bc5235cffc 100644
 +  if (base::CommandLine::ForCurrentProcess()->HasSwitch("fresh-owl-embed")) {
 +    const int row_height =
 +        std::max(28, static_cast<int>(std::ceil(item_font_size + 12)));
-+    gfx::Rect popup_bounds(bounds_in_screen.x(), bounds_in_screen.bottom(),
++    gfx::Rect popup_bounds(bounds.x(), bounds.bottom(),
 +                           std::max(bounds_in_screen.width(), 260),
 +                           std::max(row_height, row_height *
 +                                                    static_cast<int>(items.size()) +
@@ -220,7 +220,7 @@ index bdf3d9ca41..71e8799f76 100644
            kGpuMemoryBufferReadbackFromTextureForceDisabledForDebugging,
        blink::switches::kMinHeightForGpuRasterTile,
 diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
-index 63041c4311..88fa566bc6 100644
+index 63041c4311..e28f3a5f01 100644
 --- a/content/browser/renderer_host/render_widget_host_view_mac.mm
 +++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
 @@ -84,6 +84,7 @@
@@ -231,7 +231,7 @@ index 63041c4311..88fa566bc6 100644
  
  using blink::WebInputEvent;
  using blink::WebMouseEvent;
-@@ -181,8 +182,24 @@
+@@ -181,8 +182,27 @@
    // Update the contents that the NSView is displaying.
    const gfx::CALayerParams* ca_layer_params =
        browser_compositor_->GetLastCALayerParams();
@@ -248,7 +248,10 @@ index 63041c4311..88fa566bc6 100644
 +          popup_parent_host_view_ ? ui::OwlFreshSurfaceKind::kPopupWidget
 +                                  : ui::OwlFreshSurfaceKind::kWebView,
 +          ca_layer_params->ca_context_id,
-+          CGRectMake(bounds.x(), bounds.y(), bounds.width(), bounds.height()),
++          popup_parent_host_view_
++              ? CGRectMake(bounds.x(), bounds.y(), bounds.width(),
++                           bounds.height())
++              : CGRectMake(0, 0, bounds.width(), bounds.height()),
 +          ca_layer_params->scale_factor, true,
 +          popup_parent_host_view_ ? "popup-widget" : "web-view");
 +    }
@@ -257,7 +260,7 @@ index 63041c4311..88fa566bc6 100644
  }
  
  ////////////////////////////////////////////////////////////////////////////////
-@@ -275,6 +292,9 @@
+@@ -275,6 +295,9 @@
  }
  
  RenderWidgetHostViewMac::~RenderWidgetHostViewMac() {
@@ -267,7 +270,7 @@ index 63041c4311..88fa566bc6 100644
    if (popup_parent_host_view_) {
      DCHECK(!popup_parent_host_view_->popup_child_host_view_ ||
             popup_parent_host_view_->popup_child_host_view_ == this);
-@@ -510,6 +530,9 @@
+@@ -510,6 +533,9 @@
  
  void RenderWidgetHostViewMac::Hide() {
    is_visible_ = false;
@@ -277,7 +280,7 @@ index 63041c4311..88fa566bc6 100644
    ns_view_->SetVisible(is_visible_);
    browser_compositor_->SetViewVisible(is_visible_);
    WasOccluded();
-@@ -589,6 +612,9 @@
+@@ -589,6 +615,9 @@
  }
  
  void RenderWidgetHostViewMac::WasOccluded() {
@@ -287,7 +290,7 @@ index 63041c4311..88fa566bc6 100644
    if (host()->IsHidden()) {
      return;
    }
-@@ -656,6 +682,9 @@
+@@ -656,6 +685,9 @@
  }
  
  bool RenderWidgetHostViewMac::HasFocus() {
@@ -297,7 +300,7 @@ index 63041c4311..88fa566bc6 100644
    return is_first_responder_;
  }
  
-@@ -1825,13 +1854,15 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+@@ -1825,13 +1857,15 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
    // - Losing focus:
    //   - Only when the host is currently focused.
    //   This prevents duplicate LostFocus notifications.
@@ -315,7 +318,7 @@ index 63041c4311..88fa566bc6 100644
        SetTextInputActive(false);
        host()->LostFocus();
      }
-@@ -1839,6 +1870,9 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+@@ -1839,6 +1873,9 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
  }
  
  void RenderWidgetHostViewMac::OnWindowIsKeyChanged(bool is_key) {
@@ -1543,7 +1546,7 @@ index 274dffa179..1cc5a230f0 100644
    shell_data.delegate = delegate;
  }
 diff --git a/content/shell/browser/shell_web_contents_view_delegate_mac.mm b/content/shell/browser/shell_web_contents_view_delegate_mac.mm
-index b11f388bcd..b281455ab2 100644
+index b11f388bcd..a5b8baec36 100644
 --- a/content/shell/browser/shell_web_contents_view_delegate_mac.mm
 +++ b/content/shell/browser/shell_web_contents_view_delegate_mac.mm
 @@ -6,7 +6,10 @@
@@ -1585,17 +1588,12 @@ index b11f388bcd..b281455ab2 100644
  }  // namespace
  
  namespace content {
-@@ -204,6 +221,24 @@ - (void)itemSelected:(id)sender {
+@@ -204,6 +221,19 @@ - (void)itemSelected:(id)sender {
                        YES,
                        delegate);
  
 +  if (base::CommandLine::ForCurrentProcess()->HasSwitch("fresh-owl-embed")) {
-+    gfx::Rect view_bounds = web_contents_->GetRenderWidgetHostView()
-+                                ? web_contents_->GetRenderWidgetHostView()
-+                                      ->GetViewBounds()
-+                                : gfx::Rect();
-+    gfx::Rect popup_bounds(view_bounds.x() + params.x,
-+                           view_bounds.y() + params.y, 260,
++    gfx::Rect popup_bounds(params.x, params.y, 260,
 +                           std::max(36, 34 * static_cast<int>(menu.numberOfItems) +
 +                                            8));
 +    ui::OwlFreshPublishNativeMenuSurface(

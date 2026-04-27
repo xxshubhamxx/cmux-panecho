@@ -17,6 +17,29 @@ STDERR_LOG="/tmp/owl-layer-real-$$.err"
 UID_VALUE="$(id -u)"
 APP_DIR="/tmp/OwlLayerHostVerifier-$LABEL.app"
 
+cleanup_stale_owl_hosts() {
+  local pids
+  pids="$(pgrep -f "Content Shell.*--fresh-owl-embed" 2>/dev/null || true)"
+  if [ -z "$pids" ]; then
+    return
+  fi
+
+  kill $pids 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    pids="$(pgrep -f "Content Shell.*--fresh-owl-embed" 2>/dev/null || true)"
+    if [ -z "$pids" ]; then
+      return
+    fi
+    sleep 0.1
+  done
+  kill -9 $pids 2>/dev/null || true
+}
+
+cleanup_run_artifacts() {
+  launchctl bootout "gui/$UID_VALUE/$LABEL" 2>/dev/null || true
+  cleanup_stale_owl_hosts
+}
+
 if [ ! -x "$HOST" ]; then
   echo "Missing Chromium host executable: $HOST" >&2
   exit 1
@@ -30,6 +53,8 @@ fi
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR" "$HOME/Library/LaunchAgents"
 rm -f "$STDOUT_LOG" "$STDERR_LOG"
+cleanup_stale_owl_hosts
+trap cleanup_run_artifacts EXIT
 
 cd "$ROOT_DIR"
 swift build -c release --product OwlLayerHostVerifier
@@ -144,7 +169,8 @@ for ((i = 0; i < WAIT_SECONDS; i++)); do
   fi
   sleep 1
 done
-launchctl bootout "gui/$UID_VALUE/$LABEL" 2>/dev/null || true
+cleanup_run_artifacts
+trap - EXIT
 
 echo "== stdout =="
 cat "$STDOUT_LOG" 2>/dev/null || true

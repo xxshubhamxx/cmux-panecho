@@ -28,6 +28,62 @@ public enum OwlFreshGeneratedMojoTransport {
     public static let name = "GeneratedOwlFreshMojoTransport"
 }
 
+private enum MojoJSONCoding {
+    static func decodeUInt8<Key: CodingKey>(from container: KeyedDecodingContainer<Key>, forKey key: Key) throws -> UInt8 {
+        if let value = try? container.decode(UInt8.self, forKey: key) {
+            return value
+        }
+        if let value = try? container.decode(Int64.self, forKey: key) {
+            if value >= 0, value <= Int64(UInt8.max) {
+                return UInt8(value)
+            }
+            guard let signed = Int8(exactly: value) else {
+                throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "signed value cannot wrap to UInt8")
+            }
+            return UInt8(bitPattern: signed)
+        }
+        if let value = try? container.decode(String.self, forKey: key), let parsed = UInt8(value) {
+            return parsed
+        }
+        throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "expected UInt8-compatible value")
+    }
+
+    static func decodeUInt32<Key: CodingKey>(from container: KeyedDecodingContainer<Key>, forKey key: Key) throws -> UInt32 {
+        if let value = try? container.decode(UInt32.self, forKey: key) {
+            return value
+        }
+        if let value = try? container.decode(Int64.self, forKey: key) {
+            if value >= 0, value <= Int64(UInt32.max) {
+                return UInt32(value)
+            }
+            guard let signed = Int32(exactly: value) else {
+                throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "signed value cannot wrap to UInt32")
+            }
+            return UInt32(bitPattern: signed)
+        }
+        if let value = try? container.decode(String.self, forKey: key), let parsed = UInt32(value) {
+            return parsed
+        }
+        throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "expected UInt32-compatible value")
+    }
+
+    static func decodeUInt64<Key: CodingKey>(from container: KeyedDecodingContainer<Key>, forKey key: Key) throws -> UInt64 {
+        if let value = try? container.decode(UInt64.self, forKey: key) {
+            return value
+        }
+        if let value = try? container.decode(Int64.self, forKey: key) {
+            if value >= 0 {
+                return UInt64(value)
+            }
+            return UInt64(bitPattern: value)
+        }
+        if let value = try? container.decode(String.self, forKey: key), let parsed = UInt64(value) {
+            return parsed
+        }
+        throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: "expected UInt64-compatible value")
+    }
+}
+
 public enum OwlFreshMouseKind: UInt32, Codable, CaseIterable {
     case down = 0
     case up = 1
@@ -55,6 +111,41 @@ public struct OwlFreshMouseEvent: Equatable, Codable {
         self.deltaY = deltaY
         self.modifiers = modifiers
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.kind = try container.decode(OwlFreshMouseKind.self, forKey: .kind)
+        self.x = try container.decode(Float.self, forKey: .x)
+        self.y = try container.decode(Float.self, forKey: .y)
+        self.button = try MojoJSONCoding.decodeUInt32(from: container, forKey: .button)
+        self.clickCount = try MojoJSONCoding.decodeUInt32(from: container, forKey: .clickCount)
+        self.deltaX = try container.decode(Float.self, forKey: .deltaX)
+        self.deltaY = try container.decode(Float.self, forKey: .deltaY)
+        self.modifiers = try MojoJSONCoding.decodeUInt32(from: container, forKey: .modifiers)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(x, forKey: .x)
+        try container.encode(y, forKey: .y)
+        try container.encode(button, forKey: .button)
+        try container.encode(clickCount, forKey: .clickCount)
+        try container.encode(deltaX, forKey: .deltaX)
+        try container.encode(deltaY, forKey: .deltaY)
+        try container.encode(modifiers, forKey: .modifiers)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case x
+        case y
+        case button
+        case clickCount
+        case deltaX
+        case deltaY
+        case modifiers
+    }
 }
 
 public struct OwlFreshKeyEvent: Equatable, Codable {
@@ -69,6 +160,29 @@ public struct OwlFreshKeyEvent: Equatable, Codable {
         self.text = text
         self.modifiers = modifiers
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.keyDown = try container.decode(Bool.self, forKey: .keyDown)
+        self.keyCode = try MojoJSONCoding.decodeUInt32(from: container, forKey: .keyCode)
+        self.text = try container.decode(String.self, forKey: .text)
+        self.modifiers = try MojoJSONCoding.decodeUInt32(from: container, forKey: .modifiers)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(keyDown, forKey: .keyDown)
+        try container.encode(keyCode, forKey: .keyCode)
+        try container.encode(text, forKey: .text)
+        try container.encode(modifiers, forKey: .modifiers)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case keyDown
+        case keyCode
+        case text
+        case modifiers
+    }
 }
 
 public struct OwlFreshCompositorInfo: Equatable, Codable {
@@ -76,6 +190,20 @@ public struct OwlFreshCompositorInfo: Equatable, Codable {
 
     public init(contextId: UInt32) {
         self.contextId = contextId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.contextId = try MojoJSONCoding.decodeUInt32(from: container, forKey: .contextId)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(contextId, forKey: .contextId)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case contextId
     }
 }
 
@@ -117,6 +245,59 @@ public struct OwlFreshSurfaceInfo: Equatable, Codable {
         self.selectedIndex = selectedIndex
         self.label = label
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.surfaceId = try MojoJSONCoding.decodeUInt64(from: container, forKey: .surfaceId)
+        self.parentSurfaceId = try MojoJSONCoding.decodeUInt64(from: container, forKey: .parentSurfaceId)
+        self.kind = try container.decode(OwlFreshSurfaceKind.self, forKey: .kind)
+        self.contextId = try MojoJSONCoding.decodeUInt32(from: container, forKey: .contextId)
+        self.x = try container.decode(Int32.self, forKey: .x)
+        self.y = try container.decode(Int32.self, forKey: .y)
+        self.width = try MojoJSONCoding.decodeUInt32(from: container, forKey: .width)
+        self.height = try MojoJSONCoding.decodeUInt32(from: container, forKey: .height)
+        self.scale = try container.decode(Float.self, forKey: .scale)
+        self.zIndex = try container.decode(Int32.self, forKey: .zIndex)
+        self.visible = try container.decode(Bool.self, forKey: .visible)
+        self.menuItems = try container.decode([String].self, forKey: .menuItems)
+        self.selectedIndex = try container.decode(Int32.self, forKey: .selectedIndex)
+        self.label = try container.decode(String.self, forKey: .label)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(surfaceId, forKey: .surfaceId)
+        try container.encode(parentSurfaceId, forKey: .parentSurfaceId)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(contextId, forKey: .contextId)
+        try container.encode(x, forKey: .x)
+        try container.encode(y, forKey: .y)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(scale, forKey: .scale)
+        try container.encode(zIndex, forKey: .zIndex)
+        try container.encode(visible, forKey: .visible)
+        try container.encode(menuItems, forKey: .menuItems)
+        try container.encode(selectedIndex, forKey: .selectedIndex)
+        try container.encode(label, forKey: .label)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case surfaceId
+        case parentSurfaceId
+        case kind
+        case contextId
+        case x
+        case y
+        case width
+        case height
+        case scale
+        case zIndex
+        case visible
+        case menuItems
+        case selectedIndex
+        case label
+    }
 }
 
 public struct OwlFreshSurfaceTree: Equatable, Codable {
@@ -126,6 +307,23 @@ public struct OwlFreshSurfaceTree: Equatable, Codable {
     public init(generation: UInt64, surfaces: [OwlFreshSurfaceInfo]) {
         self.generation = generation
         self.surfaces = surfaces
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.generation = try MojoJSONCoding.decodeUInt64(from: container, forKey: .generation)
+        self.surfaces = try container.decode([OwlFreshSurfaceInfo].self, forKey: .surfaces)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(generation, forKey: .generation)
+        try container.encode(surfaces, forKey: .surfaces)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generation
+        case surfaces
     }
 }
 
@@ -142,6 +340,32 @@ public struct OwlFreshCaptureResult: Equatable, Codable {
         self.height = height
         self.captureMode = captureMode
         self.error = error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.png = try container.decode([UInt8].self, forKey: .png)
+        self.width = try MojoJSONCoding.decodeUInt32(from: container, forKey: .width)
+        self.height = try MojoJSONCoding.decodeUInt32(from: container, forKey: .height)
+        self.captureMode = try container.decode(String.self, forKey: .captureMode)
+        self.error = try container.decode(String.self, forKey: .error)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(png, forKey: .png)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(captureMode, forKey: .captureMode)
+        try container.encode(error, forKey: .error)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case png
+        case width
+        case height
+        case captureMode
+        case error
     }
 }
 
@@ -164,6 +388,23 @@ public struct OwlFreshClientOnReadyRequest: Equatable, Codable {
         self.hostPid = hostPid
         self.compositor = compositor
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.hostPid = try container.decode(Int32.self, forKey: .hostPid)
+        self.compositor = try container.decode(OwlFreshCompositorInfo.self, forKey: .compositor)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(hostPid, forKey: .hostPid)
+        try container.encode(compositor, forKey: .compositor)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hostPid
+        case compositor
+    }
 }
 
 public struct OwlFreshClientOnNavigationChangedRequest: Equatable, Codable {
@@ -175,6 +416,26 @@ public struct OwlFreshClientOnNavigationChangedRequest: Equatable, Codable {
         self.url = url
         self.title = title
         self.loading = loading
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.url = try container.decode(String.self, forKey: .url)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.loading = try container.decode(Bool.self, forKey: .loading)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(url, forKey: .url)
+        try container.encode(title, forKey: .title)
+        try container.encode(loading, forKey: .loading)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case url
+        case title
+        case loading
     }
 }
 
@@ -259,6 +520,26 @@ public struct OwlFreshHostResizeRequest: Equatable, Codable {
         self.width = width
         self.height = height
         self.scale = scale
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.width = try MojoJSONCoding.decodeUInt32(from: container, forKey: .width)
+        self.height = try MojoJSONCoding.decodeUInt32(from: container, forKey: .height)
+        self.scale = try container.decode(Float.self, forKey: .scale)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(scale, forKey: .scale)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case width
+        case height
+        case scale
     }
 }
 

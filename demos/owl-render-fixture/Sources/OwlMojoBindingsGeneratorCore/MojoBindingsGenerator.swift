@@ -430,6 +430,62 @@ public enum MojoSwiftGenerator {
             "    public static let name = \"GeneratedOwlFreshMojoTransport\"",
             "}",
             "",
+            "private enum MojoJSONCoding {",
+            "    static func decodeUInt8<Key: CodingKey>(from container: KeyedDecodingContainer<Key>, forKey key: Key) throws -> UInt8 {",
+            "        if let value = try? container.decode(UInt8.self, forKey: key) {",
+            "            return value",
+            "        }",
+            "        if let value = try? container.decode(Int64.self, forKey: key) {",
+            "            if value >= 0, value <= Int64(UInt8.max) {",
+            "                return UInt8(value)",
+            "            }",
+            "            guard let signed = Int8(exactly: value) else {",
+            "                throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: \"signed value cannot wrap to UInt8\")",
+            "            }",
+            "            return UInt8(bitPattern: signed)",
+            "        }",
+            "        if let value = try? container.decode(String.self, forKey: key), let parsed = UInt8(value) {",
+            "            return parsed",
+            "        }",
+            "        throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: \"expected UInt8-compatible value\")",
+            "    }",
+            "",
+            "    static func decodeUInt32<Key: CodingKey>(from container: KeyedDecodingContainer<Key>, forKey key: Key) throws -> UInt32 {",
+            "        if let value = try? container.decode(UInt32.self, forKey: key) {",
+            "            return value",
+            "        }",
+            "        if let value = try? container.decode(Int64.self, forKey: key) {",
+            "            if value >= 0, value <= Int64(UInt32.max) {",
+            "                return UInt32(value)",
+            "            }",
+            "            guard let signed = Int32(exactly: value) else {",
+            "                throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: \"signed value cannot wrap to UInt32\")",
+            "            }",
+            "            return UInt32(bitPattern: signed)",
+            "        }",
+            "        if let value = try? container.decode(String.self, forKey: key), let parsed = UInt32(value) {",
+            "            return parsed",
+            "        }",
+            "        throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: \"expected UInt32-compatible value\")",
+            "    }",
+            "",
+            "    static func decodeUInt64<Key: CodingKey>(from container: KeyedDecodingContainer<Key>, forKey key: Key) throws -> UInt64 {",
+            "        if let value = try? container.decode(UInt64.self, forKey: key) {",
+            "            return value",
+            "        }",
+            "        if let value = try? container.decode(Int64.self, forKey: key) {",
+            "            if value >= 0 {",
+            "                return UInt64(value)",
+            "            }",
+            "            return UInt64(bitPattern: value)",
+            "        }",
+            "        if let value = try? container.decode(String.self, forKey: key), let parsed = UInt64(value) {",
+            "            return parsed",
+            "        }",
+            "        throw DecodingError.dataCorruptedError(forKey: key, in: container, debugDescription: \"expected UInt64-compatible value\")",
+            "    }",
+            "}",
+            "",
         ]
 
         for declaration in file.declarations {
@@ -477,8 +533,44 @@ public enum MojoSwiftGenerator {
             lines.append("        self.\(property) = \(property)")
         }
         lines.append("    }")
+        lines.append("")
+        lines.append("    public init(from decoder: Decoder) throws {")
+        lines.append("        let container = try decoder.container(keyedBy: CodingKeys.self)")
+        for field in fields {
+            let property = swiftPropertyName(field.name)
+            lines.append("        self.\(property) = \(decodeExpression(type: field.type, property: property))")
+        }
+        lines.append("    }")
+        lines.append("")
+        lines.append("    public func encode(to encoder: Encoder) throws {")
+        lines.append("        var container = encoder.container(keyedBy: CodingKeys.self)")
+        for field in fields {
+            let property = swiftPropertyName(field.name)
+            lines.append("        try container.encode(\(property), forKey: .\(property))")
+        }
+        lines.append("    }")
+        lines.append("")
+        lines.append("    private enum CodingKeys: String, CodingKey {")
+        for field in fields {
+            let property = swiftPropertyName(field.name)
+            lines.append("        case \(property)")
+        }
+        lines.append("    }")
         lines.append("}")
         return lines.joined(separator: "\n")
+    }
+
+    private static func decodeExpression(type: MojoType, property: String) -> String {
+        switch type {
+        case .primitive("uint8"):
+            return "try MojoJSONCoding.decodeUInt8(from: container, forKey: .\(property))"
+        case .primitive("uint32"):
+            return "try MojoJSONCoding.decodeUInt32(from: container, forKey: .\(property))"
+        case .primitive("uint64"):
+            return "try MojoJSONCoding.decodeUInt64(from: container, forKey: .\(property))"
+        default:
+            return "try container.decode(\(type.swiftName).self, forKey: .\(property))"
+        }
     }
 
     private static func generateInterface(_ interface: MojoInterface) -> String {

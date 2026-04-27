@@ -117,6 +117,37 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
         XCTAssertEqual(transport.recordedCalls[6].payloadType, "UInt32")
     }
 
+    func testGeneratedSurfaceTreeDecodesWrappedUnsignedContextID() throws {
+        let json = """
+        {
+          "generation": 1,
+          "surfaces": [
+            {
+              "surfaceId": 2,
+              "parentSurfaceId": 0,
+              "kind": 0,
+              "contextId": -603416498,
+              "x": 0,
+              "y": 0,
+              "width": 960,
+              "height": 640,
+              "scale": 1,
+              "zIndex": 0,
+              "visible": true,
+              "menuItems": [],
+              "selectedIndex": -1,
+              "label": "web-view"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let tree = try JSONDecoder().decode(OwlFreshSurfaceTree.self, from: json)
+
+        XCTAssertEqual(tree.surfaces.first?.contextId, UInt32(bitPattern: Int32(-603_416_498)))
+        XCTAssertEqual(tree.surfaces.first?.contextId, 3_691_550_798)
+    }
+
     private let sampleMojo = """
     module content.mojom;
 

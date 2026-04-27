@@ -56,8 +56,14 @@ private enum InputAction {
     case waitForJavaScript(label: String, script: String, expectations: [JavaScriptExpectation])
     case waitForSurfaceTree(label: String, expectations: [SurfaceTreeExpectation])
     case captureWindow(name: String, expected: Set<ExpectedPixel>)
+    case captureNativeMenu(label: String, name: String, expected: Set<ExpectedPixel>, response: NativeMenuResponse)
     case acceptActivePopupMenuItem(UInt32)
     case cancelActivePopup
+}
+
+private enum NativeMenuResponse {
+    case accept(UInt32)
+    case cancel
 }
 
 private struct JavaScriptExpectation {
@@ -827,7 +833,7 @@ private final class LayerHostRunner {
                         ),
                         .mouseClick(MouseClick(x: 188, y: 190)),
                         .mouseClick(MouseClick(x: 330, y: 312, button: 2)),
-                        .key(OwlFreshKeyEvent(keyDown: true, keyCode: KeyCodes.escape, text: "", modifiers: 0)),
+                        .cancelActivePopup,
                         .mouseClick(MouseClick(x: 192, y: 470)),
                         .key(OwlFreshKeyEvent(keyDown: true, keyCode: KeyCodes.escape, text: "", modifiers: 0)),
                     ],
@@ -880,8 +886,12 @@ private final class LayerHostRunner {
                                 ),
                             ]
                         ),
-                        .captureWindow(name: "native-select-popup-open.png", expected: [.blue, .dark, .light]),
-                        .acceptActivePopupMenuItem(1),
+                        .captureNativeMenu(
+                            label: "select-menu",
+                            name: "native-select-popup-open.png",
+                            expected: [.dark, .light, .nonWhite],
+                            response: .accept(1)
+                        ),
                         .waitForJavaScript(
                             label: "native select accepted",
                             script: """
@@ -904,8 +914,12 @@ private final class LayerHostRunner {
                                 ),
                             ]
                         ),
-                        .captureWindow(name: "native-context-menu-open.png", expected: [.blue, .dark, .light]),
-                        .cancelActivePopup,
+                        .captureNativeMenu(
+                            label: "context-menu",
+                            name: "native-context-menu-open.png",
+                            expected: [.dark, .light, .nonWhite],
+                            response: .cancel
+                        ),
                     ],
                     postInputDiagnosticScript: """
                     ({
@@ -1063,8 +1077,7 @@ private final class LayerHostRunner {
                 events: sessionEvents,
                 runtime: runtime,
                 hostController: hostController,
-                app: app,
-                fallbackAfterGeneration: baseline.contextGeneration
+                app: app
             )
         }
         let window = try LayerHostWindow(
@@ -1103,7 +1116,7 @@ private final class LayerHostRunner {
             window.flushHostedLayer()
 
             let snapshot = sessionEvents.snapshot()
-            if snapshot.contextID != 0, snapshot.contextID != contextID {
+            if useLayerFixture, snapshot.contextID != 0, snapshot.contextID != contextID {
                 contextID = snapshot.contextID
                 window.update(contextID: contextID)
                 pumpApp(app, for: 0.05)
@@ -1283,11 +1296,9 @@ private final class LayerHostRunner {
         events: SessionEvents,
         runtime: OwlFreshMojoRuntime,
         hostController: OwlFreshMojoHostController,
-        app: NSApplication,
-        fallbackAfterGeneration: UInt64
+        app: NSApplication
     ) throws -> UInt32 {
-        let deadline = Date().addingTimeInterval(min(6, options.timeout))
-        var fallbackContextID: UInt32?
+        let deadline = Date().addingTimeInterval(min(10, options.timeout))
         var lastTree: OwlFreshSurfaceTree?
         var lastError = ""
         while Date() < deadline {
@@ -1304,14 +1315,6 @@ private final class LayerHostRunner {
             } catch {
                 lastError = String(describing: error)
             }
-            let snapshot = events.snapshot()
-            if snapshot.contextID != 0,
-               snapshot.contextGeneration > fallbackAfterGeneration {
-                fallbackContextID = snapshot.contextID
-            }
-        }
-        if let fallbackContextID {
-            return fallbackContextID
         }
         throw VerifierError.timeout(
             "timed out waiting for \(name) initial web-view surface; lastTree=\(String(describing: lastTree)); lastError=\(lastError); events=\(events.snapshot())"
@@ -1468,6 +1471,40 @@ private final class LayerHostRunner {
                 guard expected.isSatisfied(by: stats) else {
                     throw VerifierError.pixelCheck("\(target.name) \(name) pixels did not match \(expected): \(stats)")
                 }
+            case .captureNativeMenu(let label, let name, let expected, let response):
+                let tree = try hostController.getSurfaceTree()
+                window.update(surfaceTree: tree)
+                window.flushHostedLayer()
+                guard let surface = tree.surfaces.first(where: {
+                    $0.visible && $0.kind == .nativeMenu && $0.label == label
+                }) else {
+                    throw VerifierError.input("\(target.name) missing native menu surface \(label): \(tree)")
+                }
+                guard let windowID = swiftHostWindowID(title: window.title, minimumSize: currentSize) else {
+                    throw VerifierError.capture("Swift LayerHost window was not visible for \(name)")
+                }
+                let captureURL = options.outputDirectory.appendingPathComponent(name)
+                let capture = try window.presentNativeMenuAndCapture(
+                    surface: surface,
+                    windowID: windowID,
+                    to: captureURL
+                )
+                let stats = analyze(image: capture.image)
+                guard expected.isSatisfied(by: stats) else {
+                    throw VerifierError.pixelCheck("\(target.name) \(name) native menu pixels did not match \(expected): \(stats)")
+                }
+                switch response {
+                case .accept(let index):
+                    guard try hostController.acceptActivePopupMenuItem(index) else {
+                        throw VerifierError.input("host did not accept active popup menu item \(index)")
+                    }
+                case .cancel:
+                    _ = try hostController.cancelActivePopup()
+                }
+                runtime.pollEvents(milliseconds: 50)
+                window.update(surfaceTree: try hostController.getSurfaceTree())
+                window.flushHostedLayer()
+                try waitForHostFlush(runtime: runtime, session: session, app: app)
             case .acceptActivePopupMenuItem(let index):
                 guard try hostController.acceptActivePopupMenuItem(index) else {
                     throw VerifierError.input("host did not accept active popup menu item \(index)")
@@ -1781,7 +1818,6 @@ private final class LayerHostWindow {
     private let rootLayer: CALayer
     private let hostLayer: CALayer
     private var popupHostLayers: [UInt64: CALayer] = [:]
-    private var nativeSurfaceLayers: [UInt64: CALayer] = [:]
 
     init(title: String, contextID: UInt32, size: CGSize) throws {
         self.title = title
@@ -1846,9 +1882,6 @@ private final class LayerHostWindow {
         for layer in popupHostLayers.values {
             layer.setNeedsLayout()
         }
-        for layer in nativeSurfaceLayers.values {
-            layer.setNeedsLayout()
-        }
         CATransaction.commit()
         flushHostedLayer()
     }
@@ -1869,7 +1902,6 @@ private final class LayerHostWindow {
             }
         guard let primary = visibleSurfaces.first(where: { $0.kind == .webView && $0.contextId != 0 }) ??
             visibleSurfaces.first(where: { $0.contextId != 0 }) else {
-            renderNativeSurfaces(visibleSurfaces, origin: .zero)
             flushHostedLayer()
             return
         }
@@ -1915,25 +1947,77 @@ private final class LayerHostWindow {
         }
         CATransaction.commit()
 
-        renderNativeSurfaces(visibleSurfaces, origin: origin)
         flushHostedLayer()
     }
 
-    private func renderNativeSurfaces(_ surfaces: [OwlFreshSurfaceInfo], origin: CGPoint) {
-        let nativeSurfaces = surfaces.filter { $0.kind == .nativeMenu }
-        let activeIDs = Set(nativeSurfaces.map(\.surfaceId))
-        for staleID in nativeSurfaceLayers.keys where !activeIDs.contains(staleID) {
-            nativeSurfaceLayers[staleID]?.removeFromSuperlayer()
-            nativeSurfaceLayers[staleID] = nil
+    func presentNativeMenuAndCapture(
+        surface: OwlFreshSurfaceInfo,
+        windowID: UInt32,
+        to url: URL
+    ) throws -> CapturedWindow {
+        guard !surface.menuItems.isEmpty else {
+            throw VerifierError.input("native menu surface \(surface.label) has no menu items")
         }
-        for surface in nativeSurfaces {
-            let layer = nativeSurfaceLayers[surface.surfaceId] ?? CALayer()
-            if layer.superlayer == nil {
-                rootLayer.addSublayer(layer)
+
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+
+        let menu = NSMenu(title: surface.label)
+        menu.autoenablesItems = false
+        var indexedMenuItems: [Int32: NSMenuItem] = [:]
+        for (index, label) in surface.menuItems.enumerated() {
+            if label == "---" {
+                menu.addItem(.separator())
+                continue
             }
-            nativeSurfaceLayers[surface.surfaceId] = layer
-            configureNativeMenuLayer(layer, surface: surface, frame: frame(for: surface, origin: origin))
+
+            let item = NSMenuItem(
+                title: label.isEmpty ? " " : label,
+                action: nil,
+                keyEquivalent: ""
+            )
+            item.isEnabled = true
+            item.tag = index
+            if Int32(index) == surface.selectedIndex {
+                item.state = .on
+            }
+            menu.addItem(item)
+            indexedMenuItems[Int32(index)] = item
         }
+
+        guard menu.numberOfItems > 0 else {
+            throw VerifierError.input("native menu surface \(surface.label) produced an empty NSMenu")
+        }
+
+        let surfaceFrame = frame(for: surface, origin: .zero)
+        let anchor = NSPoint(
+            x: max(0, min(contentView.bounds.width, surfaceFrame.minX)),
+            y: max(0, min(contentView.bounds.height, contentView.bounds.height - surfaceFrame.minY))
+        )
+        let positioningItem = indexedMenuItems[surface.selectedIndex]
+        let box = NativeMenuCaptureBox()
+        let captureTimer = Timer(timeInterval: 0.2, repeats: false) { _ in
+            box.result = Result {
+                try captureScreenRegion(
+                    aroundWindowID: windowID,
+                    nativeSurfaceFrame: surfaceFrame,
+                    to: url
+                )
+            }
+            menu.cancelTrackingWithoutAnimation()
+        }
+        RunLoop.current.add(captureTimer, forMode: .eventTracking)
+        _ = menu.popUp(positioning: positioningItem, at: anchor, in: contentView)
+
+        if let result = box.result {
+            return try result.get()
+        }
+
+        return try captureScreenRegion(
+            aroundWindowID: windowID,
+            nativeSurfaceFrame: surfaceFrame,
+            to: url
+        )
     }
 
     private func frame(for surface: OwlFreshSurfaceInfo, origin: CGPoint) -> CGRect {
@@ -1945,52 +2029,6 @@ private final class LayerHostWindow {
         )
     }
 
-    private func configureNativeMenuLayer(_ layer: CALayer, surface: OwlFreshSurfaceInfo, frame: CGRect) {
-        layer.sublayers?.forEach { $0.removeFromSuperlayer() }
-        layer.frame = frame
-        layer.bounds = CGRect(origin: .zero, size: frame.size)
-        layer.anchorPoint = CGPoint.zero
-        layer.position = frame.origin
-        layer.zPosition = CGFloat(surface.zIndex)
-        layer.isGeometryFlipped = true
-        layer.backgroundColor = NSColor.white.cgColor
-        layer.borderColor = NSColor.black.cgColor
-        layer.borderWidth = 3
-        layer.shadowOpacity = 0.18
-        layer.shadowRadius = 8
-        layer.shadowOffset = CGSize(width: 0, height: 3)
-
-        let title = CATextLayer()
-        title.contentsScale = NSScreen.main?.backingScaleFactor ?? 1
-        title.string = surface.label.uppercased()
-        title.fontSize = 13
-        title.foregroundColor = NSColor.white.cgColor
-        title.backgroundColor = NSColor(calibratedRed: 0, green: 0.35, blue: 1, alpha: 1).cgColor
-        title.alignmentMode = .left
-        title.frame = CGRect(x: 0, y: 0, width: frame.width, height: 24)
-        layer.addSublayer(title)
-
-        let rowHeight: CGFloat = 30
-        for (index, item) in surface.menuItems.enumerated() {
-            let row = CATextLayer()
-            row.contentsScale = NSScreen.main?.backingScaleFactor ?? 1
-            row.string = item
-            row.fontSize = 18
-            row.foregroundColor = NSColor.black.cgColor
-            row.backgroundColor = index == Int(surface.selectedIndex)
-                ? NSColor(calibratedRed: 1, green: 0.824, blue: 0, alpha: 1).cgColor
-                : NSColor.white.cgColor
-            row.alignmentMode = .left
-            row.frame = CGRect(
-                x: 10,
-                y: 28 + CGFloat(index) * rowHeight,
-                width: max(10, frame.width - 20),
-                height: rowHeight
-            )
-            layer.addSublayer(row)
-        }
-    }
-
     func flushHostedLayer() {
         hostLayer.setNeedsDisplay()
         hostLayer.displayIfNeeded()
@@ -1998,13 +2036,13 @@ private final class LayerHostWindow {
             layer.setNeedsDisplay()
             layer.displayIfNeeded()
         }
-        for layer in nativeSurfaceLayers.values {
-            layer.setNeedsDisplay()
-            layer.displayIfNeeded()
-        }
         CATransaction.flush()
     }
 
+}
+
+private final class NativeMenuCaptureBox {
+    var result: Result<CapturedWindow, Error>?
 }
 
 private struct CapturedWindow {
@@ -2506,6 +2544,55 @@ private func captureWindowWithCoreGraphics(windowID: UInt32, to url: URL) throws
     return CapturedWindow(image: image)
 }
 
+private func captureScreenRegion(
+    aroundWindowID windowID: UInt32,
+    nativeSurfaceFrame: CGRect,
+    to url: URL
+) throws -> CapturedWindow {
+    guard let windowBounds = screenBounds(windowID: windowID) else {
+        throw VerifierError.capture("could not resolve screen bounds for windowID=\(windowID)")
+    }
+    let captureBounds = nativeMenuCaptureBounds(
+        hostWindowID: windowID,
+        hostWindowBounds: windowBounds,
+        nativeSurfaceFrame: nativeSurfaceFrame
+    )
+    guard let image = CGWindowListCreateImage(
+        captureBounds,
+        [.optionOnScreenOnly],
+        kCGNullWindowID,
+        [.bestResolution]
+    ) else {
+        throw VerifierError.capture("CGWindowListCreateImage returned nil for screen bounds \(captureBounds)")
+    }
+    try pngData(from: image).write(to: url)
+    return CapturedWindow(image: image)
+}
+
+private func nativeMenuCaptureBounds(
+    hostWindowID: UInt32,
+    hostWindowBounds: CGRect,
+    nativeSurfaceFrame: CGRect
+) -> CGRect {
+    let menuBounds = currentProcessWindowBounds(excluding: hostWindowID)
+        .filter { bounds in
+            bounds.width >= 24 && bounds.height >= 24 &&
+                bounds.width <= 1_200 && bounds.height <= 1_200
+        }
+    if !menuBounds.isEmpty {
+        return menuBounds
+            .reduce(hostWindowBounds) { $0.union($1) }
+            .insetBy(dx: -18, dy: -18)
+            .integral
+    }
+
+    let xPadding = max(CGFloat(360), nativeSurfaceFrame.width + 96)
+    let yPadding = max(CGFloat(260), nativeSurfaceFrame.height + 96)
+    return hostWindowBounds
+        .insetBy(dx: -xPadding, dy: -yPadding)
+        .integral
+}
+
 private func captureWindowWithScreencapture(windowID: UInt32, to url: URL) throws -> CapturedWindow {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -2528,6 +2615,50 @@ private func captureWindowWithScreencapture(windowID: UInt32, to url: URL) throw
         throw VerifierError.capture("screencapture returned invalid PNG data")
     }
     return CapturedWindow(image: image)
+}
+
+private func screenBounds(windowID: UInt32) -> CGRect? {
+    guard let windows = CGWindowListCopyWindowInfo(
+        [.optionIncludingWindow],
+        CGWindowID(windowID)
+    ) as? [[String: Any]] else {
+        return nil
+    }
+    for window in windows where windowNumber(from: window) == windowID {
+        return screenBounds(from: window)
+    }
+    return nil
+}
+
+private func currentProcessWindowBounds(excluding excludedWindowID: UInt32) -> [CGRect] {
+    guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+        return []
+    }
+
+    return windows.compactMap { window in
+        guard (window[kCGWindowOwnerPID as String] as? Int32) == getpid(),
+              windowNumber(from: window) != excludedWindowID,
+              let bounds = screenBounds(from: window) else {
+            return nil
+        }
+        return bounds
+    }
+}
+
+private func screenBounds(from window: [String: Any]) -> CGRect? {
+    guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
+          let x = bounds["X"] as? NSNumber,
+          let y = bounds["Y"] as? NSNumber,
+          let width = bounds["Width"] as? NSNumber,
+          let height = bounds["Height"] as? NSNumber else {
+        return nil
+    }
+    return CGRect(
+        x: CGFloat(truncating: x),
+        y: CGFloat(truncating: y),
+        width: CGFloat(truncating: width),
+        height: CGFloat(truncating: height)
+    )
 }
 
 private func pngData(from image: CGImage) throws -> Data {
