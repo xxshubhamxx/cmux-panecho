@@ -155,7 +155,7 @@ final class BonsplitTabDragUITests: XCTestCase {
         )
     }
 
-    func testMinimalModeKeepsSidebarRowsBelowTrafficLights() {
+    func testMinimalModeLiftsSidebarRowsIntoCompactTitlebarArea() {
         let (app, dataPath) = launchConfiguredApp()
 
         XCTAssertTrue(
@@ -184,9 +184,9 @@ final class BonsplitTabDragUITests: XCTestCase {
         let topInset = distanceToTopEdge(of: workspaceRow, in: window)
         XCTAssertEqual(
             topInset,
-            36,
+            20,
             accuracy: 4,
-            "Expected minimal mode to keep the sidebar workspace row offset unchanged while reserving the existing traffic-light strip. window=\(window.frame) workspaceRow=\(workspaceRow.frame) topInset=\(topInset)"
+            "Expected minimal mode to lift sidebar workspace rows into the compact 30 px titlebar area. window=\(window.frame) workspaceRow=\(workspaceRow.frame) topInset=\(topInset)"
         )
     }
 

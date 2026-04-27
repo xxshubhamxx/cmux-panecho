@@ -27,9 +27,7 @@ enum BonsplitTabBarPassThrough {
     }
 
     static func titlebarInteractionBandMinY(in window: NSWindow) -> CGFloat {
-        let nativeTitlebarHeight = window.frame.height - window.contentLayoutRect.height
-        let customTitlebarBandHeight = max(28, min(72, nativeTitlebarHeight))
-        return window.contentLayoutRect.maxY - customTitlebarBandHeight - 0.5
+        window.contentLayoutRect.maxY - MinimalModeChromeMetrics.titlebarHeight - 0.5
     }
 
     static func passThroughDecision(

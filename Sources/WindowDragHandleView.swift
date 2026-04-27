@@ -575,11 +575,7 @@ func shouldHandleMinimalModeTitlebarDoubleClick(
 }
 
 func minimalModeTitlebarDoubleClickBandHeight(for window: NSWindow) -> CGFloat {
-    let titlebarHeight = window.frame.height - window.contentLayoutRect.height
-    guard titlebarHeight.isFinite, titlebarHeight > 0 else {
-        return 30
-    }
-    return max(30, min(titlebarHeight, 72))
+    MinimalModeChromeMetrics.titlebarHeight
 }
 
 func isMainWorkspaceWindow(_ window: NSWindow) -> Bool {

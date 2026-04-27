@@ -47,7 +47,7 @@ struct TmuxOverlayExperimentSettings {
 private enum WorkspaceTitlebarInteractionMetrics {
     // Keep in sync with Bonsplit's tab bar height so the monitor only covers
     // the minimal-mode titlebar strip.
-    static let minimalModeTopStripHeight: CGFloat = 30
+    static let minimalModeTopStripHeight: CGFloat = MinimalModeChromeMetrics.titlebarHeight
 }
 
 struct TmuxPaneLayoutPane: Codable, Equatable, Sendable {
@@ -486,7 +486,7 @@ struct WorkspaceContentView: View {
         workspace.bonsplitController.zoomedPaneId.map { "zoom:\($0.id.uuidString)" } ?? "unzoomed"
     }
 
-    private static let tmuxWorkspacePaneTopChromeHeight: CGFloat = 30
+    private static let tmuxWorkspacePaneTopChromeHeight: CGFloat = MinimalModeChromeMetrics.titlebarHeight
 
     private enum TmuxWorkspacePaneOverlayTrimMode {
         case workspaceLocal

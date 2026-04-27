@@ -7,6 +7,11 @@ import ObjectiveC
 import UniformTypeIdentifiers
 import WebKit
 
+enum MinimalModeChromeMetrics {
+    static let titlebarHeight: CGFloat = 30
+    static let workspaceTopInset: CGFloat = 20
+}
+
 // MARK: - File Drop Overlay
 
 enum DragOverlayRoutingPolicy {
@@ -3074,7 +3079,7 @@ struct ContentView: View {
                 .background(
                     MinimalModeTitlebarDoubleClickHandlerView(
                         isEnabled: isMinimalMode && !isFullScreen,
-                        topStripHeight: max(30, hostingSafeAreaTop)
+                        topStripHeight: MinimalModeChromeMetrics.titlebarHeight
                     )
                 )
         )
@@ -9335,13 +9340,24 @@ struct VerticalTabsSidebar: View {
     @AppStorage(WorkspacePresentationModeSettings.modeKey)
     private var workspacePresentationMode = WorkspacePresentationModeSettings.defaultMode.rawValue
 
-    /// Space at top of sidebar for traffic light buttons
+    /// Space at top of sidebar for traffic light buttons in standard mode.
     private let trafficLightPadding: CGFloat = 28
     private let tabRowSpacing: CGFloat = 2
     private let hiddenTitlebarControlsLeadingInset: CGFloat = 72
 
     private var workspaceScrollTopVisibilityInset: CGFloat {
-        trafficLightPadding + 8
+        if isMinimalMode {
+            return MinimalModeChromeMetrics.workspaceTopInset
+        }
+        return trafficLightPadding + 8
+    }
+
+    private var sidebarTitlebarInteractionHeight: CGFloat {
+        isMinimalMode ? MinimalModeChromeMetrics.titlebarHeight : trafficLightPadding
+    }
+
+    private var sidebarTopScrimHeight: CGFloat {
+        isMinimalMode ? MinimalModeChromeMetrics.titlebarHeight : trafficLightPadding + 20
     }
 
     private var isMinimalMode: Bool {
@@ -9548,14 +9564,14 @@ struct VerticalTabsSidebar: View {
                         .allowsHitTesting(false)
                 }
                 .overlay(alignment: .top) {
-                    SidebarTopScrim(height: trafficLightPadding + 20)
+                    SidebarTopScrim(height: sidebarTopScrimHeight)
                         .allowsHitTesting(false)
                 }
                 .overlay(alignment: .top) {
                     // The sidebar top strip remains draggable and handles
                     // double-clicks with the standard titlebar action.
                     WindowDragHandleView()
-                        .frame(height: trafficLightPadding)
+                        .frame(height: sidebarTitlebarInteractionHeight)
                         .background(TitlebarDoubleClickMonitorView())
                 }
                 .overlay(alignment: .topLeading) {
