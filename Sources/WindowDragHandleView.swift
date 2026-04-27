@@ -603,15 +603,17 @@ func minimalModeTitlebarClickFormsDoubleClick(
     windowNumber: Int,
     previous: MinimalModeTitlebarClickRecord?,
     doubleClickInterval: TimeInterval,
+    doubleClickIntervalTolerance: TimeInterval = 0.25,
     maxDistance: CGFloat = 4
 ) -> Bool {
     if clickCount >= 2 {
         return true
     }
+    let allowedInterval = max(0, doubleClickInterval) + max(0, doubleClickIntervalTolerance)
     guard let previous,
           previous.windowNumber == windowNumber,
           timestamp - previous.timestamp >= 0,
-          timestamp - previous.timestamp <= doubleClickInterval else {
+          timestamp - previous.timestamp <= allowedInterval else {
         return false
     }
 
@@ -690,6 +692,9 @@ func isMinimalModeWindowTitlebarClickCandidate(
     event: NSEvent,
     defaults: UserDefaults = .standard
 ) -> Bool {
+    if BonsplitTabBarHitRegionRegistry.containsWindowPoint(event.locationInWindow, in: window) {
+        return false
+    }
     let contentBounds = window.contentView?.bounds ?? NSRect(
         x: 0,
         y: 0,
@@ -715,6 +720,7 @@ struct MinimalModeTitlebarDoubleClickHandlerView: NSViewRepresentable {
         var isEnabled = false
         var topStripHeight: CGFloat = 0
         var monitor: Any?
+        var lastClick: MinimalModeTitlebarClickRecord?
 
         deinit {
             if let monitor {
@@ -745,20 +751,43 @@ struct MinimalModeTitlebarDoubleClickHandlerView: NSViewRepresentable {
                   let view = coordinator.view,
                   let window = view.window,
                   event.window === window else {
+                coordinator?.lastClick = nil
                 return event
             }
 
             let point = view.convert(event.locationInWindow, from: nil)
-            guard shouldHandleMinimalModeTitlebarDoubleClick(
+            let windowPoint = view.convert(point, to: nil)
+            guard !BonsplitTabBarHitRegionRegistry.containsWindowPoint(windowPoint, in: window),
+                  isPointInMinimalModeTitlebarBand(
                 isEnabled: coordinator.isEnabled,
-                clickCount: event.clickCount,
                 point: point,
                 bounds: view.bounds,
                 topStripHeight: coordinator.topStripHeight
             ) else {
+                coordinator.lastClick = nil
                 return event
             }
 
+            let windowNumber = window.windowNumber
+            let isDoubleClick = minimalModeTitlebarClickFormsDoubleClick(
+                clickCount: event.clickCount,
+                timestamp: event.timestamp,
+                locationInWindow: windowPoint,
+                windowNumber: windowNumber,
+                previous: coordinator.lastClick,
+                doubleClickInterval: NSEvent.doubleClickInterval
+            )
+
+            guard isDoubleClick else {
+                coordinator.lastClick = MinimalModeTitlebarClickRecord(
+                    windowNumber: windowNumber,
+                    timestamp: event.timestamp,
+                    locationInWindow: windowPoint
+                )
+                return event
+            }
+
+            coordinator.lastClick = nil
             let result = handleTitlebarDoubleClick(
                 window: window,
                 behavior: .standardAction

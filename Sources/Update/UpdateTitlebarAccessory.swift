@@ -607,9 +607,24 @@ private struct PassthroughHoverTrackingView: NSViewRepresentable {
     final class TrackingView: NSView {
         var onHoverChanged: ((Bool) -> Void)?
         private var trackingArea: NSTrackingArea?
+        private var localMouseMonitor: Any?
         private var isHovering = false
 
+        deinit {
+            removeLocalMouseMonitor()
+        }
+
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil {
+                installLocalMouseMonitorIfNeeded()
+            } else {
+                removeLocalMouseMonitor()
+                emitHoverChanged(false)
+            }
+        }
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -634,6 +649,31 @@ private struct PassthroughHoverTrackingView: NSViewRepresentable {
         }
 
         override func mouseMoved(with event: NSEvent) {
+            updateHover(from: event)
+        }
+
+        private func installLocalMouseMonitorIfNeeded() {
+            guard localMouseMonitor == nil else { return }
+            localMouseMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.mouseMoved, .leftMouseDown, .leftMouseDragged]
+            ) { [weak self] event in
+                self?.updateHover(from: event)
+                return event
+            }
+        }
+
+        private func removeLocalMouseMonitor() {
+            if let localMouseMonitor {
+                NSEvent.removeMonitor(localMouseMonitor)
+                self.localMouseMonitor = nil
+            }
+        }
+
+        private func updateHover(from event: NSEvent) {
+            guard let window, event.window === window else {
+                emitHoverChanged(false)
+                return
+            }
             let point = convert(event.locationInWindow, from: nil)
             emitHoverChanged(bounds.contains(point))
         }

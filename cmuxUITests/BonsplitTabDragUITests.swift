@@ -143,7 +143,14 @@ final class BonsplitTabDragUITests: XCTestCase {
         XCTAssertTrue(window.waitForExistence(timeout: 5.0), "Expected main window to exist")
 
         let initialFrame = window.frame
-        let point = CGPoint(x: initialFrame.midX, y: initialFrame.minY + 16)
+        let betaTitle = ready["betaTitle"] ?? "UITest Beta"
+        let betaTab = app.buttons[betaTitle]
+        XCTAssertTrue(betaTab.waitForExistence(timeout: 5.0), "Expected beta tab to exist")
+
+        let point = CGPoint(
+            x: min(initialFrame.maxX - 64, max(betaTab.frame.maxX + 80, initialFrame.midX)),
+            y: initialFrame.minY + 16
+        )
         doubleClick(in: window, atAccessibilityPoint: point)
 
         XCTAssertTrue(
