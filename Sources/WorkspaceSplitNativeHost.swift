@@ -2,7 +2,6 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-#if DEBUG
 enum WorkspaceLayoutTabChromeDebugSettings {
     static let closeGlyphDXKey = "workspaceTabChrome.closeGlyphDX"
     static let closeGlyphDYKey = "workspaceTabChrome.closeGlyphDY"
@@ -267,7 +266,6 @@ private enum WorkspaceLayoutTabChromeTitleSource: String {
         return .draw
     }()
 }
-#endif
 
 @MainActor
 struct WorkspaceLayoutNativeHost: NSViewRepresentable {
@@ -3418,9 +3416,9 @@ final class WorkspaceLayoutNativeTabButtonView: NSView, NSDraggingSource {
 
     private func drawIconContent() {
 #if DEBUG
-        let tuning = WorkspaceLayoutTabChromeDebugTuning.current
+        let iconPointSizeDelta = WorkspaceLayoutTabChromeDebugTuning.current.iconPointSizeDelta
 #else
-        let tuning = (iconPointSizeDelta: CGFloat(-0.5))
+        let iconPointSizeDelta = CGFloat(-0.5)
 #endif
         let tint = isSelected
             ? TabBarColors.nsColorActiveText(for: splitAppearance)
@@ -3440,7 +3438,7 @@ final class WorkspaceLayoutNativeTabButtonView: NSView, NSDraggingSource {
         guard let iconName = tab.icon else { return }
         workspaceSplitDrawSymbol(
             named: iconName,
-            pointSize: symbolPointSize(for: iconName) + tuning.iconPointSizeDelta,
+            pointSize: symbolPointSize(for: iconName) + iconPointSizeDelta,
             weight: .regular,
             color: tint,
             in: iconView.frame
