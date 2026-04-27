@@ -17,7 +17,7 @@ enum FilePreviewPDFSizing {
 
     static func preferredThumbnailSidebarWidth(for document: PDFDocument?) -> CGFloat {
         guard let document, document.pageCount > 0 else {
-            return minimumSidebarWidth
+            return minimumThumbnailSidebarWidth
         }
 
         let sampleCount = min(document.pageCount, thumbnailSampleLimit)

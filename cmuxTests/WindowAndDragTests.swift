@@ -1177,6 +1177,12 @@ final class FilePreviewPDFChromeTests: XCTestCase {
         XCTAssertEqual(width, FilePreviewPDFSizing.minimumThumbnailSidebarWidth, accuracy: 0.001)
     }
 
+    func testThumbnailSidebarPreferredWidthUsesThumbnailMinimumWithoutDocument() {
+        let width = FilePreviewPDFSizing.preferredThumbnailSidebarWidth(for: nil)
+
+        XCTAssertEqual(width, FilePreviewPDFSizing.minimumThumbnailSidebarWidth, accuracy: 0.001)
+    }
+
     func testThumbnailSidebarPreferredWidthExpandsForLandscapeContent() throws {
         let document = try makePDFDocument(pageSizes: [NSSize(width: 160, height: 90)])
 

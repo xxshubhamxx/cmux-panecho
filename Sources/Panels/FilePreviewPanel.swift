@@ -834,52 +834,6 @@ final class FilePreviewPDFChromeHostingView: NSHostingView<AnyView> {
     }
 }
 
-enum FilePreviewViewport {
-    static func normalizedAnchorRatio(_ value: CGFloat, length: CGFloat) -> CGFloat {
-        guard length > 1 else { return 0.5 }
-        return min(max(value / length, 0), 1)
-    }
-
-    static func clampedClipOrigin(
-        documentPoint: CGPoint,
-        anchorOffsetInClip: CGPoint,
-        documentBounds: CGRect,
-        clipSize: CGSize
-    ) -> CGPoint {
-        CGPoint(
-            x: clampedAxisOrigin(
-                rawOrigin: documentPoint.x - anchorOffsetInClip.x,
-                documentMin: documentBounds.minX,
-                documentLength: documentBounds.width,
-                clipLength: clipSize.width
-            ),
-            y: clampedAxisOrigin(
-                rawOrigin: documentPoint.y - anchorOffsetInClip.y,
-                documentMin: documentBounds.minY,
-                documentLength: documentBounds.height,
-                clipLength: clipSize.height
-            )
-        )
-    }
-
-    private static func clampedAxisOrigin(
-        rawOrigin: CGFloat,
-        documentMin: CGFloat,
-        documentLength: CGFloat,
-        clipLength: CGFloat
-    ) -> CGFloat {
-        guard documentLength.isFinite, clipLength.isFinite, documentLength > 0, clipLength > 0 else {
-            return documentMin
-        }
-        if documentLength <= clipLength {
-            return documentMin + ((documentLength - clipLength) * 0.5)
-        }
-        let minimumOrigin = documentMin
-        let maximumOrigin = documentMin + documentLength - clipLength
-        return min(max(rawOrigin, minimumOrigin), maximumOrigin)
-    }
-}
-
 private struct FilePreviewPDFSidebarChromeView: View {
     let isSidebarVisible: Bool
     let sidebarMode: FilePreviewPDFSidebarMode
@@ -1578,6 +1532,8 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     private var lastSidebarWidth = Metrics.defaultSidebarWidth
     private var didUserResizeSidebar = false
     private var isApplyingSidebarWidth = false
+    private var pendingSidebarResizeSnapshot: FilePreviewPDFViewportSnapshot?
+    private var suppressPDFPageChangeNotifications = false
     private var rotationAccumulator: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
@@ -1601,7 +1557,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
             lastSidebarWidth = initialWidth
             splitView.setPosition(initialWidth, ofDividerAt: 0)
             splitView.adjustSubviews()
-            refreshPDFSmartFitKeepingCurrentPage()
+            refreshPDFSmartFitWithoutViewportRestore()
         }
         layoutFloatingChrome()
     }
@@ -1618,7 +1574,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         guard currentURL != url else {
             applyPreferredSidebarWidthIfNeeded()
             updatePageControls()
-            refreshPDFSmartFitKeepingCurrentPage()
+            refreshPDFSmartFitPreservingVisibleTop()
             return
         }
         currentURL = url
@@ -1636,7 +1592,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         updateSidebarContent()
         applyPreferredSidebarWidthIfNeeded()
         updatePageControls()
-        refreshPDFSmartFitKeepingCurrentPage()
+        refreshPDFSmartFitWithoutViewportRestore()
     }
 
     private func setupView() {
@@ -1864,7 +1820,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
 
     @objc private func zoomToFit() {
         pdfView.autoScales = true
-        refreshPDFSmartFitKeepingCurrentPage()
+        refreshPDFSmartFitPreservingVisibleCenter()
     }
 
     @objc private func actualSize() {
@@ -1891,6 +1847,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         isSidebarVisible = true
         didUserResizeSidebar = false
         lastSidebarWidth = preferredSidebarWidthForCurrentMode()
+        logSidebarWidth(reason: "selectThumbnails", proposed: lastSidebarWidth)
         updateSidebarVisibility()
         updateSidebarContent()
         updateChromeRootViews()
@@ -1901,6 +1858,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         isSidebarVisible = true
         didUserResizeSidebar = false
         lastSidebarWidth = preferredSidebarWidthForCurrentMode()
+        logSidebarWidth(reason: "selectTableOfContents", proposed: lastSidebarWidth)
         updateSidebarVisibility()
         updateSidebarContent()
         updateChromeRootViews()
@@ -1925,6 +1883,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     }
 
     @objc private func pdfPageChanged() {
+        guard !suppressPDFPageChangeNotifications else { return }
         updatePageControls()
     }
 
@@ -1935,7 +1894,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         updateChromeRootViews()
     }
 
-    private func updatePageControls() {
+    private func updatePageControls(scrollThumbnailToVisible: Bool = true) {
         guard let document = pdfView.document, document.pageCount > 0 else {
             pageLabel.stringValue = ""
             return
@@ -1949,7 +1908,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         }
         let format = String(localized: "filePreview.pdf.pageCount", defaultValue: "Page %d of %d")
         pageLabel.stringValue = String(format: format, pageIndex + 1, document.pageCount)
-        thumbnailView.selectPage(at: pageIndex, scrollToVisible: true)
+        thumbnailView.selectPage(at: pageIndex, scrollToVisible: scrollThumbnailToVisible)
     }
 
     private func updateSidebarVisibility() {
@@ -2001,6 +1960,38 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         }
     }
 
+    private func logSidebarWidth(
+        reason: String,
+        proposed: CGFloat? = nil,
+        applied: CGFloat? = nil
+    ) {
+        #if DEBUG
+        let mode = sidebarMode == .tableOfContents ? "toc" : "thumbnails"
+        let currentWidth = sidebarHost.frame.width
+        let preferredWidth = preferredSidebarWidthForCurrentMode()
+        let thumbnailWidth = thumbnailView.preferredSidebarWidth()
+        let tocWidth = FilePreviewPDFSizing.preferredOutlineSidebarWidth(for: outlineRoot)
+        cmuxDebugLog(
+            "filePreview.pdf.sidebarWidth reason=\(reason) mode=\(mode) " +
+            "current=\(formatSidebarWidth(currentWidth)) " +
+            "proposed=\(formatSidebarWidth(proposed)) " +
+            "applied=\(formatSidebarWidth(applied)) " +
+            "preferred=\(formatSidebarWidth(preferredWidth)) " +
+            "thumbnailPreferred=\(formatSidebarWidth(thumbnailWidth)) " +
+            "tocPreferred=\(formatSidebarWidth(tocWidth)) " +
+            "min=\(formatSidebarWidth(minimumSidebarWidthForCurrentMode())) " +
+            "content=\(formatSidebarWidth(contentHost.frame.width))"
+        )
+        #endif
+    }
+
+    #if DEBUG
+    private func formatSidebarWidth(_ width: CGFloat?) -> String {
+        guard let width, width.isFinite else { return "nil" }
+        return String(format: "%.1f", Double(width))
+    }
+    #endif
+
     private func applyPreferredSidebarWidthIfNeeded() {
         guard !didUserResizeSidebar,
               didSetInitialSidebarWidth,
@@ -2008,12 +1999,14 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
               !sidebarHost.isHidden else { return }
         let preferredWidth = preferredSidebarWidthForCurrentMode()
         guard abs(sidebarHost.frame.width - preferredWidth) > 0.5 else { return }
+        logSidebarWidth(reason: "applyPreferred", proposed: preferredWidth)
         applySidebarWidth(preferredWidth)
     }
 
     private func applySidebarWidth(_ proposedWidth: CGFloat) {
         let width = clampedSidebarWidth(proposedWidth)
         lastSidebarWidth = width
+        logSidebarWidth(reason: "applySidebarWidth", proposed: proposedWidth, applied: width)
         let applyWidth = {
             self.isApplyingSidebarWidth = true
             defer { self.isApplyingSidebarWidth = false }
@@ -2027,24 +2020,50 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     }
 
     private func applyPDFViewportChange(_ change: () -> Void) {
-        if pdfView.document != nil, !pdfView.autoScales {
-            preserveVisiblePDFCenter(change)
-        } else {
+        guard pdfView.document != nil else {
             change()
-            refreshPDFSmartFitKeepingCurrentPage()
+            return
         }
+        preserveVisiblePDFTop {
+            change()
+            refreshPDFSmartFitWithoutViewportRestore()
+        }
+    }
+
+    func splitViewWillResizeSubviews(_ notification: Notification) {
+        guard !isApplyingSidebarWidth,
+              isSidebarVisible,
+              !sidebarHost.isHidden,
+              pdfView.document != nil else { return }
+        preparePDFViewportSnapshot()
+        pendingSidebarResizeSnapshot = FilePreviewPDFViewportSnapshot.capture(
+            in: pdfView,
+            scrollView: pdfScrollView(),
+            anchor: .top
+        )
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
         guard isSidebarVisible, !sidebarHost.isHidden else { return }
         let sidebarWidth = sidebarHost.frame.width
         guard sidebarWidth >= minimumSidebarWidthForCurrentMode() else { return }
-        if !isApplyingSidebarWidth, NSApp.currentEvent?.type == .leftMouseDragged {
+        logSidebarWidth(reason: "splitViewDidResize", applied: sidebarWidth)
+        guard !isApplyingSidebarWidth else { return }
+        if NSApp.currentEvent?.type == .leftMouseDragged {
             didUserResizeSidebar = true
         }
         lastSidebarWidth = sidebarWidth
         layoutFloatingChrome()
-        refreshPDFSmartFitKeepingCurrentPage()
+        let resizeSnapshot = pendingSidebarResizeSnapshot
+        pendingSidebarResizeSnapshot = nil
+        withSuppressedPDFPageChangeNotifications {
+            if let resizeSnapshot {
+                refreshPDFSmartFitWithoutViewportRestore()
+                resizeSnapshot.restore(in: pdfView, scrollView: pdfScrollView())
+            } else {
+                refreshPDFSmartFitPreservingVisibleTop()
+            }
+        }
     }
 
     func splitView(
@@ -2052,7 +2071,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         constrainMinCoordinate proposedMinimumPosition: CGFloat,
         ofSubviewAt dividerIndex: Int
     ) -> CGFloat {
-        Metrics.minimumSidebarWidth
+        minimumSidebarWidthForCurrentMode()
     }
 
     func splitView(
@@ -2085,19 +2104,27 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
             pdfView.displayDirection = .horizontal
         }
         pdfView.autoScales = true
-        refreshPDFSmartFitKeepingCurrentPage()
+        refreshPDFSmartFitPreservingVisibleTop()
     }
 
-    private func refreshPDFSmartFitKeepingCurrentPage() {
+    private func refreshPDFSmartFitWithoutViewportRestore() {
         guard pdfView.document != nil, pdfView.autoScales else { return }
-        let currentPage = pdfView.currentPage
         contentHost.layoutSubtreeIfNeeded()
         pdfView.layoutSubtreeIfNeeded()
         pdfView.autoScales = false
         pdfView.autoScales = true
         pdfView.layoutDocumentView()
-        if let currentPage {
-            pdfView.go(to: currentPage)
+    }
+
+    private func refreshPDFSmartFitPreservingVisibleTop() {
+        preserveVisiblePDFTop {
+            refreshPDFSmartFitWithoutViewportRestore()
+        }
+    }
+
+    private func refreshPDFSmartFitPreservingVisibleCenter() {
+        preserveVisiblePDFCenter {
+            refreshPDFSmartFitWithoutViewportRestore()
         }
     }
 
@@ -2159,59 +2186,43 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         }
     }
 
-    private func preserveVisiblePDFCenter(_ scaleChange: () -> Void) {
-        guard let scrollView = pdfScrollView(), let documentView = scrollView.documentView else {
-            scaleChange()
-            return
-        }
-
+    private func preparePDFViewportSnapshot() {
         contentHost.layoutSubtreeIfNeeded()
         pdfView.layoutSubtreeIfNeeded()
-        let clipView = scrollView.contentView
-        let clipBounds = clipView.bounds
-        guard clipBounds.width > 1, clipBounds.height > 1 else {
-            scaleChange()
+    }
+
+    private func preserveVisiblePDFTop(_ viewportChange: () -> Void) {
+        preservePDFViewport(anchor: .top, viewportChange)
+    }
+
+    private func preserveVisiblePDFCenter(_ viewportChange: () -> Void) {
+        preservePDFViewport(anchor: .center, viewportChange)
+    }
+
+    private func preservePDFViewport(
+        anchor: FilePreviewPDFViewportAnchor,
+        _ viewportChange: () -> Void
+    ) {
+        preparePDFViewportSnapshot()
+        guard let snapshot = FilePreviewPDFViewportSnapshot.capture(
+            in: pdfView,
+            scrollView: pdfScrollView(),
+            anchor: anchor
+        ) else {
+            viewportChange()
             return
         }
+        withSuppressedPDFPageChangeNotifications {
+            viewportChange()
+            snapshot.restore(in: pdfView, scrollView: pdfScrollView())
+        }
+    }
 
-        let anchorInClip = CGPoint(x: clipBounds.midX, y: clipBounds.midY)
-        let anchorOffsetInClip = CGPoint(
-            x: anchorInClip.x - clipBounds.origin.x,
-            y: anchorInClip.y - clipBounds.origin.y
-        )
-        let oldDocumentBounds = documentView.bounds
-        let anchorInDocument = documentView.convert(anchorInClip, from: clipView)
-        let anchorRatio = CGPoint(
-            x: FilePreviewViewport.normalizedAnchorRatio(
-                anchorInDocument.x - oldDocumentBounds.minX,
-                length: oldDocumentBounds.width
-            ),
-            y: FilePreviewViewport.normalizedAnchorRatio(
-                anchorInDocument.y - oldDocumentBounds.minY,
-                length: oldDocumentBounds.height
-            )
-        )
-
-        scaleChange()
-        pdfView.layoutDocumentView()
-        pdfView.layoutSubtreeIfNeeded()
-
-        guard let updatedScrollView = pdfScrollView(),
-              let updatedDocumentView = updatedScrollView.documentView else { return }
-        let updatedClipView = updatedScrollView.contentView
-        let updatedDocumentBounds = updatedDocumentView.bounds
-        let targetDocumentPoint = CGPoint(
-            x: updatedDocumentBounds.minX + (updatedDocumentBounds.width * anchorRatio.x),
-            y: updatedDocumentBounds.minY + (updatedDocumentBounds.height * anchorRatio.y)
-        )
-        let nextOrigin = FilePreviewViewport.clampedClipOrigin(
-            documentPoint: targetDocumentPoint,
-            anchorOffsetInClip: anchorOffsetInClip,
-            documentBounds: updatedDocumentBounds,
-            clipSize: updatedClipView.bounds.size
-        )
-        updatedClipView.scroll(to: nextOrigin)
-        updatedScrollView.reflectScrolledClipView(updatedClipView)
+    private func withSuppressedPDFPageChangeNotifications(_ body: () -> Void) {
+        let previousValue = suppressPDFPageChangeNotifications
+        suppressPDFPageChangeNotifications = true
+        defer { suppressPDFPageChangeNotifications = previousValue }
+        body()
     }
 
     private func pdfScrollView() -> NSScrollView? {
