@@ -23,16 +23,20 @@ export default function HandlerLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const content = stackServerApp ? (
+    <StackProvider app={stackServerApp}>
+      <StackTheme>{children}</StackTheme>
+    </StackProvider>
+  ) : (
+    children
+  );
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
       >
-        <Suspense>
-          <StackProvider app={stackServerApp}>
-            <StackTheme>{children}</StackTheme>
-          </StackProvider>
-        </Suspense>
+        <Suspense>{content}</Suspense>
       </body>
     </html>
   );
