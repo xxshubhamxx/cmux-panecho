@@ -48,6 +48,7 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
         XCTAssertTrue(result.swift.contains("public struct OwlFreshMouseEvent"))
         XCTAssertTrue(result.swift.contains("public let deltaX: Float"))
         XCTAssertTrue(result.swift.contains("public struct MojoPendingReceiver<Interface>"))
+        XCTAssertTrue(result.swift.contains("public final class OwlFreshMojoPipeHandleAllocator"))
         XCTAssertTrue(result.swift.contains("public typealias OwlFreshWebViewReceiver"))
         XCTAssertTrue(result.swift.contains("public struct OwlFreshWebViewResizeRequest"))
         XCTAssertTrue(result.swift.contains("func resize(_ request: OwlFreshWebViewResizeRequest)"))
@@ -155,6 +156,7 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
     func testGeneratedPipeBoundSinksForwardTypedCalls() async throws {
         let pipe = FakePipeBindings()
         let recorder = OwlFreshMojoTransportRecorder()
+        let allocator = OwlFreshMojoPipeHandleAllocator()
         let sinks = GeneratedOwlFreshMojoPipeBoundSinks(session: nil, pipe: pipe)
         let session = GeneratedOwlFreshSessionMojoTransport(sink: sinks, recorder: recorder)
         let webView = GeneratedOwlFreshWebViewMojoTransport(sink: sinks, recorder: recorder)
@@ -162,6 +164,25 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
         let surfaceTree = GeneratedOwlFreshSurfaceTreeHostMojoTransport(sink: sinks, recorder: recorder)
         let nativeSurface = GeneratedOwlFreshNativeSurfaceHostMojoTransport(sink: sinks, recorder: recorder)
 
+        let profile: OwlFreshProfileReceiver = allocator.makeReceiver(OwlFreshProfileMojoInterfaceMarker.self)
+        let webViewReceiver: OwlFreshWebViewReceiver = allocator.makeReceiver(OwlFreshWebViewMojoInterfaceMarker.self)
+        let inputReceiver: OwlFreshInputReceiver = allocator.makeReceiver(OwlFreshInputMojoInterfaceMarker.self)
+        let surfaceTreeReceiver: OwlFreshSurfaceTreeHostReceiver = allocator.makeReceiver(OwlFreshSurfaceTreeHostMojoInterfaceMarker.self)
+        let nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver = allocator.makeReceiver(OwlFreshNativeSurfaceHostMojoInterfaceMarker.self)
+        let client: OwlFreshClientRemote = allocator.makeRemote(OwlFreshClientMojoInterfaceMarker.self)
+
+        session.bindProfile(profile)
+        try sinks.throwIfFailed()
+        session.bindWebView(webViewReceiver)
+        try sinks.throwIfFailed()
+        session.bindInput(inputReceiver)
+        try sinks.throwIfFailed()
+        session.bindSurfaceTree(surfaceTreeReceiver)
+        try sinks.throwIfFailed()
+        session.bindNativeSurfaceHost(nativeSurfaceHost)
+        try sinks.throwIfFailed()
+        session.setClient(client)
+        try sinks.throwIfFailed()
         webView.navigate("https://example.com/")
         try sinks.throwIfFailed()
         webView.resize(OwlFreshWebViewResizeRequest(width: 640, height: 480, scale: 2.0))
@@ -175,7 +196,24 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
         XCTAssertTrue(ok)
         XCTAssertEqual(tree.generation, 42)
         XCTAssertTrue(accepted)
+        XCTAssertEqual(
+            [
+                profile.handle,
+                webViewReceiver.handle,
+                inputReceiver.handle,
+                surfaceTreeReceiver.handle,
+                nativeSurfaceHost.handle,
+                client.handle,
+            ],
+            [1, 2, 3, 4, 5, 6]
+        )
         XCTAssertEqual(pipe.calls, [
+            "sessionBindProfile:1",
+            "sessionBindWebView:2",
+            "sessionBindInput:3",
+            "sessionBindSurfaceTree:4",
+            "sessionBindNativeSurfaceHost:5",
+            "sessionSetClient:6",
             "webViewNavigate:https://example.com/",
             "webViewResize:640x480@2.0",
             "inputSendKey:36:\n",
@@ -184,6 +222,12 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
             "nativeSurfaceHostAcceptActivePopupMenuItem:2",
         ])
         XCTAssertEqual(recorder.recordedCalls.map(\.interface), [
+            "OwlFreshSession",
+            "OwlFreshSession",
+            "OwlFreshSession",
+            "OwlFreshSession",
+            "OwlFreshSession",
+            "OwlFreshSession",
             "OwlFreshWebView",
             "OwlFreshWebView",
             "OwlFreshInput",
@@ -191,11 +235,6 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
             "OwlFreshSurfaceTreeHost",
             "OwlFreshNativeSurfaceHost",
         ])
-
-        session.bindInput(OwlFreshInputReceiver(handle: 99))
-        XCTAssertThrowsError(try sinks.throwIfFailed()) { error in
-            XCTAssertTrue(String(describing: error).contains("pending handles"))
-        }
     }
 
     func testGeneratedSurfaceTreeDecodesWrappedUnsignedContextID() throws {
@@ -349,6 +388,30 @@ private final class FakeOwlFreshSink:
 
 private final class FakePipeBindings: OwlFreshMojoPipeBindings {
     var calls: [String] = []
+
+    func sessionSetClient(_ session: OpaquePointer?, client: OwlFreshClientRemote) throws {
+        calls.append("sessionSetClient:\(client.handle)")
+    }
+
+    func sessionBindProfile(_ session: OpaquePointer?, profile: OwlFreshProfileReceiver) throws {
+        calls.append("sessionBindProfile:\(profile.handle)")
+    }
+
+    func sessionBindWebView(_ session: OpaquePointer?, webView: OwlFreshWebViewReceiver) throws {
+        calls.append("sessionBindWebView:\(webView.handle)")
+    }
+
+    func sessionBindInput(_ session: OpaquePointer?, input: OwlFreshInputReceiver) throws {
+        calls.append("sessionBindInput:\(input.handle)")
+    }
+
+    func sessionBindSurfaceTree(_ session: OpaquePointer?, surfaceTree: OwlFreshSurfaceTreeHostReceiver) throws {
+        calls.append("sessionBindSurfaceTree:\(surfaceTree.handle)")
+    }
+
+    func sessionBindNativeSurfaceHost(_ session: OpaquePointer?, nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver) throws {
+        calls.append("sessionBindNativeSurfaceHost:\(nativeSurfaceHost.handle)")
+    }
 
     func sessionFlush(_ session: OpaquePointer?) throws -> Bool {
         calls.append("sessionFlush")

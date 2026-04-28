@@ -1096,7 +1096,7 @@ private final class LayerHostRunner {
             terminateHostProcessIfNeeded(pid: hostPID)
             pumpApp(app, for: 0.2)
         }
-        let hostController = OwlFreshMojoHostController(
+        let hostController = try OwlFreshMojoHostController(
             runtime: runtime,
             session: session
         )
@@ -2271,6 +2271,11 @@ private final class OwlFreshMojoRuntime: OwlFreshMojoPipeBindings {
         UnsafeMutablePointer<Bool>?,
         UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
     ) -> Int32
+    private typealias VoidUInt64 = @convention(c) (
+        OpaquePointer?,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+    ) -> Int32
     private typealias VoidString = @convention(c) (
         OpaquePointer?,
         UnsafePointer<CChar>?,
@@ -2323,6 +2328,12 @@ private final class OwlFreshMojoRuntime: OwlFreshMojoPipeBindings {
     private let sessionDestroy: SessionDestroy
     private let sessionHostPID: HostPID
     private let shellExecuteJavaScript: StringInputResult
+    private let sessionSetClientSymbol: VoidUInt64
+    private let sessionBindProfileSymbol: VoidUInt64
+    private let sessionBindWebViewSymbol: VoidUInt64
+    private let sessionBindInputSymbol: VoidUInt64
+    private let sessionBindSurfaceTreeSymbol: VoidUInt64
+    private let sessionBindNativeSurfaceHostSymbol: VoidUInt64
     private let sessionFlushSymbol: BoolOut
     private let profileGetPathSymbol: StringOut
     private let webViewNavigateSymbol: VoidString
@@ -2347,6 +2358,36 @@ private final class OwlFreshMojoRuntime: OwlFreshMojoPipeBindings {
         self.sessionDestroy = try loadSymbol(handle, "owl_fresh_mojo_session_destroy", as: SessionDestroy.self)
         self.sessionHostPID = try loadSymbol(handle, "owl_fresh_mojo_session_host_pid", as: HostPID.self)
         self.shellExecuteJavaScript = try loadSymbol(handle, "owl_fresh_mojo_shell_execute_javascript", as: StringInputResult.self)
+        self.sessionSetClientSymbol = try loadSymbol(
+            handle,
+            "owl_fresh_mojo_session_set_client",
+            as: VoidUInt64.self
+        )
+        self.sessionBindProfileSymbol = try loadSymbol(
+            handle,
+            "owl_fresh_mojo_session_bind_profile",
+            as: VoidUInt64.self
+        )
+        self.sessionBindWebViewSymbol = try loadSymbol(
+            handle,
+            "owl_fresh_mojo_session_bind_web_view",
+            as: VoidUInt64.self
+        )
+        self.sessionBindInputSymbol = try loadSymbol(
+            handle,
+            "owl_fresh_mojo_session_bind_input",
+            as: VoidUInt64.self
+        )
+        self.sessionBindSurfaceTreeSymbol = try loadSymbol(
+            handle,
+            "owl_fresh_mojo_session_bind_surface_tree",
+            as: VoidUInt64.self
+        )
+        self.sessionBindNativeSurfaceHostSymbol = try loadSymbol(
+            handle,
+            "owl_fresh_mojo_session_bind_native_surface_host",
+            as: VoidUInt64.self
+        )
         self.sessionFlushSymbol = try loadSymbol(handle, "owl_fresh_mojo_session_flush", as: BoolOut.self)
         self.profileGetPathSymbol = try loadSymbol(handle, "owl_fresh_mojo_profile_get_path", as: StringOut.self)
         self.webViewNavigateSymbol = try loadSymbol(handle, "owl_fresh_mojo_web_view_navigate", as: VoidString.self)
@@ -2410,6 +2451,48 @@ private final class OwlFreshMojoRuntime: OwlFreshMojoPipeBindings {
             try callStringResult("ShellController.executeJavaScript") { resultPointer, errorPointer in
                 shellExecuteJavaScript(session, scriptPointer, resultPointer, errorPointer)
             }
+        }
+    }
+
+    func sessionSetClient(_ session: OpaquePointer?, client: OwlFreshClientRemote) throws {
+        try callVoidResult("OwlFreshSession.setClient") { errorPointer in
+            sessionSetClientSymbol(session, client.handle, errorPointer)
+        }
+    }
+
+    func sessionBindProfile(_ session: OpaquePointer?, profile: OwlFreshProfileReceiver) throws {
+        try callVoidResult("OwlFreshSession.bindProfile") { errorPointer in
+            sessionBindProfileSymbol(session, profile.handle, errorPointer)
+        }
+    }
+
+    func sessionBindWebView(_ session: OpaquePointer?, webView: OwlFreshWebViewReceiver) throws {
+        try callVoidResult("OwlFreshSession.bindWebView") { errorPointer in
+            sessionBindWebViewSymbol(session, webView.handle, errorPointer)
+        }
+    }
+
+    func sessionBindInput(_ session: OpaquePointer?, input: OwlFreshInputReceiver) throws {
+        try callVoidResult("OwlFreshSession.bindInput") { errorPointer in
+            sessionBindInputSymbol(session, input.handle, errorPointer)
+        }
+    }
+
+    func sessionBindSurfaceTree(
+        _ session: OpaquePointer?,
+        surfaceTree: OwlFreshSurfaceTreeHostReceiver
+    ) throws {
+        try callVoidResult("OwlFreshSession.bindSurfaceTree") { errorPointer in
+            sessionBindSurfaceTreeSymbol(session, surfaceTree.handle, errorPointer)
+        }
+    }
+
+    func sessionBindNativeSurfaceHost(
+        _ session: OpaquePointer?,
+        nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver
+    ) throws {
+        try callVoidResult("OwlFreshSession.bindNativeSurfaceHost") { errorPointer in
+            sessionBindNativeSurfaceHostSymbol(session, nativeSurfaceHost.handle, errorPointer)
         }
     }
 
@@ -2599,7 +2682,7 @@ private final class OwlFreshMojoHostController {
     private let inputTransport: GeneratedOwlFreshInputMojoTransport
     private let surfaceTreeTransport: GeneratedOwlFreshSurfaceTreeHostMojoTransport
 
-    init(runtime: OwlFreshMojoRuntime, session: OpaquePointer) {
+    init(runtime: OwlFreshMojoRuntime, session: OpaquePointer) throws {
         self.runtime = runtime
         self.session = session
         self.sink = GeneratedOwlFreshMojoPipeBoundSinks(session: session, pipe: runtime)
@@ -2608,6 +2691,7 @@ private final class OwlFreshMojoHostController {
         self.webViewTransport = GeneratedOwlFreshWebViewMojoTransport(sink: sink, recorder: recorder)
         self.inputTransport = GeneratedOwlFreshInputMojoTransport(sink: sink, recorder: recorder)
         self.surfaceTreeTransport = GeneratedOwlFreshSurfaceTreeHostMojoTransport(sink: sink, recorder: recorder)
+        try bindSessionInterfaces()
     }
 
     var recordedCalls: [OwlFreshMojoTransportCall] {
@@ -2661,6 +2745,33 @@ private final class OwlFreshMojoHostController {
 
     func cancelActivePopup() throws -> Bool {
         try runtime.nativeSurfaceHostCancelActivePopup(session)
+    }
+
+    private func bindSessionInterfaces() throws {
+        let allocator = OwlFreshMojoPipeHandleAllocator()
+        let profile: OwlFreshProfileReceiver = allocator.makeReceiver(OwlFreshProfileMojoInterfaceMarker.self)
+        let webView: OwlFreshWebViewReceiver = allocator.makeReceiver(OwlFreshWebViewMojoInterfaceMarker.self)
+        let input: OwlFreshInputReceiver = allocator.makeReceiver(OwlFreshInputMojoInterfaceMarker.self)
+        let surfaceTree: OwlFreshSurfaceTreeHostReceiver = allocator.makeReceiver(
+            OwlFreshSurfaceTreeHostMojoInterfaceMarker.self
+        )
+        let nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver = allocator.makeReceiver(
+            OwlFreshNativeSurfaceHostMojoInterfaceMarker.self
+        )
+        let client: OwlFreshClientRemote = allocator.makeRemote(OwlFreshClientMojoInterfaceMarker.self)
+
+        sessionTransport.bindProfile(profile)
+        try sink.throwIfFailed()
+        sessionTransport.bindWebView(webView)
+        try sink.throwIfFailed()
+        sessionTransport.bindInput(input)
+        try sink.throwIfFailed()
+        sessionTransport.bindSurfaceTree(surfaceTree)
+        try sink.throwIfFailed()
+        sessionTransport.bindNativeSurfaceHost(nativeSurfaceHost)
+        try sink.throwIfFailed()
+        sessionTransport.setClient(client)
+        try sink.throwIfFailed()
     }
 }
 

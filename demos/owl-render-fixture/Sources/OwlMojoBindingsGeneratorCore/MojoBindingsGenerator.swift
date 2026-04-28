@@ -430,6 +430,28 @@ public enum MojoSwiftGenerator {
             "    }",
             "}",
             "",
+            "public final class OwlFreshMojoPipeHandleAllocator {",
+            "    private var nextHandle: UInt64",
+            "",
+            "    public init(startingAt firstHandle: UInt64 = 1) {",
+            "        self.nextHandle = firstHandle",
+            "    }",
+            "",
+            "    public func makeRemote<Interface>(_ interface: Interface.Type = Interface.self) -> MojoPendingRemote<Interface> {",
+            "        MojoPendingRemote(handle: allocate())",
+            "    }",
+            "",
+            "    public func makeReceiver<Interface>(_ interface: Interface.Type = Interface.self) -> MojoPendingReceiver<Interface> {",
+            "        MojoPendingReceiver(handle: allocate())",
+            "    }",
+            "",
+            "    private func allocate() -> UInt64 {",
+            "        let handle = nextHandle",
+            "        nextHandle += 1",
+            "        return handle",
+            "    }",
+            "}",
+            "",
             "public struct OwlFreshMojoTransportCall: Equatable, Codable {",
             "    public let interface: String",
             "    public let method: String",
@@ -744,21 +766,10 @@ public enum MojoSwiftGenerator {
             .map { "    \($0.name)MojoSink" }
             .joined(separator: ",\n")
         var lines: [String] = [
-            "public enum OwlFreshMojoPipeBindingError: Error, CustomStringConvertible {",
-            "    case unsupportedPendingHandle(String)",
-            "",
-            "    public var description: String {",
-            "        switch self {",
-            "        case .unsupportedPendingHandle(let method):",
-            "            return \"Swift Mojo pipe binding cannot synthesize pending handles for \\(method)\"",
-            "        }",
-            "    }",
-            "}",
-            "",
             "public protocol OwlFreshMojoPipeBindings: AnyObject {",
         ]
         for interface in interfaces {
-            for method in interface.methods where isPipeBindable(method) {
+            for method in interface.methods {
                 lines.append("    \(pipeSignature(interface: interface, method: method))")
             }
         }
@@ -783,10 +794,6 @@ public enum MojoSwiftGenerator {
         lines.append("        }")
         lines.append("    }")
         lines.append("")
-        lines.append("    private func failUnsupportedPendingHandle(_ method: String) {")
-        lines.append("        lastError = OwlFreshMojoPipeBindingError.unsupportedPendingHandle(method)")
-        lines.append("    }")
-        lines.append("")
         lines.append("    private func forward(_ body: () throws -> Void) {")
         lines.append("        do {")
         lines.append("            try body()")
@@ -808,14 +815,7 @@ public enum MojoSwiftGenerator {
 
     private static func generatePipeBoundSinkMethod(interface: MojoInterface, method: MojoMethod) -> String {
         let signature = swiftMethodSignature(interface: interface, method: method)
-        let methodName = lowerCamel(method.name)
         var lines = ["    public \(signature) {"]
-        guard isPipeBindable(method) else {
-            lines.append("        failUnsupportedPendingHandle(\"\(interface.name).\(methodName)\")")
-            lines.append("    }")
-            return lines.joined(separator: "\n")
-        }
-
         let call = pipeCall(interface: interface, method: method)
         if method.responseParameters.isEmpty {
             lines.append("        forward {")
@@ -861,21 +861,6 @@ public enum MojoSwiftGenerator {
             ? String(interface.name.dropFirst("OwlFresh".count))
             : interface.name
         return lowerCamel(interfaceName) + method.name
-    }
-
-    private static func isPipeBindable(_ method: MojoMethod) -> Bool {
-        method.parameters.allSatisfy { !containsPendingHandle($0.type) }
-    }
-
-    private static func containsPendingHandle(_ type: MojoType) -> Bool {
-        switch type {
-        case .pendingRemote, .pendingReceiver:
-            return true
-        case .array(let element):
-            return containsPendingHandle(element)
-        case .primitive, .named:
-            return false
-        }
     }
 
     private static func generateSchema(file: MojoFile, checksum: String) -> String {

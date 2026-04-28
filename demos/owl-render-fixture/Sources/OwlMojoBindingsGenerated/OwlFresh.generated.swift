@@ -18,6 +18,28 @@ public struct MojoPendingReceiver<Interface>: Equatable, Codable {
     }
 }
 
+public final class OwlFreshMojoPipeHandleAllocator {
+    private var nextHandle: UInt64
+
+    public init(startingAt firstHandle: UInt64 = 1) {
+        self.nextHandle = firstHandle
+    }
+
+    public func makeRemote<Interface>(_ interface: Interface.Type = Interface.self) -> MojoPendingRemote<Interface> {
+        MojoPendingRemote(handle: allocate())
+    }
+
+    public func makeReceiver<Interface>(_ interface: Interface.Type = Interface.self) -> MojoPendingReceiver<Interface> {
+        MojoPendingReceiver(handle: allocate())
+    }
+
+    private func allocate() -> UInt64 {
+        let handle = nextHandle
+        nextHandle += 1
+        return handle
+    }
+}
+
 public struct OwlFreshMojoTransportCall: Equatable, Codable {
     public let interface: String
     public let method: String
@@ -946,18 +968,13 @@ public final class GeneratedOwlFreshNativeSurfaceHostMojoTransport: OwlFreshNati
     }
 }
 
-public enum OwlFreshMojoPipeBindingError: Error, CustomStringConvertible {
-    case unsupportedPendingHandle(String)
-
-    public var description: String {
-        switch self {
-        case .unsupportedPendingHandle(let method):
-            return "Swift Mojo pipe binding cannot synthesize pending handles for \(method)"
-        }
-    }
-}
-
 public protocol OwlFreshMojoPipeBindings: AnyObject {
+    func sessionSetClient(_ session: OpaquePointer?, client: OwlFreshClientRemote) throws
+    func sessionBindProfile(_ session: OpaquePointer?, profile: OwlFreshProfileReceiver) throws
+    func sessionBindWebView(_ session: OpaquePointer?, webView: OwlFreshWebViewReceiver) throws
+    func sessionBindInput(_ session: OpaquePointer?, input: OwlFreshInputReceiver) throws
+    func sessionBindSurfaceTree(_ session: OpaquePointer?, surfaceTree: OwlFreshSurfaceTreeHostReceiver) throws
+    func sessionBindNativeSurfaceHost(_ session: OpaquePointer?, nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver) throws
     func sessionFlush(_ session: OpaquePointer?) throws -> Bool
     func profileGetPath(_ session: OpaquePointer?) throws -> String
     func webViewNavigate(_ session: OpaquePointer?, url: String) throws
@@ -995,10 +1012,6 @@ public final class GeneratedOwlFreshMojoPipeBoundSinks:
         }
     }
 
-    private func failUnsupportedPendingHandle(_ method: String) {
-        lastError = OwlFreshMojoPipeBindingError.unsupportedPendingHandle(method)
-    }
-
     private func forward(_ body: () throws -> Void) {
         do {
             try body()
@@ -1008,27 +1021,39 @@ public final class GeneratedOwlFreshMojoPipeBoundSinks:
     }
 
     public func setClient(_ client: OwlFreshClientRemote) {
-        failUnsupportedPendingHandle("OwlFreshSession.setClient")
+        forward {
+            try pipe.sessionSetClient(session, client: client)
+        }
     }
 
     public func bindProfile(_ profile: OwlFreshProfileReceiver) {
-        failUnsupportedPendingHandle("OwlFreshSession.bindProfile")
+        forward {
+            try pipe.sessionBindProfile(session, profile: profile)
+        }
     }
 
     public func bindWebView(_ webView: OwlFreshWebViewReceiver) {
-        failUnsupportedPendingHandle("OwlFreshSession.bindWebView")
+        forward {
+            try pipe.sessionBindWebView(session, webView: webView)
+        }
     }
 
     public func bindInput(_ input: OwlFreshInputReceiver) {
-        failUnsupportedPendingHandle("OwlFreshSession.bindInput")
+        forward {
+            try pipe.sessionBindInput(session, input: input)
+        }
     }
 
     public func bindSurfaceTree(_ surfaceTree: OwlFreshSurfaceTreeHostReceiver) {
-        failUnsupportedPendingHandle("OwlFreshSession.bindSurfaceTree")
+        forward {
+            try pipe.sessionBindSurfaceTree(session, surfaceTree: surfaceTree)
+        }
     }
 
     public func bindNativeSurfaceHost(_ nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver) {
-        failUnsupportedPendingHandle("OwlFreshSession.bindNativeSurfaceHost")
+        forward {
+            try pipe.sessionBindNativeSurfaceHost(session, nativeSurfaceHost: nativeSurfaceHost)
+        }
     }
 
     public func flush() async throws -> Bool {

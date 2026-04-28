@@ -32,9 +32,9 @@ then Swift hosts the portal id in `CALayerHost`.
 `OwlFreshInput`, `OwlFreshSurfaceTreeHost`, and `OwlFreshNativeSurfaceHost`
 surfaces. `OwlMojoBindingsGenerator` emits
 `Sources/OwlMojoBindingsGenerated/OwlFresh.generated.swift`, and the verifier
-uses those generated Swift request/event, transport, and `MojoPipeBindings`
-types before calling typed runtime symbols. The old generic
-`interface + method + JSON` invoke bridge is not used.
+uses those generated Swift request/event, transport, pending-handle bind graph,
+and `MojoPipeBindings` types before calling typed runtime symbols. The old
+generic `interface + method + JSON` invoke bridge is not used.
 
 The verified gate now includes input. `run-layer-host-verifier-gui.sh` can run
 the real Chromium compositor input fixtures with `OWL_LAYER_HOST_INPUT_CHECK=1`;

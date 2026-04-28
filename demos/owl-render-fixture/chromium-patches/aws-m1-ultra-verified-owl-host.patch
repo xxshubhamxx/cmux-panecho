@@ -1866,10 +1866,10 @@ index 0000000000..ab883e226a
 +}
 diff --git a/fresh_owl/owl_fresh_mojo_runtime.cc b/fresh_owl/owl_fresh_mojo_runtime.cc
 new file mode 100644
-index 0000000000..d5e37ec54f
+index 0000000000..62f90c44ac
 --- /dev/null
 +++ b/fresh_owl/owl_fresh_mojo_runtime.cc
-@@ -0,0 +1,777 @@
+@@ -0,0 +1,890 @@
 +#include "fresh_owl/owl_fresh_mojo_runtime.h"
 +
 +#include <cstdlib>
@@ -2061,7 +2061,36 @@ index 0000000000..d5e37ec54f
 +      client_receiver;
 +  OwlFreshMojoEventCallback callback = nullptr;
 +  raw_ptr<void> user_data = nullptr;
++  uint64_t client_handle = 0;
++  uint64_t profile_handle = 0;
++  uint64_t web_view_handle = 0;
++  uint64_t input_handle = 0;
++  uint64_t surface_tree_handle = 0;
++  uint64_t native_surface_host_handle = 0;
 +};
++
++int ValidateBindRequest(OwlFreshMojoSession* session,
++                        uint64_t handle,
++                        const char* interface_name,
++                        uint64_t existing_handle,
++                        char** error) {
++  if (error) {
++    *error = nullptr;
++  }
++  if (!session) {
++    return Fail(error, "session is null");
++  }
++  if (handle == 0) {
++    return Fail(error, base::StrCat({interface_name, " handle is zero"}));
++  }
++  if (!session->owl_session.is_bound()) {
++    return Fail(error, "OwlFreshSession is not bound");
++  }
++  if (existing_handle != 0) {
++    return Fail(error, base::StrCat({interface_name, " is already bound"}));
++  }
++  return 0;
++}
 +
 +void OwlFreshMojoClientImpl::OnReady(
 +    int32_t host_pid,
@@ -2212,22 +2241,6 @@ index 0000000000..d5e37ec54f
 +
 +  session->controller->BindOwlFreshSession(
 +      session->owl_session.BindNewPipeAndPassReceiver());
-+  session->owl_session->BindProfile(
-+      session->profile.BindNewPipeAndPassReceiver());
-+  session->owl_session->BindWebView(
-+      session->web_view.BindNewPipeAndPassReceiver());
-+  session->owl_session->BindInput(
-+      session->input.BindNewPipeAndPassReceiver());
-+  session->owl_session->BindSurfaceTree(
-+      session->surface_tree.BindNewPipeAndPassReceiver());
-+  session->owl_session->BindNativeSurfaceHost(
-+      session->native_surface_host.BindNewPipeAndPassReceiver());
-+  session->client_impl = std::make_unique<OwlFreshMojoClientImpl>(session.get());
-+  session->client_receiver =
-+      std::make_unique<mojo::Receiver<content::mojom::OwlFreshClient>>(
-+          session->client_impl.get());
-+  session->owl_session->SetClient(
-+      session->client_receiver->BindNewPipeAndPassRemote());
 +
 +  session->controller.set_disconnect_handler(base::BindRepeating(
 +      [](OwlFreshMojoSession* session) {
@@ -2273,6 +2286,106 @@ index 0000000000..d5e37ec54f
 +extern "C" int32_t owl_fresh_mojo_session_host_pid(
 +    OwlFreshMojoSession* session) {
 +  return session && session->process.IsValid() ? session->process.Pid() : -1;
++}
++
++extern "C" int owl_fresh_mojo_session_set_client(
++    OwlFreshMojoSession* session,
++    uint64_t client_handle,
++    char** error) {
++  int validation_status = ValidateBindRequest(
++      session, client_handle, "OwlFreshClient", session ? session->client_handle : 0,
++      error);
++  if (validation_status != 0) {
++    return validation_status;
++  }
++  session->client_handle = client_handle;
++  session->client_impl = std::make_unique<OwlFreshMojoClientImpl>(session);
++  session->client_receiver =
++      std::make_unique<mojo::Receiver<content::mojom::OwlFreshClient>>(
++          session->client_impl.get());
++  session->owl_session->SetClient(
++      session->client_receiver->BindNewPipeAndPassRemote());
++  return 0;
++}
++
++extern "C" int owl_fresh_mojo_session_bind_profile(
++    OwlFreshMojoSession* session,
++    uint64_t profile_handle,
++    char** error) {
++  int validation_status = ValidateBindRequest(
++      session, profile_handle, "OwlFreshProfile",
++      session ? session->profile_handle : 0, error);
++  if (validation_status != 0) {
++    return validation_status;
++  }
++  session->profile_handle = profile_handle;
++  session->owl_session->BindProfile(
++      session->profile.BindNewPipeAndPassReceiver());
++  return 0;
++}
++
++extern "C" int owl_fresh_mojo_session_bind_web_view(
++    OwlFreshMojoSession* session,
++    uint64_t web_view_handle,
++    char** error) {
++  int validation_status = ValidateBindRequest(
++      session, web_view_handle, "OwlFreshWebView",
++      session ? session->web_view_handle : 0, error);
++  if (validation_status != 0) {
++    return validation_status;
++  }
++  session->web_view_handle = web_view_handle;
++  session->owl_session->BindWebView(
++      session->web_view.BindNewPipeAndPassReceiver());
++  return 0;
++}
++
++extern "C" int owl_fresh_mojo_session_bind_input(
++    OwlFreshMojoSession* session,
++    uint64_t input_handle,
++    char** error) {
++  int validation_status = ValidateBindRequest(
++      session, input_handle, "OwlFreshInput",
++      session ? session->input_handle : 0, error);
++  if (validation_status != 0) {
++    return validation_status;
++  }
++  session->input_handle = input_handle;
++  session->owl_session->BindInput(
++      session->input.BindNewPipeAndPassReceiver());
++  return 0;
++}
++
++extern "C" int owl_fresh_mojo_session_bind_surface_tree(
++    OwlFreshMojoSession* session,
++    uint64_t surface_tree_handle,
++    char** error) {
++  int validation_status = ValidateBindRequest(
++      session, surface_tree_handle, "OwlFreshSurfaceTreeHost",
++      session ? session->surface_tree_handle : 0, error);
++  if (validation_status != 0) {
++    return validation_status;
++  }
++  session->surface_tree_handle = surface_tree_handle;
++  session->owl_session->BindSurfaceTree(
++      session->surface_tree.BindNewPipeAndPassReceiver());
++  return 0;
++}
++
++extern "C" int owl_fresh_mojo_session_bind_native_surface_host(
++    OwlFreshMojoSession* session,
++    uint64_t native_surface_host_handle,
++    char** error) {
++  int validation_status = ValidateBindRequest(
++      session, native_surface_host_handle, "OwlFreshNativeSurfaceHost",
++      session ? session->native_surface_host_handle : 0, error);
++  if (validation_status != 0) {
++    return validation_status;
++  }
++  session->native_surface_host_handle = native_surface_host_handle;
++  session->owl_session->BindNativeSurfaceHost(
++      session->native_surface_host.BindNewPipeAndPassReceiver());
++  return 0;
 +}
 +
 +extern "C" int owl_fresh_mojo_shell_execute_javascript(
@@ -2649,10 +2762,10 @@ index 0000000000..d5e37ec54f
 +}
 diff --git a/fresh_owl/owl_fresh_mojo_runtime.h b/fresh_owl/owl_fresh_mojo_runtime.h
 new file mode 100644
-index 0000000000..5962f774be
+index 0000000000..65e5e7b549
 --- /dev/null
 +++ b/fresh_owl/owl_fresh_mojo_runtime.h
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,147 @@
 +#ifndef FRESH_OWL_OWL_FRESH_MOJO_RUNTIME_H_
 +#define FRESH_OWL_OWL_FRESH_MOJO_RUNTIME_H_
 +
@@ -2708,6 +2821,31 @@ index 0000000000..5962f774be
 +    OwlFreshMojoSession* session,
 +    const char* script,
 +    char** result_json,
++    char** error);
++OWL_FRESH_MOJO_EXPORT int owl_fresh_mojo_session_set_client(
++    OwlFreshMojoSession* session,
++    uint64_t client_handle,
++    char** error);
++OWL_FRESH_MOJO_EXPORT int owl_fresh_mojo_session_bind_profile(
++    OwlFreshMojoSession* session,
++    uint64_t profile_handle,
++    char** error);
++OWL_FRESH_MOJO_EXPORT int owl_fresh_mojo_session_bind_web_view(
++    OwlFreshMojoSession* session,
++    uint64_t web_view_handle,
++    char** error);
++OWL_FRESH_MOJO_EXPORT int owl_fresh_mojo_session_bind_input(
++    OwlFreshMojoSession* session,
++    uint64_t input_handle,
++    char** error);
++OWL_FRESH_MOJO_EXPORT int owl_fresh_mojo_session_bind_surface_tree(
++    OwlFreshMojoSession* session,
++    uint64_t surface_tree_handle,
++    char** error);
++OWL_FRESH_MOJO_EXPORT int
++owl_fresh_mojo_session_bind_native_surface_host(
++    OwlFreshMojoSession* session,
++    uint64_t native_surface_host_handle,
 +    char** error);
 +OWL_FRESH_MOJO_EXPORT int owl_fresh_mojo_session_flush(
 +    OwlFreshMojoSession* session,
