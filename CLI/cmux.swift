@@ -14649,7 +14649,9 @@ struct CMUXCLI {
             "prompt",
             "error",
             "codex_error_info",
+            "codexErrorInfo",
             "additional_details",
+            "additionalDetails",
             "description",
         ] {
             if let value = compactClaudeHookStringValue(
@@ -14711,7 +14713,21 @@ struct CMUXCLI {
         for key in ["notification", "data"] {
             guard let nested = object[key] as? [String: Any] else { continue }
             var compactNested: [String: Any] = [:]
-            for nestedKey in ["type", "kind", "reason", "message", "body", "text", "prompt", "error", "codex_error_info", "additional_details", "description"] {
+            for nestedKey in [
+                "type",
+                "kind",
+                "reason",
+                "message",
+                "body",
+                "text",
+                "prompt",
+                "error",
+                "codex_error_info",
+                "codexErrorInfo",
+                "additional_details",
+                "additionalDetails",
+                "description",
+            ] {
                 if let value = compactClaudeHookStringValue(
                     nested[nestedKey],
                     maxLength: claudeHookCompactFieldLimit(for: nestedKey)
@@ -14731,7 +14747,7 @@ struct CMUXCLI {
         switch key {
         case "tool_name", "event", "event_name", "hook_event_name", "type", "kind", "notification_type", "matcher", "reason":
             return 80
-        case "last_assistant_message", "lastAssistantMessage", "message", "body", "text", "prompt", "error", "codex_error_info", "additional_details", "description":
+        case "last_assistant_message", "lastAssistantMessage", "message", "body", "text", "prompt", "error", "codex_error_info", "codexErrorInfo", "additional_details", "additionalDetails", "description":
             return 240
         default:
             return 160
@@ -15008,11 +15024,14 @@ struct CMUXCLI {
         let message = firstString(in: object, keys: ["message", "error", "body", "text", "description"])
         let additionalDetails = firstString(in: object, keys: ["additional_details", "additionalDetails"])
         let codexErrorInfo = codexHookStringValue(object["codex_error_info"] ?? object["codexErrorInfo"])
+        let eventType = firstString(in: object, keys: ["type", "kind"])?.lowercased()
+        let typedFailure = eventType == "error" || eventType == "stream_error"
         let signal = [message, additionalDetails, codexErrorInfo]
             .compactMap { $0 }
             .joined(separator: " ")
             .lowercased()
         guard !requireFailureSignal ||
+              typedFailure ||
               codexErrorInfo != nil ||
               signal.contains("error") ||
               signal.contains("failed") ||
@@ -15031,7 +15050,7 @@ struct CMUXCLI {
             ),
             codexErrorInfo: codexErrorInfo,
             additionalDetails: additionalDetails,
-            isStreamError: isStreamError
+            isStreamError: isStreamError || eventType == "stream_error"
         )
     }
 
@@ -15127,28 +15146,72 @@ struct CMUXCLI {
         let codexHome = normalizedHookValue(env["CODEX_HOME"]) ?? "~/.codex"
         let sessionsURL = URL(fileURLWithPath: NSString(string: codexHome).expandingTildeInPath, isDirectory: true)
             .appendingPathComponent("sessions", isDirectory: true)
-        guard let enumerator = FileManager.default.enumerator(
-            at: sessionsURL,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else {
-            return nil
-        }
-
+        let fileManager = FileManager.default
         var newest: URL?
         var newestModificationDate: Date?
-        for case let url as URL in enumerator {
-            guard url.pathExtension == "jsonl",
-                  url.lastPathComponent.contains(normalizedSessionId) else {
+        for directoryURL in recentCodexSessionDirectories(sessionsURL: sessionsURL, fileManager: fileManager) {
+            guard let urls = try? fileManager.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else {
                 continue
             }
-            let modificationDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            if newest == nil || modificationDate > (newestModificationDate ?? .distantPast) {
-                newest = url
-                newestModificationDate = modificationDate
+
+            for url in urls {
+                guard url.pathExtension == "jsonl",
+                      url.lastPathComponent.contains(normalizedSessionId) else {
+                    continue
+                }
+                let modificationDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                if newest == nil || modificationDate > (newestModificationDate ?? .distantPast) {
+                    newest = url
+                    newestModificationDate = modificationDate
+                }
             }
         }
         return newest?.path
+    }
+
+    private func recentCodexSessionDirectories(sessionsURL: URL, fileManager: FileManager) -> [URL] {
+        var directories: [URL] = []
+        var seenPaths = Set<String>()
+
+        func appendIfDirectory(_ url: URL) {
+            guard seenPaths.insert(url.path).inserted else { return }
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                return
+            }
+            directories.append(url)
+        }
+
+        appendIfDirectory(sessionsURL)
+
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        for calendar in [Calendar.current, utcCalendar] {
+            for dayOffset in -14...1 {
+                guard let date = calendar.date(byAdding: .day, value: dayOffset, to: Date()) else {
+                    continue
+                }
+                let components = calendar.dateComponents([.year, .month, .day], from: date)
+                guard let year = components.year,
+                      let month = components.month,
+                      let day = components.day else {
+                    continue
+                }
+                appendIfDirectory(
+                    sessionsURL
+                        .appendingPathComponent(String(format: "%04d", year), isDirectory: true)
+                        .appendingPathComponent(String(format: "%02d", month), isDirectory: true)
+                        .appendingPathComponent(String(format: "%02d", day), isDirectory: true)
+                )
+            }
+        }
+
+        return directories
     }
 
     private func extractMessageText(from message: [String: Any]) -> String? {
