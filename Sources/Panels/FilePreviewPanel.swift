@@ -35,32 +35,60 @@ final class FilePreviewDragRegistry {
     static let shared = FilePreviewDragRegistry()
 
     private let lock = NSLock()
-    private var pending: [UUID: FilePreviewDragEntry] = [:]
+    private var pending: [UUID: PendingEntry] = [:]
+    private static let entryTTL: TimeInterval = 60
 
-    func register(_ entry: FilePreviewDragEntry) -> UUID {
+    private struct PendingEntry {
+        let entry: FilePreviewDragEntry
+        let registeredAt: Date
+    }
+
+    func register(_ entry: FilePreviewDragEntry, now: Date = Date()) -> UUID {
         let id = UUID()
         lock.lock()
-        pending[id] = entry
+        sweepExpiredLocked(now: now)
+        pending[id] = PendingEntry(entry: entry, registeredAt: now)
         lock.unlock()
         return id
     }
 
-    func consume(id: UUID) -> FilePreviewDragEntry? {
+    func consume(id: UUID, now: Date = Date()) -> FilePreviewDragEntry? {
         lock.lock()
         defer { lock.unlock() }
-        return pending.removeValue(forKey: id)
+        sweepExpiredLocked(now: now)
+        return pending.removeValue(forKey: id)?.entry
     }
 
-    func contains(id: UUID) -> Bool {
+    func contains(id: UUID, now: Date = Date()) -> Bool {
         lock.lock()
         defer { lock.unlock() }
+        sweepExpiredLocked(now: now)
         return pending[id] != nil
+    }
+
+    func discard(id: UUID) {
+        lock.lock()
+        pending.removeValue(forKey: id)
+        lock.unlock()
+    }
+
+    func discardExpired(now: Date = Date()) {
+        lock.lock()
+        sweepExpiredLocked(now: now)
+        lock.unlock()
     }
 
     func discardAll() {
         lock.lock()
         pending.removeAll()
         lock.unlock()
+    }
+
+    private func sweepExpiredLocked(now: Date) {
+        let cutoff = now.addingTimeInterval(-Self.entryTTL)
+        pending = pending.filter { _, value in
+            value.registeredAt >= cutoff
+        }
     }
 }
 
@@ -86,9 +114,50 @@ final class FilePreviewDragPasteboardWriter: NSObject, NSPasteboardWriting {
 
     static let bonsplitTransferType = NSPasteboard.PasteboardType("com.splittabbar.tabtransfer")
 
-    private let transferData: Data
+    private let filePath: String
+    private let displayTitle: String
+    private var transferData: Data?
+    private var didMirrorTransferDataToDragPasteboard = false
 
     init(filePath: String, displayTitle: String) {
+        self.filePath = filePath
+        self.displayTitle = displayTitle
+        super.init()
+    }
+
+    static func dragID(from transferData: Data) -> UUID? {
+        guard let transfer = try? JSONDecoder().decode(MirrorTabTransferData.self, from: transferData) else {
+            return nil
+        }
+        return transfer.tab.id
+    }
+
+    static func dragID(from pasteboard: NSPasteboard) -> UUID? {
+        for type in [DragOverlayRoutingPolicy.filePreviewTransferType, Self.bonsplitTransferType] {
+            if let data = pasteboard.data(forType: type),
+               let id = dragID(from: data) {
+                return id
+            }
+            if let raw = pasteboard.string(forType: type),
+               let id = dragID(from: Data(raw.utf8)) {
+                return id
+            }
+        }
+        return nil
+    }
+
+    static func discardRegisteredDrag(from pasteboard: NSPasteboard) {
+        if let id = dragID(from: pasteboard) {
+            FilePreviewDragRegistry.shared.discard(id: id)
+        }
+        FilePreviewDragRegistry.shared.discardExpired()
+    }
+
+    private func transferDataForDrag() -> Data {
+        if let transferData {
+            return transferData
+        }
+
         let dragId = FilePreviewDragRegistry.shared.register(
             FilePreviewDragEntry(filePath: filePath, displayTitle: displayTitle)
         )
@@ -108,9 +177,9 @@ final class FilePreviewDragPasteboardWriter: NSObject, NSPasteboardWriting {
             sourcePaneId: UUID(),
             sourceProcessId: Int32(ProcessInfo.processInfo.processIdentifier)
         )
-        self.transferData = (try? JSONEncoder().encode(transfer)) ?? Data()
-        super.init()
-        mirrorTransferDataToDragPasteboard()
+        let data = (try? JSONEncoder().encode(transfer)) ?? Data()
+        transferData = data
+        return data
     }
 
     func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
@@ -122,12 +191,16 @@ final class FilePreviewDragPasteboardWriter: NSObject, NSPasteboardWriting {
 
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type == Self.bonsplitTransferType || type == DragOverlayRoutingPolicy.filePreviewTransferType {
-            return transferData
+            let data = transferDataForDrag()
+            mirrorTransferDataToDragPasteboard(data)
+            return data
         }
         return nil
     }
 
-    private func mirrorTransferDataToDragPasteboard() {
+    private func mirrorTransferDataToDragPasteboard(_ transferData: Data) {
+        guard !didMirrorTransferDataToDragPasteboard else { return }
+        didMirrorTransferDataToDragPasteboard = true
         let write = { [transferData] in
             let pasteboard = NSPasteboard(name: .drag)
             pasteboard.addTypes([DragOverlayRoutingPolicy.filePreviewTransferType, Self.bonsplitTransferType], owner: nil)
@@ -1845,6 +1918,10 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     private var activePDFResizeID: Int?
     private var activePDFRegion: FilePreviewPanelFocusIntent?
     private var rotationAccumulator: CGFloat = 0
+    private static let documentLoadQueue = DispatchQueue(
+        label: "com.cmux.file-preview.pdf-document-load",
+        qos: .userInitiated
+    )
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1899,10 +1976,9 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
             return
         }
         currentURL = url
-        let document = PDFDocument(url: url)
-        pdfView.document = document
-        thumbnailView.setDocument(document)
-        outlineRoot = document?.outlineRoot
+        pdfView.document = nil
+        thumbnailView.setDocument(nil)
+        outlineRoot = nil
         titleLabel.stringValue = url.lastPathComponent
         rotationAccumulator = 0
         didUserResizeSidebar = false
@@ -1913,6 +1989,29 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         updateSidebarContent()
         applyPreferredSidebarWidthIfNeeded()
         updatePageControls()
+        refreshPDFSmartFitWithoutViewportRestore()
+
+        let loadURL = url
+        Self.documentLoadQueue.async { [weak self] in
+            let document = PDFDocument(url: loadURL)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.currentURL == loadURL else { return }
+                self.applyLoadedPDFDocument(document, for: loadURL)
+            }
+        }
+    }
+
+    private func applyLoadedPDFDocument(_ document: PDFDocument?, for url: URL) {
+        pdfView.document = document
+        thumbnailView.setDocument(document)
+        outlineRoot = document?.outlineRoot
+        titleLabel.stringValue = url.lastPathComponent
+        pdfView.autoScales = true
+        applyDisplayMode()
+        outlineView.reloadData()
+        updateSidebarContent()
+        applyPreferredSidebarWidthIfNeeded()
+        updatePageControls(scrollThumbnailToVisible: false)
         refreshPDFSmartFitWithoutViewportRestore()
     }
 
@@ -2245,7 +2344,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
             pageIndex = 0
         }
         let format = String(localized: "filePreview.pdf.pageCount", defaultValue: "Page %d of %d")
-        pageLabel.stringValue = String(format: format, pageIndex + 1, document.pageCount)
+        pageLabel.stringValue = String.localizedStringWithFormat(format, pageIndex + 1, document.pageCount)
         thumbnailView.selectPage(at: pageIndex, scrollToVisible: scrollThumbnailToVisible)
         logPDFResizeProbe(
             "updatePageControls page=\(pageIndex + 1)/\(document.pageCount) " +
@@ -2976,6 +3075,10 @@ private final class FilePreviewImageContainerView: NSView {
     private var isFitMode = true
     private var rotationDegrees = 0
     private var rotationAccumulator: CGFloat = 0
+    private static let imageLoadQueue = DispatchQueue(
+        label: "com.cmux.file-preview.image-load",
+        qos: .userInitiated
+    )
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -3023,7 +3126,25 @@ private final class FilePreviewImageContainerView: NSView {
     func setURL(_ url: URL) {
         guard currentURL != url else { return }
         currentURL = url
-        let image = NSImage(contentsOf: url)
+        documentView.imageView.image = nil
+        imageSize = normalizedSize(.zero)
+        isFitMode = true
+        rotationDegrees = 0
+        rotationAccumulator = 0
+        scale = fitScale()
+        applyScale()
+
+        let loadURL = url
+        Self.imageLoadQueue.async { [weak self] in
+            let image = NSImage(contentsOf: loadURL)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.currentURL == loadURL else { return }
+                self.applyLoadedImage(image)
+            }
+        }
+    }
+
+    private func applyLoadedImage(_ image: NSImage?) {
         documentView.imageView.image = image
         imageSize = normalizedSize(image?.size ?? .zero)
         isFitMode = true
@@ -3631,6 +3752,14 @@ private struct QuickLookPreviewView: NSViewRepresentable {
         previewView.previewItem = context.coordinator.item(for: panel.fileURL, title: panel.displayTitle)
     }
 
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        if let previewView = nsView as? QLPreviewView {
+            previewView.close()
+            previewView.previewItem = nil
+        }
+        coordinator.clear()
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
@@ -3645,6 +3774,10 @@ private struct QuickLookPreviewView: NSViewRepresentable {
             let next = FilePreviewQLItem(url: url, title: title)
             item = next
             return next
+        }
+
+        func clear() {
+            item = nil
         }
     }
 }

@@ -736,7 +736,7 @@ struct FileExplorerPanelView: NSViewRepresentable {
             endedAt screenPoint: NSPoint,
             operation: NSDragOperation
         ) {
-            FilePreviewDragRegistry.shared.discardAll()
+            FilePreviewDragPasteboardWriter.discardRegisteredDrag(from: NSPasteboard(name: .drag))
         }
 
         @objc func handleDoubleClick(_ sender: NSOutlineView) {
