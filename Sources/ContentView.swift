@@ -12,7 +12,7 @@ enum MinimalModeChromeMetrics {
 }
 
 enum SidebarWorkspaceListMetrics {
-    static let firstRowTopOffset: CGFloat = MinimalModeChromeMetrics.titlebarHeight
+    static let firstRowTopOffset: CGFloat = MinimalModeChromeMetrics.titlebarHeight + 2
     static let rowVerticalPadding: CGFloat = 8
     static let topScrimHeight: CGFloat = firstRowTopOffset + 20
 
@@ -9641,7 +9641,7 @@ struct VerticalTabsSidebar: View {
     }
 
     private var sidebarTitlebarInteractionHeight: CGFloat {
-        SidebarWorkspaceListMetrics.firstRowTopOffset
+        MinimalModeChromeMetrics.titlebarHeight
     }
 
     private var sidebarTopScrimHeight: CGFloat {

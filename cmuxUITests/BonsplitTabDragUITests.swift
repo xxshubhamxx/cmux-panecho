@@ -163,7 +163,7 @@ final class BonsplitTabDragUITests: XCTestCase {
     }
 
     func testSidebarWorkspaceRowsKeepStableTopInsetAcrossPresentationModes() {
-        let expectedTopInset: CGFloat = 30
+        let expectedTopInset: CGFloat = 32
 
         for presentationMode in [WorkspacePresentationMode.minimal, .standard] {
             let (app, dataPath) = launchConfiguredApp(presentationMode: presentationMode)
