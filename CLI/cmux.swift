@@ -14017,15 +14017,14 @@ struct CMUXCLI {
             ]
         )
 
-        // Fire-and-forget Feed telemetry push so the Feed's "All" view
-        // shows Claude session/prompt/stop activity even when there's
-        // no actionable permission/plan/question event.
-        sendFeedTelemetry(
-            client: client,
-            source: "claude",
-            subcommand: subcommand,
-            parsedInput: parsedInput
-        )
+        defer {
+            sendFeedTelemetry(
+                client: client,
+                source: "claude",
+                subcommand: subcommand,
+                parsedInput: parsedInput
+            )
+        }
 
         switch subcommand {
         case "session-start", "active":
@@ -14112,14 +14111,6 @@ struct CMUXCLI {
                     )
                 }
 
-                if let completion {
-                    let title = "Claude Code"
-                    let subtitle = sanitizeNotificationField(completion.subtitle)
-                    let body = sanitizeNotificationField(completion.body)
-                    let payload = "\(title)|\(subtitle)|\(body)"
-                    _ = try? sendV1Command("notify_target \(workspaceId) \(surfaceId) \(payload)", client: client)
-                }
-
                 try? setClaudeStatus(
                     client: client,
                     workspaceId: workspaceId,
@@ -14127,6 +14118,13 @@ struct CMUXCLI {
                     icon: "pause.circle.fill",
                     color: "#8E8E93"
                 )
+                if let completion {
+                    let title = "Claude Code"
+                    let subtitle = sanitizeNotificationField(completion.subtitle)
+                    let body = sanitizeNotificationField(completion.body)
+                    let payload = "\(title)|\(subtitle)|\(body)"
+                    _ = try? sendV1Command("notify_target_async \(workspaceId) \(surfaceId) \(payload)", client: client)
+                }
                 print("OK")
             } catch {
                 if shouldIgnoreClaudeHookTeardownError(error) {
@@ -14194,7 +14192,6 @@ struct CMUXCLI {
                 )
             }
 
-            let response = try client.send(command: "notify_target \(workspaceId) \(surfaceId) \(payload)")
             _ = try? setClaudeStatus(
                 client: client,
                 workspaceId: workspaceId,
@@ -14202,6 +14199,7 @@ struct CMUXCLI {
                 icon: "bell.fill",
                 color: "#4C8DFF"
             )
+            let response = try client.send(command: "notify_target_async \(workspaceId) \(surfaceId) \(payload)")
             print(response)
 
         case "session-end":
@@ -16591,14 +16589,14 @@ export default CMUXSessionRestore;
         let rawInput = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let input = parseClaudeHookInput(rawInput: rawInput)
 
-        // Feed telemetry so session events from every agent show up in
-        // the Feed "All" view.
-        sendFeedTelemetry(
-            client: client,
-            source: def.name,
-            subcommand: subcommand,
-            parsedInput: input
-        )
+        defer {
+            sendFeedTelemetry(
+                client: client,
+                source: def.name,
+                subcommand: subcommand,
+                parsedInput: input
+            )
+        }
 
         let store = ClaudeHookSessionStore(
             processEnv: env.merging(
@@ -16698,9 +16696,9 @@ export default CMUXSessionRestore;
                     lastMsg.map { truncate(normalizedSingleLine($0), maxLength: 200) }
                         ?? "\(def.displayName) session completed"
                 )
-                let payload = "\(def.displayName)|\(sanitizeNotificationField(subtitle))|\(body)"
-                _ = try? sendV1Command("notify_target \(workspaceId) \(surfaceId) \(payload)", client: client)
                 _ = try? sendV1Command("set_status \(def.statusKey) Idle --icon=pause.circle.fill --color=#8E8E93 --tab=\(workspaceId)", client: client)
+                let payload = "\(def.displayName)|\(sanitizeNotificationField(subtitle))|\(body)"
+                _ = try? sendV1Command("notify_target_async \(workspaceId) \(surfaceId) \(payload)", client: client)
             } catch {
                 if shouldIgnoreClaudeHookTeardownError(error) {
                     telemetry.breadcrumb("\(def.name)-hook.stop.ignored", data: ["error": String(describing: error)])
@@ -16926,10 +16924,10 @@ export default CMUXSessionRestore;
 
     // MARK: - Feed telemetry helper
 
-    /// Non-blocking `feed.push` call used by the per-agent hook handlers
+    /// Best-effort `feed.push` call used by the per-agent hook handlers
     /// so session-start / prompt-submit / stop events show up in Feed's
     /// "All" view even when no permission/plan/question event fires.
-    /// Failures are swallowed — telemetry is best-effort.
+    /// Failures are swallowed.
     private func sendFeedTelemetry(
         client: SocketClient,
         source: String,

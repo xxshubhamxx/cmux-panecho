@@ -666,6 +666,19 @@ struct TerminalNotification: Identifiable, Hashable {
     var isRead: Bool
 }
 
+private struct QueuedTerminalNotificationKey: Hashable {
+    let tabId: UUID
+    let surfaceId: UUID?
+}
+
+private struct QueuedTerminalNotification {
+    let key: QueuedTerminalNotificationKey
+    let title: String
+    let subtitle: String
+    let body: String
+    let sequence: UInt64
+}
+
 @MainActor
 final class TerminalNotificationStore: ObservableObject {
     private struct TabSurfaceKey: Hashable {
@@ -735,6 +748,10 @@ final class TerminalNotificationStore: ObservableObject {
     }
     private var lastNotificationDateByCooldownKey: [String: Date] = [:]
     private var indexes = NotificationIndexes()
+    private nonisolated static let queuedNotificationLock = NSLock()
+    private nonisolated(unsafe) static var queuedNotifications: [QueuedTerminalNotificationKey: QueuedTerminalNotification] = [:]
+    private nonisolated(unsafe) static var queuedNotificationDrainScheduled = false
+    private nonisolated(unsafe) static var queuedNotificationSequence: UInt64 = 0
 
     private init() {
         indexes = Self.buildIndexes(for: notifications)
@@ -747,6 +764,67 @@ final class TerminalNotificationStore: ObservableObject {
         }
         refreshDockBadge()
         refreshAuthorizationStatus()
+    }
+
+    nonisolated static func enqueueNotification(
+        tabId: UUID,
+        surfaceId: UUID?,
+        title: String,
+        subtitle: String,
+        body: String
+    ) {
+        let key = QueuedTerminalNotificationKey(tabId: tabId, surfaceId: surfaceId)
+        var shouldScheduleDrain = false
+
+        queuedNotificationLock.lock()
+        queuedNotificationSequence &+= 1
+        queuedNotifications[key] = QueuedTerminalNotification(
+            key: key,
+            title: title,
+            subtitle: subtitle,
+            body: body,
+            sequence: queuedNotificationSequence
+        )
+        if !queuedNotificationDrainScheduled {
+            queuedNotificationDrainScheduled = true
+            shouldScheduleDrain = true
+        }
+        queuedNotificationLock.unlock()
+
+        guard shouldScheduleDrain else { return }
+        RunLoop.main.perform(inModes: [.default]) {
+            Task { @MainActor in
+                TerminalNotificationStore.shared.drainQueuedNotifications()
+            }
+        }
+    }
+
+    private func drainQueuedNotifications() {
+        Self.queuedNotificationLock.lock()
+        let queued = Self.queuedNotifications.values.sorted { $0.sequence < $1.sequence }
+        Self.queuedNotifications.removeAll(keepingCapacity: true)
+        Self.queuedNotificationDrainScheduled = false
+        Self.queuedNotificationLock.unlock()
+
+        for notification in queued {
+            guard shouldDeliverQueuedNotification(notification) else { continue }
+            addNotification(
+                tabId: notification.key.tabId,
+                surfaceId: notification.key.surfaceId,
+                title: notification.title,
+                subtitle: notification.subtitle,
+                body: notification.body
+            )
+        }
+    }
+
+    private func shouldDeliverQueuedNotification(_ notification: QueuedTerminalNotification) -> Bool {
+        guard let tabManager = AppDelegate.shared?.tabManager else { return true }
+        guard let tab = tabManager.tabs.first(where: { $0.id == notification.key.tabId }) else {
+            return false
+        }
+        guard let surfaceId = notification.key.surfaceId else { return true }
+        return tab.panels[surfaceId] != nil
     }
 
     deinit {
