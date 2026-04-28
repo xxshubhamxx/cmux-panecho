@@ -35,6 +35,16 @@ enum OwlFreshSurfaceKind {
   kNativeMenu = 2,
 };
 
+struct OwlFreshNativeMenuItem {
+  string label;
+  string tool_tip;
+  bool enabled;
+  bool separator;
+  bool group;
+  uint32 text_direction;
+  bool has_text_direction_override;
+};
+
 struct OwlFreshSurfaceInfo {
   uint64 surface_id;
   uint64 parent_surface_id;
@@ -48,7 +58,10 @@ struct OwlFreshSurfaceInfo {
   int32 z_index;
   bool visible;
   array<string> menu_items;
+  array<OwlFreshNativeMenuItem> native_menu_items;
   int32 selected_index;
+  float item_font_size;
+  bool right_aligned;
   string label;
 };
 

@@ -213,6 +213,58 @@ public enum OwlFreshSurfaceKind: UInt32, Codable, CaseIterable {
     case nativeMenu = 2
 }
 
+public struct OwlFreshNativeMenuItem: Equatable, Codable {
+    public let label: String
+    public let toolTip: String
+    public let enabled: Bool
+    public let separator: Bool
+    public let group: Bool
+    public let textDirection: UInt32
+    public let hasTextDirectionOverride: Bool
+
+    public init(label: String, toolTip: String, enabled: Bool, separator: Bool, group: Bool, textDirection: UInt32, hasTextDirectionOverride: Bool) {
+        self.label = label
+        self.toolTip = toolTip
+        self.enabled = enabled
+        self.separator = separator
+        self.group = group
+        self.textDirection = textDirection
+        self.hasTextDirectionOverride = hasTextDirectionOverride
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.label = try container.decode(String.self, forKey: .label)
+        self.toolTip = try container.decode(String.self, forKey: .toolTip)
+        self.enabled = try container.decode(Bool.self, forKey: .enabled)
+        self.separator = try container.decode(Bool.self, forKey: .separator)
+        self.group = try container.decode(Bool.self, forKey: .group)
+        self.textDirection = try MojoJSONCoding.decodeUInt32(from: container, forKey: .textDirection)
+        self.hasTextDirectionOverride = try container.decode(Bool.self, forKey: .hasTextDirectionOverride)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(label, forKey: .label)
+        try container.encode(toolTip, forKey: .toolTip)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(separator, forKey: .separator)
+        try container.encode(group, forKey: .group)
+        try container.encode(textDirection, forKey: .textDirection)
+        try container.encode(hasTextDirectionOverride, forKey: .hasTextDirectionOverride)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case label
+        case toolTip
+        case enabled
+        case separator
+        case group
+        case textDirection
+        case hasTextDirectionOverride
+    }
+}
+
 public struct OwlFreshSurfaceInfo: Equatable, Codable {
     public let surfaceId: UInt64
     public let parentSurfaceId: UInt64
@@ -226,10 +278,13 @@ public struct OwlFreshSurfaceInfo: Equatable, Codable {
     public let zIndex: Int32
     public let visible: Bool
     public let menuItems: [String]
+    public let nativeMenuItems: [OwlFreshNativeMenuItem]
     public let selectedIndex: Int32
+    public let itemFontSize: Float
+    public let rightAligned: Bool
     public let label: String
 
-    public init(surfaceId: UInt64, parentSurfaceId: UInt64, kind: OwlFreshSurfaceKind, contextId: UInt32, x: Int32, y: Int32, width: UInt32, height: UInt32, scale: Float, zIndex: Int32, visible: Bool, menuItems: [String], selectedIndex: Int32, label: String) {
+    public init(surfaceId: UInt64, parentSurfaceId: UInt64, kind: OwlFreshSurfaceKind, contextId: UInt32, x: Int32, y: Int32, width: UInt32, height: UInt32, scale: Float, zIndex: Int32, visible: Bool, menuItems: [String], nativeMenuItems: [OwlFreshNativeMenuItem], selectedIndex: Int32, itemFontSize: Float, rightAligned: Bool, label: String) {
         self.surfaceId = surfaceId
         self.parentSurfaceId = parentSurfaceId
         self.kind = kind
@@ -242,7 +297,10 @@ public struct OwlFreshSurfaceInfo: Equatable, Codable {
         self.zIndex = zIndex
         self.visible = visible
         self.menuItems = menuItems
+        self.nativeMenuItems = nativeMenuItems
         self.selectedIndex = selectedIndex
+        self.itemFontSize = itemFontSize
+        self.rightAligned = rightAligned
         self.label = label
     }
 
@@ -260,7 +318,10 @@ public struct OwlFreshSurfaceInfo: Equatable, Codable {
         self.zIndex = try container.decode(Int32.self, forKey: .zIndex)
         self.visible = try container.decode(Bool.self, forKey: .visible)
         self.menuItems = try container.decode([String].self, forKey: .menuItems)
+        self.nativeMenuItems = try container.decode([OwlFreshNativeMenuItem].self, forKey: .nativeMenuItems)
         self.selectedIndex = try container.decode(Int32.self, forKey: .selectedIndex)
+        self.itemFontSize = try container.decode(Float.self, forKey: .itemFontSize)
+        self.rightAligned = try container.decode(Bool.self, forKey: .rightAligned)
         self.label = try container.decode(String.self, forKey: .label)
     }
 
@@ -278,7 +339,10 @@ public struct OwlFreshSurfaceInfo: Equatable, Codable {
         try container.encode(zIndex, forKey: .zIndex)
         try container.encode(visible, forKey: .visible)
         try container.encode(menuItems, forKey: .menuItems)
+        try container.encode(nativeMenuItems, forKey: .nativeMenuItems)
         try container.encode(selectedIndex, forKey: .selectedIndex)
+        try container.encode(itemFontSize, forKey: .itemFontSize)
+        try container.encode(rightAligned, forKey: .rightAligned)
         try container.encode(label, forKey: .label)
     }
 
@@ -295,7 +359,10 @@ public struct OwlFreshSurfaceInfo: Equatable, Codable {
         case zIndex
         case visible
         case menuItems
+        case nativeMenuItems
         case selectedIndex
+        case itemFontSize
+        case rightAligned
         case label
     }
 }
@@ -641,13 +708,14 @@ public struct MojoSchemaDeclaration: Equatable, Codable {
 
 public enum OwlFreshMojoSchema {
     public static let module = "content.mojom"
-    public static let sourceChecksum = "fnv1a64:9ea0a10990b5c8cb"
+    public static let sourceChecksum = "fnv1a64:dcb099b165bc7b16"
     public static let declarations: [MojoSchemaDeclaration] = [
         MojoSchemaDeclaration(kind: "enum", name: "OwlFreshMouseKind"),
         MojoSchemaDeclaration(kind: "struct", name: "OwlFreshMouseEvent"),
         MojoSchemaDeclaration(kind: "struct", name: "OwlFreshKeyEvent"),
         MojoSchemaDeclaration(kind: "struct", name: "OwlFreshCompositorInfo"),
         MojoSchemaDeclaration(kind: "enum", name: "OwlFreshSurfaceKind"),
+        MojoSchemaDeclaration(kind: "struct", name: "OwlFreshNativeMenuItem"),
         MojoSchemaDeclaration(kind: "struct", name: "OwlFreshSurfaceInfo"),
         MojoSchemaDeclaration(kind: "struct", name: "OwlFreshSurfaceTree"),
         MojoSchemaDeclaration(kind: "struct", name: "OwlFreshCaptureResult"),

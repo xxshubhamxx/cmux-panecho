@@ -1538,6 +1538,8 @@ private final class LayerHostRunner {
                 }) else {
                     throw VerifierError.input("\(target.name) missing native menu surface \(label): \(tree)")
                 }
+                try validateNativeMenuSurface(surface, targetName: target.name)
+                try writeNativeMenuSurface(surface, screenshotName: name, outputDirectory: options.outputDirectory)
                 guard let windowID = swiftHostWindowID(title: window.title, minimumSize: currentSize) else {
                     throw VerifierError.capture("Swift LayerHost window was not visible for \(name)")
                 }
@@ -2020,39 +2022,19 @@ private final class LayerHostWindow {
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
 
-        let menu = NSMenu(title: surface.label)
-        menu.autoenablesItems = false
-        var indexedMenuItems: [Int32: NSMenuItem] = [:]
-        for (index, label) in surface.menuItems.enumerated() {
-            if label == "---" {
-                menu.addItem(.separator())
-                continue
-            }
+        let runner = NativeMenuRunner(surface: surface)
 
-            let item = NSMenuItem(
-                title: label.isEmpty ? " " : label,
-                action: nil,
-                keyEquivalent: ""
-            )
-            item.isEnabled = true
-            item.tag = index
-            if Int32(index) == surface.selectedIndex {
-                item.state = .on
-            }
-            menu.addItem(item)
-            indexedMenuItems[Int32(index)] = item
-        }
-
-        guard menu.numberOfItems > 0 else {
+        guard runner.menu.numberOfItems > 0 else {
             throw VerifierError.input("native menu surface \(surface.label) produced an empty NSMenu")
         }
 
         let surfaceFrame = frame(for: surface, origin: .zero)
-        let anchor = NSPoint(
+        let controlFrame = NSRect(
             x: max(0, min(contentView.bounds.width, surfaceFrame.minX)),
-            y: max(0, min(contentView.bounds.height, contentView.bounds.height - surfaceFrame.minY))
+            y: max(0, min(contentView.bounds.height, contentView.bounds.height - surfaceFrame.maxY)),
+            width: surfaceFrame.width,
+            height: surfaceFrame.height
         )
-        let positioningItem = indexedMenuItems[surface.selectedIndex]
         let box = NativeMenuCaptureBox()
         let captureTimer = Timer(timeInterval: 0.2, repeats: false) { _ in
             box.result = Result {
@@ -2062,10 +2044,10 @@ private final class LayerHostWindow {
                     to: url
                 )
             }
-            menu.cancelTrackingWithoutAnimation()
+            runner.cancel()
         }
         RunLoop.current.add(captureTimer, forMode: .eventTracking)
-        _ = menu.popUp(positioning: positioningItem, at: anchor, in: contentView)
+        runner.run(in: contentView, bounds: controlFrame)
 
         if let result = box.result {
             return try result.get()
@@ -2097,6 +2079,145 @@ private final class LayerHostWindow {
         CATransaction.flush()
     }
 
+}
+
+private func validateNativeMenuSurface(_ surface: OwlFreshSurfaceInfo, targetName: String) throws {
+    guard surface.width > 0, surface.height > 0 else {
+        throw VerifierError.input("\(targetName) native menu surface has empty control bounds: \(surface)")
+    }
+
+    guard surface.label == "select-menu" else {
+        return
+    }
+
+    guard !surface.nativeMenuItems.isEmpty else {
+        throw VerifierError.input("\(targetName) select menu missing Chrome native menu item metadata: \(surface)")
+    }
+    guard surface.itemFontSize > 0 else {
+        throw VerifierError.input("\(targetName) select menu missing Chrome item font size: \(surface)")
+    }
+    guard surface.height <= 80 else {
+        throw VerifierError.input("\(targetName) select menu still looks like synthesized popup bounds: \(surface)")
+    }
+}
+
+private func writeNativeMenuSurface(
+    _ surface: OwlFreshSurfaceInfo,
+    screenshotName: String,
+    outputDirectory: URL
+) throws {
+    let baseName = screenshotName.hasSuffix(".png")
+        ? String(screenshotName.dropLast(4))
+        : screenshotName
+    let url = outputDirectory.appendingPathComponent("\(baseName)-surface.json")
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    try encoder.encode(surface).write(to: url)
+}
+
+private final class NativeMenuRunner: NSObject {
+    let menu: NSMenu
+    private let selectedIndex: Int32
+    private let itemFontSize: CGFloat
+    private let rightAligned: Bool
+    private var selectedMenuItemIndex: Int?
+
+    init(surface: OwlFreshSurfaceInfo) {
+        menu = NSMenu(title: surface.label)
+        menu.autoenablesItems = false
+        selectedIndex = surface.selectedIndex
+        itemFontSize = CGFloat(
+            surface.itemFontSize > 0 ? surface.itemFontSize : Float(NSFont.systemFontSize)
+        )
+        rightAligned = surface.rightAligned
+        super.init()
+
+        let items = surface.nativeMenuItems.isEmpty
+            ? surface.menuItems.map { label in
+                OwlFreshNativeMenuItem(
+                    label: label,
+                    toolTip: "",
+                    enabled: true,
+                    separator: label == "---",
+                    group: false,
+                    textDirection: 2,
+                    hasTextDirectionOverride: false
+                )
+            }
+            : surface.nativeMenuItems
+        for item in items {
+            addItem(item)
+        }
+    }
+
+    func run(in view: NSView, bounds: NSRect) {
+        let cell = NSPopUpButtonCell(textCell: "", pullsDown: false)
+        cell.menu = menu
+        if selectedIndex > -1 {
+            cell.selectItem(withTag: Int(selectedIndex))
+        } else {
+            cell.selectItem(at: -1)
+        }
+
+        if rightAligned {
+            cell.userInterfaceLayoutDirection = .rightToLeft
+            menu.userInterfaceLayoutDirection = .rightToLeft
+        }
+
+        let fakeControlView = NSView(frame: bounds)
+        view.addSubview(fakeControlView)
+        cell.attachPopUp(withFrame: fakeControlView.bounds, in: fakeControlView)
+        cell.performClick(withFrame: fakeControlView.bounds, in: fakeControlView)
+        fakeControlView.removeFromSuperview()
+    }
+
+    func cancel() {
+        menu.cancelTrackingWithoutAnimation()
+    }
+
+    private func addItem(_ item: OwlFreshNativeMenuItem) {
+        if item.separator {
+            menu.addItem(.separator())
+            return
+        }
+
+        let title = item.label.isEmpty ? " " : item.label
+        let menuItem = menu.addItem(
+            withTitle: title,
+            action: #selector(menuItemSelected(_:)),
+            keyEquivalent: ""
+        )
+        if !item.toolTip.isEmpty {
+            menuItem.toolTip = item.toolTip
+        }
+        menuItem.isEnabled = item.enabled && !item.group
+        menuItem.target = self
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = rightAligned ? .right : .left
+        let writingDirection: NSWritingDirection = item.textDirection == 1
+            ? .rightToLeft
+            : .leftToRight
+        paragraphStyle.baseWritingDirection = writingDirection
+        paragraphStyle.lineBreakMode = .byTruncatingTail
+
+        var attributes: [NSAttributedString.Key: Any] = [
+            .paragraphStyle: paragraphStyle,
+            .font: NSFont.menuFont(ofSize: itemFontSize),
+        ]
+        if item.hasTextDirectionOverride {
+            attributes[.writingDirection] = [
+                NSNumber(value: writingDirection.rawValue | NSWritingDirectionFormatType.override.rawValue),
+            ]
+        }
+        menuItem.attributedTitle = NSAttributedString(string: title, attributes: attributes)
+        menuItem.title = title.trimmingCharacters(in: .whitespaces)
+        menuItem.tag = menu.numberOfItems - 1
+    }
+
+    @objc private func menuItemSelected(_ sender: NSMenuItem) {
+        selectedMenuItemIndex = sender.tag
+    }
 }
 
 private final class NativeMenuCaptureBox {

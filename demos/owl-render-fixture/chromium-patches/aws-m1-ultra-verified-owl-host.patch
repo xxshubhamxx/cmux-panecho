@@ -70,7 +70,7 @@ index 0530ac4075..d358a0d070 100644
  
  #endif  // CONTENT_BROWSER_RENDERER_HOST_POPUP_MENU_HELPER_MAC_H_
 diff --git a/content/browser/renderer_host/popup_menu_helper_mac.mm b/content/browser/renderer_host/popup_menu_helper_mac.mm
-index c56f5f4428..f1ba8461ea 100644
+index c56f5f4428..2558be6c0a 100644
 --- a/content/browser/renderer_host/popup_menu_helper_mac.mm
 +++ b/content/browser/renderer_host/popup_menu_helper_mac.mm
 @@ -4,6 +4,10 @@
@@ -84,7 +84,7 @@ index c56f5f4428..f1ba8461ea 100644
  #include "base/numerics/safe_conversions.h"
  #import "content/app_shim_remote_cocoa/render_widget_host_view_cocoa.h"
  #include "content/browser/permissions/permission_controller_impl.h"
-@@ -15,12 +19,28 @@
+@@ -15,12 +19,54 @@
  #include "content/common/content_export.h"
  #include "content/public/browser/web_contents.h"
  #import "ui/base/cocoa/base_view.h"
@@ -110,10 +110,36 @@ index c56f5f4428..f1ba8461ea 100644
 +  }
 +  return labels;
 +}
++
++std::vector<ui::OwlFreshNativeMenuItem> NativeMenuItems(
++    const std::vector<blink::mojom::MenuItemPtr>& items) {
++  std::vector<ui::OwlFreshNativeMenuItem> native_items;
++  native_items.reserve(items.size());
++  for (const auto& item : items) {
++    ui::OwlFreshNativeMenuItem native_item;
++    if (!item) {
++      native_item.label = "";
++      native_item.enabled = false;
++      native_items.push_back(std::move(native_item));
++      continue;
++    }
++    native_item.separator =
++        item->type == blink::mojom::MenuItem::Type::kSeparator;
++    native_item.group = item->type == blink::mojom::MenuItem::Type::kGroup;
++    native_item.label = native_item.separator ? "---"
++                                             : item->label.value_or(std::string());
++    native_item.tool_tip = item->tool_tip.value_or(std::string());
++    native_item.enabled = item->enabled;
++    native_item.text_direction = static_cast<uint32_t>(item->text_direction);
++    native_item.has_text_direction_override = item->has_text_direction_override;
++    native_items.push_back(std::move(native_item));
++  }
++  return native_items;
++}
  
  }  // namespace
  
-@@ -41,6 +61,9 @@
+@@ -41,6 +87,9 @@
  }
  
  PopupMenuHelper::~PopupMenuHelper() {
@@ -123,33 +149,26 @@ index c56f5f4428..f1ba8461ea 100644
    Hide();
  }
  
-@@ -77,6 +100,25 @@
+@@ -77,6 +126,18 @@
      return;
    }
  
 +  if (base::CommandLine::ForCurrentProcess()->HasSwitch("fresh-owl-embed")) {
-+    const int row_height =
-+        std::max(28, static_cast<int>(std::ceil(item_font_size + 12)));
-+    gfx::Rect popup_bounds(bounds.x(), bounds.bottom(),
-+                           std::max(bounds_in_screen.width(), 260),
-+                           std::max(row_height, row_height *
-+                                                    static_cast<int>(items.size()) +
-+                                                    8));
 +    g_owl_fresh_active_popup_menu = this;
 +    ui::OwlFreshPublishNativeMenuSurface(
 +        reinterpret_cast<uint64_t>(this),
 +        reinterpret_cast<uint64_t>(rwhvm),
-+        CGRectMake(popup_bounds.x(), popup_bounds.y(), popup_bounds.width(),
-+                   popup_bounds.height()),
++        CGRectMake(bounds.x(), bounds.y(), bounds.width(), bounds.height()),
 +        rwhvm->GetCurrentScreenInfo().device_scale_factor, MenuLabels(items),
-+        selected_item, "select-menu");
++        NativeMenuItems(items), selected_item, static_cast<float>(item_font_size),
++        right_aligned, "select-menu");
 +    return;
 +  }
 +
    remote_runner_.reset();
    rwhvm->GetNSView()->DisplayPopupMenu(
        remote_cocoa::mojom::PopupMenu::New(
-@@ -87,6 +129,10 @@
+@@ -87,6 +148,10 @@
  }
  
  void PopupMenuHelper::Hide() {
@@ -160,7 +179,7 @@ index c56f5f4428..f1ba8461ea 100644
    if (remote_runner_) {
      remote_runner_->Hide();
    }
-@@ -94,6 +140,22 @@
+@@ -94,6 +159,22 @@
    popup_client_.reset();
  }
  
@@ -183,7 +202,7 @@ index c56f5f4428..f1ba8461ea 100644
  RenderWidgetHostViewMac* PopupMenuHelper::GetRenderWidgetHostView() const {
    return static_cast<RenderWidgetHostViewMac*>(
        render_frame_host_->GetOutermostMainFrameOrEmbedder()->GetView());
-@@ -126,6 +188,23 @@
+@@ -126,6 +207,23 @@
    delegate_->OnMenuClosed();  // May delete |this|.
  }
  
@@ -401,10 +420,10 @@ index 0000000000..09928bd888
 +
 diff --git a/content/shell/browser/owl_fresh_host_mac.mm b/content/shell/browser/owl_fresh_host_mac.mm
 new file mode 100644
-index 0000000000..c126d8261e
+index 0000000000..0986158706
 --- /dev/null
 +++ b/content/shell/browser/owl_fresh_host_mac.mm
-@@ -0,0 +1,1044 @@
+@@ -0,0 +1,1059 @@
 +#include "content/shell/browser/owl_fresh_host_mac.h"
 +
 +#import <Cocoa/Cocoa.h>
@@ -804,7 +823,22 @@ index 0000000000..c126d8261e
 +    surface->z_index = snapshot.z_index;
 +    surface->visible = snapshot.visible;
 +    surface->menu_items = snapshot.menu_items;
++    for (const ui::OwlFreshNativeMenuItem& snapshot_item :
++         snapshot.native_menu_items) {
++      auto item = mojom::OwlFreshNativeMenuItem::New();
++      item->label = snapshot_item.label;
++      item->tool_tip = snapshot_item.tool_tip;
++      item->enabled = snapshot_item.enabled;
++      item->separator = snapshot_item.separator;
++      item->group = snapshot_item.group;
++      item->text_direction = snapshot_item.text_direction;
++      item->has_text_direction_override =
++          snapshot_item.has_text_direction_override;
++      surface->native_menu_items.push_back(std::move(item));
++    }
 +    surface->selected_index = snapshot.selected_index;
++    surface->item_font_size = snapshot.item_font_size;
++    surface->right_aligned = snapshot.right_aligned;
 +    surface->label = snapshot.label;
 +    tree->surfaces.push_back(std::move(surface));
 +  }
@@ -1546,7 +1580,7 @@ index 274dffa179..1cc5a230f0 100644
    shell_data.delegate = delegate;
  }
 diff --git a/content/shell/browser/shell_web_contents_view_delegate_mac.mm b/content/shell/browser/shell_web_contents_view_delegate_mac.mm
-index b11f388bcd..a5b8baec36 100644
+index b11f388bcd..3cc18e5cdf 100644
 --- a/content/shell/browser/shell_web_contents_view_delegate_mac.mm
 +++ b/content/shell/browser/shell_web_contents_view_delegate_mac.mm
 @@ -6,7 +6,10 @@
@@ -1588,20 +1622,17 @@ index b11f388bcd..a5b8baec36 100644
  }  // namespace
  
  namespace content {
-@@ -204,6 +221,19 @@ - (void)itemSelected:(id)sender {
+@@ -204,6 +221,16 @@ - (void)itemSelected:(id)sender {
                        YES,
                        delegate);
  
 +  if (base::CommandLine::ForCurrentProcess()->HasSwitch("fresh-owl-embed")) {
-+    gfx::Rect popup_bounds(params.x, params.y, 260,
-+                           std::max(36, 34 * static_cast<int>(menu.numberOfItems) +
-+                                            8));
 +    ui::OwlFreshPublishNativeMenuSurface(
 +        reinterpret_cast<uint64_t>(this),
 +        reinterpret_cast<uint64_t>(web_contents_->GetRenderWidgetHostView()),
-+        CGRectMake(popup_bounds.x(), popup_bounds.y(), popup_bounds.width(),
-+                   popup_bounds.height()),
-+        1.0f, MenuItemTitles(menu), -1, "context-menu");
++        CGRectMake(params.x, params.y, 1, 1), 1.0f, MenuItemTitles(menu),
++        std::vector<ui::OwlFreshNativeMenuItem>(), -1, 0.0f, false,
++        "context-menu");
 +    return;
 +  }
 +
@@ -1609,10 +1640,10 @@ index b11f388bcd..a5b8baec36 100644
    NSPoint position = parent_view.window.mouseLocationOutsideOfEventStream;
    NSTimeInterval eventTime = NSApp.currentEvent.timestamp;
 diff --git a/content/shell/common/shell_controller.test-mojom b/content/shell/common/shell_controller.test-mojom
-index 53b2a8b770..0cacb933db 100644
+index 53b2a8b770..53a564b196 100644
 --- a/content/shell/common/shell_controller.test-mojom
 +++ b/content/shell/common/shell_controller.test-mojom
-@@ -7,6 +7,93 @@ module content.mojom;
+@@ -7,6 +7,106 @@ module content.mojom;
  import "mojo/public/mojom/base/string16.mojom";
  import "mojo/public/mojom/base/values.mojom";
  
@@ -1651,6 +1682,16 @@ index 53b2a8b770..0cacb933db 100644
 +  kNativeMenu = 2,
 +};
 +
++struct OwlFreshNativeMenuItem {
++  string label;
++  string tool_tip;
++  bool enabled;
++  bool separator;
++  bool group;
++  uint32 text_direction;
++  bool has_text_direction_override;
++};
++
 +struct OwlFreshSurfaceInfo {
 +  uint64 surface_id;
 +  uint64 parent_surface_id;
@@ -1664,7 +1705,10 @@ index 53b2a8b770..0cacb933db 100644
 +  int32 z_index;
 +  bool visible;
 +  array<string> menu_items;
++  array<OwlFreshNativeMenuItem> native_menu_items;
 +  int32 selected_index;
++  float item_font_size;
++  bool right_aligned;
 +  string label;
 +};
 +
@@ -1706,7 +1750,7 @@ index 53b2a8b770..0cacb933db 100644
  // A control interface which can be accessed by clients launching Content Shell
  // with a Mojo invitation on the command line. This is used by
  // LaunchAsMojoClientBrowserTest to exercise that mode of execution.
-@@ -21,7 +108,10 @@ interface ShellController {
+@@ -21,7 +121,10 @@ interface ShellController {
        => (mojo_base.mojom.Value value);
  
    // Tells Content Shell to close all windows and shut down. After sending this
@@ -1757,10 +1801,10 @@ index 0000000000..ab883e226a
 +}
 diff --git a/fresh_owl/owl_fresh_mojo_runtime.cc b/fresh_owl/owl_fresh_mojo_runtime.cc
 new file mode 100644
-index 0000000000..2423ec796c
+index 0000000000..fbbb92e9fe
 --- /dev/null
 +++ b/fresh_owl/owl_fresh_mojo_runtime.cc
-@@ -0,0 +1,712 @@
+@@ -0,0 +1,728 @@
 +#include "fresh_owl/owl_fresh_mojo_runtime.h"
 +
 +#include <cstdlib>
@@ -1956,7 +2000,23 @@ index 0000000000..2423ec796c
 +        menu_items.Append(item);
 +      }
 +      surface_dict.Set("menuItems", std::move(menu_items));
++      base::ListValue native_menu_items;
++      for (const auto& item : surface->native_menu_items) {
++        base::DictValue item_dict;
++        item_dict.Set("label", item->label);
++        item_dict.Set("toolTip", item->tool_tip);
++        item_dict.Set("enabled", item->enabled);
++        item_dict.Set("separator", item->separator);
++        item_dict.Set("group", item->group);
++        item_dict.Set("textDirection", static_cast<int>(item->text_direction));
++        item_dict.Set("hasTextDirectionOverride",
++                      item->has_text_direction_override);
++        native_menu_items.Append(std::move(item_dict));
++      }
++      surface_dict.Set("nativeMenuItems", std::move(native_menu_items));
 +      surface_dict.Set("selectedIndex", surface->selected_index);
++      surface_dict.Set("itemFontSize", surface->item_font_size);
++      surface_dict.Set("rightAligned", surface->right_aligned);
 +      surface_dict.Set("label", surface->label);
 +      surfaces.Append(std::move(surface_dict));
 +    }
@@ -2722,10 +2782,10 @@ index dcf493d629..8648983f2b 100644
  }  // namespace ui
 diff --git a/ui/accelerated_widget_mac/owl_fresh_context.h b/ui/accelerated_widget_mac/owl_fresh_context.h
 new file mode 100644
-index 0000000000..7e4d959793
+index 0000000000..3ff0a37888
 --- /dev/null
 +++ b/ui/accelerated_widget_mac/owl_fresh_context.h
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,111 @@
 +#ifndef UI_ACCELERATED_WIDGET_MAC_OWL_FRESH_CONTEXT_H_
 +#define UI_ACCELERATED_WIDGET_MAC_OWL_FRESH_CONTEXT_H_
 +
@@ -2755,6 +2815,21 @@ index 0000000000..7e4d959793
 +  kNativeMenu = 2,
 +};
 +
++struct OwlFreshNativeMenuItem {
++  OwlFreshNativeMenuItem();
++  OwlFreshNativeMenuItem(const OwlFreshNativeMenuItem&);
++  OwlFreshNativeMenuItem& operator=(const OwlFreshNativeMenuItem&);
++  ~OwlFreshNativeMenuItem();
++
++  std::string label;
++  std::string tool_tip;
++  bool enabled = true;
++  bool separator = false;
++  bool group = false;
++  uint32_t text_direction = 2;
++  bool has_text_direction_override = false;
++};
++
 +struct OwlFreshSurfaceSnapshot {
 +  OwlFreshSurfaceSnapshot();
 +  OwlFreshSurfaceSnapshot(const OwlFreshSurfaceSnapshot&);
@@ -2770,7 +2845,10 @@ index 0000000000..7e4d959793
 +  int32_t z_index = 0;
 +  bool visible = false;
 +  std::vector<std::string> menu_items;
++  std::vector<OwlFreshNativeMenuItem> native_menu_items;
 +  int32_t selected_index = -1;
++  float item_font_size = 0.0f;
++  bool right_aligned = false;
 +  std::string label;
 +};
 +
@@ -2797,7 +2875,10 @@ index 0000000000..7e4d959793
 +    CGRect bounds,
 +    float scale,
 +    const std::vector<std::string>& items,
++    const std::vector<OwlFreshNativeMenuItem>& native_items,
 +    int32_t selected_index,
++    float item_font_size,
++    bool right_aligned,
 +    const std::string& label);
 +ACCELERATED_WIDGET_MAC_EXPORT void OwlFreshMarkSurfaceHidden(
 +    uint64_t surface_key);
@@ -2818,10 +2899,10 @@ index 0000000000..7e4d959793
 +#endif
 diff --git a/ui/accelerated_widget_mac/owl_fresh_context.mm b/ui/accelerated_widget_mac/owl_fresh_context.mm
 new file mode 100644
-index 0000000000..205e068a24
+index 0000000000..2747b052b6
 --- /dev/null
 +++ b/ui/accelerated_widget_mac/owl_fresh_context.mm
-@@ -0,0 +1,409 @@
+@@ -0,0 +1,431 @@
 +#include "ui/accelerated_widget_mac/owl_fresh_context.h"
 +
 +#include <algorithm>
@@ -2862,7 +2943,10 @@ index 0000000000..205e068a24
 +  int32_t z_index = 0;
 +  bool visible = false;
 +  std::vector<std::string> menu_items;
++  std::vector<OwlFreshNativeMenuItem> native_menu_items;
 +  int32_t selected_index = -1;
++  float item_font_size = 0.0f;
++  bool right_aligned = false;
 +  std::string label;
 +};
 +
@@ -2984,6 +3068,13 @@ index 0000000000..205e068a24
 +
 +}  // namespace
 +
++OwlFreshNativeMenuItem::OwlFreshNativeMenuItem() = default;
++OwlFreshNativeMenuItem::OwlFreshNativeMenuItem(
++    const OwlFreshNativeMenuItem&) = default;
++OwlFreshNativeMenuItem& OwlFreshNativeMenuItem::operator=(
++    const OwlFreshNativeMenuItem&) = default;
++OwlFreshNativeMenuItem::~OwlFreshNativeMenuItem() = default;
++
 +OwlFreshSurfaceSnapshot::OwlFreshSurfaceSnapshot() = default;
 +OwlFreshSurfaceSnapshot::OwlFreshSurfaceSnapshot(
 +    const OwlFreshSurfaceSnapshot&) = default;
@@ -3024,7 +3115,10 @@ index 0000000000..205e068a24
 +    snapshot.z_index = record.z_index;
 +    snapshot.visible = record.visible;
 +    snapshot.menu_items = record.menu_items;
++    snapshot.native_menu_items = record.native_menu_items;
 +    snapshot.selected_index = record.selected_index;
++    snapshot.item_font_size = record.item_font_size;
++    snapshot.right_aligned = record.right_aligned;
 +    snapshot.label = record.label;
 +    snapshots.push_back(std::move(snapshot));
 +  }
@@ -3083,7 +3177,10 @@ index 0000000000..205e068a24
 +  record.z_index = kind == OwlFreshSurfaceKind::kPopupWidget ? 100 : 0;
 +  record.visible = visible;
 +  record.menu_items.clear();
++  record.native_menu_items.clear();
 +  record.selected_index = -1;
++  record.item_font_size = 0.0f;
++  record.right_aligned = false;
 +  record.label = label;
 +
 +  if (kind == OwlFreshSurfaceKind::kWebView) {
@@ -3114,7 +3211,10 @@ index 0000000000..205e068a24
 +    CGRect bounds,
 +    float scale,
 +    const std::vector<std::string>& items,
++    const std::vector<OwlFreshNativeMenuItem>& native_items,
 +    int32_t selected_index,
++    float item_font_size,
++    bool right_aligned,
 +    const std::string& label) {
 +  if (surface_key == 0 || items.empty()) {
 +    return;
@@ -3131,7 +3231,10 @@ index 0000000000..205e068a24
 +  record.z_index = 200;
 +  record.visible = true;
 +  record.menu_items = items;
++  record.native_menu_items = native_items;
 +  record.selected_index = selected_index;
++  record.item_font_size = item_font_size;
++  record.right_aligned = right_aligned;
 +  record.label = label;
 +  g_portal_generation.fetch_add(1, std::memory_order_relaxed);
 +}

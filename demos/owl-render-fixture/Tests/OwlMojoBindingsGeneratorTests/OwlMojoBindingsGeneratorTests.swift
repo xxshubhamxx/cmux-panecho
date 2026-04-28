@@ -135,7 +135,10 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
               "zIndex": 0,
               "visible": true,
               "menuItems": [],
+              "nativeMenuItems": [],
               "selectedIndex": -1,
+              "itemFontSize": 0,
+              "rightAligned": false,
               "label": "web-view"
             }
           ]
