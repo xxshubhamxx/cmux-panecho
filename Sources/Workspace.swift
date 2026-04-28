@@ -340,6 +340,7 @@ extension Workspace {
         restoredTerminalScrollbackByPanelId.removeAll(keepingCapacity: false)
 #if DEBUG
         debugSessionSnapshotScrollbackFallbackPanelIds.removeAll(keepingCapacity: false)
+        debugSessionSnapshotSyntheticScrollbackByPanelId.removeAll(keepingCapacity: false)
 #endif
         restoredAgentSnapshotsByPanelId.removeAll(keepingCapacity: false)
         restoredAgentAutoResumePendingPanelIds.removeAll(keepingCapacity: false)
@@ -592,12 +593,28 @@ extension Workspace {
         allowFallbackScrollback: Bool = true
     ) -> String? {
         guard includeScrollback else { return nil }
-        let fallback = allowFallbackScrollback ? restoredTerminalScrollbackByPanelId[panelId] : nil
+#if DEBUG
+        let debugFallback = debugSessionSnapshotScrollbackFallbackPanelIds.contains(panelId)
+            ? debugSessionSnapshotSyntheticScrollbackByPanelId[panelId]
+            : nil
+#else
+        let debugFallback: String? = nil
+#endif
+        let fallback = allowFallbackScrollback
+            ? (debugFallback ?? restoredTerminalScrollbackByPanelId[panelId])
+            : nil
         let resolved = Self.resolvedSnapshotTerminalScrollback(
             capturedScrollback: capturedScrollback,
             fallbackScrollback: fallback,
             allowFallbackScrollback: allowFallbackScrollback
         )
+#if DEBUG
+        if debugFallback != nil {
+            debugSessionSnapshotScrollbackFallbackPanelIds.remove(panelId)
+            debugSessionSnapshotSyntheticScrollbackByPanelId.removeValue(forKey: panelId)
+            return resolved
+        }
+#endif
         if let resolved {
             restoredTerminalScrollbackByPanelId[panelId] = resolved
         } else {
@@ -609,9 +626,10 @@ extension Workspace {
 #if DEBUG
     func debugSeedSessionSnapshotScrollback(charactersPerTerminal: Int) -> (terminals: Int, characters: Int) {
         for panelId in debugSessionSnapshotScrollbackFallbackPanelIds {
-            restoredTerminalScrollbackByPanelId.removeValue(forKey: panelId)
+            debugSessionSnapshotSyntheticScrollbackByPanelId.removeValue(forKey: panelId)
         }
         debugSessionSnapshotScrollbackFallbackPanelIds.removeAll(keepingCapacity: false)
+        debugSessionSnapshotSyntheticScrollbackByPanelId.removeAll(keepingCapacity: false)
 
         let targetCharacters = min(
             max(0, charactersPerTerminal),
@@ -626,7 +644,7 @@ extension Workspace {
             let header = "cmux perf synthetic scrollback workspace=\(id.uuidString) panel=\(panelId.uuidString)\n"
             let paddingCount = max(0, targetCharacters - header.count)
             let scrollback = String((header + String(repeating: "s", count: paddingCount)).prefix(targetCharacters))
-            restoredTerminalScrollbackByPanelId[panelId] = scrollback
+            debugSessionSnapshotSyntheticScrollbackByPanelId[panelId] = scrollback
             debugSessionSnapshotScrollbackFallbackPanelIds.insert(panelId)
             terminalCount += 1
             totalCharacters += scrollback.count
@@ -7412,6 +7430,7 @@ final class Workspace: Identifiable, ObservableObject {
     private var restoredTerminalScrollbackByPanelId: [UUID: String] = [:]
 #if DEBUG
     private var debugSessionSnapshotScrollbackFallbackPanelIds: Set<UUID> = []
+    private var debugSessionSnapshotSyntheticScrollbackByPanelId: [UUID: String] = [:]
 #endif
     private var restoredAgentSnapshotsByPanelId: [UUID: SessionRestorableAgentSnapshot] = [:]
     private var restoredAgentAutoResumePendingPanelIds: Set<UUID> = []
@@ -10469,6 +10488,10 @@ final class Workspace: Identifiable, ObservableObject {
         pendingRemoteTerminalChildExitSurfaceIds.removeAll(keepingCapacity: false)
         pruneSurfaceMetadata(validSurfaceIds: [])
         restoredTerminalScrollbackByPanelId.removeAll(keepingCapacity: false)
+#if DEBUG
+        debugSessionSnapshotScrollbackFallbackPanelIds.removeAll(keepingCapacity: false)
+        debugSessionSnapshotSyntheticScrollbackByPanelId.removeAll(keepingCapacity: false)
+#endif
         pendingTerminalInputObserversByPanelId.removeAll(keepingCapacity: false)
         terminalInheritanceFontPointsByPanelId.removeAll(keepingCapacity: false)
         lastTerminalConfigInheritancePanelId = nil
@@ -13133,6 +13156,10 @@ extension Workspace: BonsplitDelegate {
         surfaceTTYNames.removeValue(forKey: panelId)
         syncRemotePortScanTTYs()
         restoredTerminalScrollbackByPanelId.removeValue(forKey: panelId)
+#if DEBUG
+        debugSessionSnapshotScrollbackFallbackPanelIds.remove(panelId)
+        debugSessionSnapshotSyntheticScrollbackByPanelId.removeValue(forKey: panelId)
+#endif
         restoredAgentSnapshotsByPanelId.removeValue(forKey: panelId)
         restoredAgentAutoResumePendingPanelIds.remove(panelId)
         invalidatedRestoredAgentFingerprintsByPanelId.removeValue(forKey: panelId)

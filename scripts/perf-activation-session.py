@@ -101,6 +101,7 @@ class CmuxPerfRunner:
     def app_env(self) -> dict[str, str]:
         env = os.environ.copy()
         for key in (
+            "CMUX_SOCKET",
             "CMUX_SOCKET_PATH",
             "CMUX_SOCKET_MODE",
             "CMUX_TAB_ID",
@@ -125,6 +126,7 @@ class CmuxPerfRunner:
             env.pop(key, None)
         env.update(
             {
+                "CMUX_SOCKET": str(self.socket_path),
                 "CMUX_SOCKET_MODE": "automation",
                 "CMUX_SOCKET_PATH": str(self.socket_path),
                 "CMUXD_UNIX_PATH": str(self.cmuxd_socket_path),
@@ -371,6 +373,8 @@ class CmuxPerfRunner:
 
     def seed_synthetic_scrollback_fallback(self) -> None:
         if not self.args.synthetic_scrollback_fallback:
+            return
+        if self.result["fixture"].get("scrollback_pending", 0) == 0:
             return
         payload = self.rpc(
             "debug.session_snapshot_seed_scrollback",
