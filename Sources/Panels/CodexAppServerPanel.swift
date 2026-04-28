@@ -454,6 +454,21 @@ enum CodexAppServerTranscriptPolicy {
         )
         return "\(prefix)\n\(String(body.suffix(maxItemCharacters)))"
     }
+
+    static func normalizedWarningMessage(_ message: String) -> String {
+        var lines = message
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if lines.first?.caseInsensitiveCompare("Warning") == .orderedSame {
+            lines.removeFirst()
+        }
+        if let first = lines.first,
+           first.lowercased().hasPrefix("warning: ") {
+            lines[0] = String(first.dropFirst("Warning: ".count))
+        }
+        return lines.joined(separator: "\n")
+    }
 }
 
 enum CodexAppServerApprovalDecision: String {
@@ -1216,7 +1231,9 @@ final class CodexAppServerPanel: Panel, ObservableObject {
         case "warning":
             appendEvent(
                 title: String(localized: "codexAppServer.event.warning", defaultValue: "Warning"),
-                body: Self.normalizedWarningMessage(Self.stringValue(named: "message", in: params) ?? Self.prettyJSON(params))
+                body: CodexAppServerTranscriptPolicy.normalizedWarningMessage(
+                    Self.stringValue(named: "message", in: params) ?? Self.prettyJSON(params)
+                )
             )
         case "mcpServer/startupStatus/updated", "thread/status/changed":
             break
@@ -1871,21 +1888,6 @@ final class CodexAppServerPanel: Panel, ObservableObject {
             return value.stringValue
         }
         return nil
-    }
-
-    private static func normalizedWarningMessage(_ message: String) -> String {
-        var lines = message
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        if lines.first?.caseInsensitiveCompare("Warning") == .orderedSame {
-            lines.removeFirst()
-        }
-        if let first = lines.first,
-           first.lowercased().hasPrefix("warning: ") {
-            lines[0] = String(first.dropFirst("Warning: ".count))
-        }
-        return lines.joined(separator: "\n")
     }
 
     private static func requestIDValue(named key: String, in object: [String: Any]?) -> CodexAppServerRequestID? {
@@ -2582,7 +2584,9 @@ enum CodexSessionHistoryLoader {
             return CodexAppServerTranscriptItem(
                 role: .event,
                 title: String(localized: "codexAppServer.event.warning", defaultValue: "Warning"),
-                body: CodexAppServerTranscriptPolicy.truncatedBody(normalizedWarningMessage(message)),
+                body: CodexAppServerTranscriptPolicy.truncatedBody(
+                    CodexAppServerTranscriptPolicy.normalizedWarningMessage(message)
+                ),
                 date: date
             )
         default:

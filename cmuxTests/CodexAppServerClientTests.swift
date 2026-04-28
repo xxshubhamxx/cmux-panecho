@@ -88,6 +88,45 @@ final class CodexAppServerRequestFactoryTests: XCTestCase {
         XCTAssertNotNil(input[0]["textElements"] as? [Any])
     }
 
+    func testThreadAndTurnStartRequestsCarryModelOverrides() throws {
+        let threadRequest = CodexAppServerRequestFactory.threadStartRequest(
+            id: 19,
+            cwd: "/Users/cmux/project",
+            model: "gpt-5.5-codex",
+            serviceTier: "fast"
+        )
+        let threadParams = try XCTUnwrap(threadRequest["params"] as? [String: Any])
+        XCTAssertEqual(threadParams["model"] as? String, "gpt-5.5-codex")
+        XCTAssertEqual(threadParams["serviceTier"] as? String, "fast")
+
+        let turnRequest = CodexAppServerRequestFactory.turnStartRequest(
+            id: 20,
+            threadId: "thr_123",
+            text: "Use the selected model",
+            cwd: "/Users/cmux/project",
+            model: "gpt-5.5-codex",
+            serviceTier: "fast"
+        )
+        let turnParams = try XCTUnwrap(turnRequest["params"] as? [String: Any])
+        XCTAssertEqual(turnParams["model"] as? String, "gpt-5.5-codex")
+        XCTAssertEqual(turnParams["serviceTier"] as? String, "fast")
+    }
+
+    func testModelListAndRateLimitRequestsUseCodexMethods() throws {
+        let modelRequest = CodexAppServerRequestFactory.modelListRequest(id: 21, includeHidden: true)
+        XCTAssertEqual(modelRequest["jsonrpc"] as? String, "2.0")
+        XCTAssertEqual(modelRequest["id"] as? Int, 21)
+        XCTAssertEqual(modelRequest["method"] as? String, "model/list")
+        let modelParams = try XCTUnwrap(modelRequest["params"] as? [String: Any])
+        XCTAssertEqual(modelParams["includeHidden"] as? Bool, true)
+
+        let rateLimitRequest = CodexAppServerRequestFactory.accountRateLimitsReadRequest(id: 22)
+        XCTAssertEqual(rateLimitRequest["jsonrpc"] as? String, "2.0")
+        XCTAssertEqual(rateLimitRequest["id"] as? Int, 22)
+        XCTAssertEqual(rateLimitRequest["method"] as? String, "account/rateLimits/read")
+        XCTAssertNil(rateLimitRequest["params"])
+    }
+
     func testTurnSteerRequestUsesExpectedTurnPrecondition() throws {
         let request = CodexAppServerRequestFactory.turnSteerRequest(
             id: 10,
