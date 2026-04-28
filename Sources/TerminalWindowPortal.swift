@@ -145,6 +145,18 @@ final class WindowTerminalHostView: NSView {
             isPointerEvent = false
         }
 
+        if isPointerEvent || currentEvent == nil {
+            if shouldPassThroughToTitlebar(at: point) {
+                clearActiveDividerCursor(restoreArrow: false)
+                return nil
+            }
+
+            if shouldPassThroughToPaneTabBar(at: point, eventType: currentEvent?.type) {
+                clearActiveDividerCursor(restoreArrow: false)
+                return nil
+            }
+        }
+
         if isPointerEvent {
             if shouldPassThroughToSidebarResizer(at: point) {
                 clearActiveDividerCursor(restoreArrow: false)
@@ -197,6 +209,24 @@ final class WindowTerminalHostView: NSView {
         // Non-pointer event: skip divider/drag routing, just do standard hit testing.
         let hitView = super.hitTest(point)
         return hitView === self ? nil : hitView
+    }
+
+    private func shouldPassThroughToTitlebar(at point: NSPoint) -> Bool {
+        guard let window else { return false }
+        let windowPoint = convert(point, to: nil)
+        return windowPoint.y >= BonsplitTabBarPassThrough.titlebarInteractionBandMinY(in: window)
+    }
+
+    private func shouldPassThroughToPaneTabBar(
+        at point: NSPoint,
+        eventType: NSEvent.EventType?
+    ) -> Bool {
+        guard let decision = BonsplitTabBarPassThrough.passThroughDecision(
+            at: point,
+            in: self,
+            eventType: eventType
+        ) else { return false }
+        return decision.result
     }
 
     private func shouldPassThroughToSidebarResizer(at point: NSPoint) -> Bool {
