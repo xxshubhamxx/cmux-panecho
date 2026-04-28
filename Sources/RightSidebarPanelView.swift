@@ -220,6 +220,8 @@ struct RightSidebarPanelView: View {
         .padding(.trailing, 6)
         .padding(.vertical, 4)
         .frame(height: titlebarHeight)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("RightSidebarModeBar")
     }
 
     @ViewBuilder

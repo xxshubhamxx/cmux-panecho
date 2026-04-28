@@ -2638,6 +2638,10 @@ struct ContentView: View {
         rightSidebarVisible ? fileExplorerWidth : 0
     }
 
+    private var rightSidebarTitlebarHeight: CGFloat {
+        isMinimalMode ? MinimalModeChromeMetrics.titlebarHeight : titlebarPadding
+    }
+
     private func sidebarBackdropLayer(
         width: CGFloat,
         role: WindowBackdropRole,
@@ -2687,7 +2691,7 @@ struct ContentView: View {
             fileExplorerStore: fileExplorerStore,
             fileExplorerState: fileExplorerState,
             sessionIndexStore: sessionIndexStore,
-            titlebarHeight: titlebarPadding,
+            titlebarHeight: rightSidebarTitlebarHeight,
             onResumeSession: { entry in
                 resumeSession(entry: entry)
             }

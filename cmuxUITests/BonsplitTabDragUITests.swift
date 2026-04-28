@@ -121,6 +121,51 @@ final class BonsplitTabDragUITests: XCTestCase {
         )
     }
 
+    func testMinimalModeRightSidebarModeBarMatchesPaneTabBarHeight() {
+        let (app, dataPath) = launchConfiguredApp(showRightSidebar: true)
+
+        XCTAssertTrue(
+            ensureForegroundAfterLaunch(app, timeout: launchTimeout),
+            "Expected app to launch for minimal-mode right-sidebar alignment UI test. state=\(app.state.rawValue)"
+        )
+        XCTAssertTrue(waitForAnyJSON(atPath: dataPath, timeout: setupTimeout), "Expected tab-drag setup data at \(dataPath)")
+        guard let ready = waitForJSONKey("ready", equals: "1", atPath: dataPath, timeout: setupTimeout) else {
+            XCTFail("Timed out waiting for ready=1. data=\(loadJSON(atPath: dataPath) ?? [:])")
+            return
+        }
+
+        if let setupError = ready["setupError"], !setupError.isEmpty {
+            XCTFail("Setup failed: \(setupError)")
+            return
+        }
+
+        let window = app.windows.element(boundBy: 0)
+        XCTAssertTrue(window.waitForExistence(timeout: 5.0), "Expected main window to exist")
+
+        let alphaTitle = ready["alphaTitle"] ?? "UITest Alpha"
+        let alphaTab = app.buttons[alphaTitle]
+        XCTAssertTrue(alphaTab.waitForExistence(timeout: 5.0), "Expected alpha tab to exist")
+
+        let modeBar = app.descendants(matching: .any).matching(identifier: "RightSidebarModeBar").firstMatch
+        XCTAssertTrue(modeBar.waitForExistence(timeout: 5.0), "Expected right sidebar mode bar to exist")
+
+        XCTAssertEqual(
+            modeBar.frame.height,
+            alphaTab.frame.height,
+            accuracy: 2,
+            "Expected minimal-mode right sidebar mode bar to match Bonsplit pane tab height. modeBar=\(modeBar.frame) alphaTab=\(alphaTab.frame)"
+        )
+
+        let modeBarBottomInset = distanceToTopEdge(of: modeBar, in: window) + modeBar.frame.height
+        let alphaTabBottomInset = distanceToTopEdge(of: alphaTab, in: window) + alphaTab.frame.height
+        XCTAssertEqual(
+            modeBarBottomInset,
+            alphaTabBottomInset,
+            accuracy: 2,
+            "Expected minimal-mode right sidebar separator to align with Bonsplit pane tab baseline. modeBar=\(modeBar.frame) alphaTab=\(alphaTab.frame) window=\(window.frame)"
+        )
+    }
+
     func testMinimalModeTitlebarDoubleClickZoomsWindow() {
         let (app, dataPath) = launchConfiguredApp(windowSize: "640x420")
 
@@ -485,6 +530,7 @@ final class BonsplitTabDragUITests: XCTestCase {
     private func launchConfiguredApp(
         startWithHiddenSidebar: Bool = false,
         presentationMode: WorkspacePresentationMode = .minimal,
+        showRightSidebar: Bool = false,
         windowSize: String? = nil
     ) -> (XCUIApplication, String) {
         let app = XCUIApplication()
@@ -501,6 +547,9 @@ final class BonsplitTabDragUITests: XCTestCase {
             app.launchEnvironment["CMUX_UI_TEST_BONSPLIT_WINDOW_SIZE"] = windowSize
         }
         app.launchArguments += ["-workspacePresentationMode", presentationMode.rawValue]
+        if showRightSidebar {
+            app.launchArguments += ["-fileExplorer.isVisible", "YES", "-rightSidebar.mode", "files"]
+        }
         let options = XCTExpectedFailure.Options()
         options.isStrict = false
         XCTExpectFailure("App activation may fail on headless CI runners", options: options) {
