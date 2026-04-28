@@ -2059,6 +2059,12 @@ class TerminalController {
             return v2Ok(id: id, result: v2Identify(params: params))
         case "system.tree":
             return v2Result(id: id, self.v2SystemTree(params: params))
+#if DEBUG
+        case "debug.session_snapshot_benchmark":
+            return v2Result(id: id, self.v2DebugSessionSnapshotBenchmark(params: params))
+        case "debug.session_snapshot_seed_scrollback":
+            return v2Result(id: id, self.v2DebugSessionSnapshotSeedScrollback(params: params))
+#endif
         case "auth.login":
             return v2Ok(
                 id: id,
@@ -2825,6 +2831,8 @@ class TerminalController {
             "debug.flash.reset",
             "debug.panel_snapshot",
             "debug.panel_snapshot.reset",
+            "debug.session_snapshot_benchmark",
+            "debug.session_snapshot_seed_scrollback",
             "debug.window.screenshot",
         ])
 #endif
@@ -3011,6 +3019,42 @@ class TerminalController {
             "windows": windowNodes
         ])
     }
+
+#if DEBUG
+    private func v2DebugSessionSnapshotBenchmark(params: [String: Any]) -> V2CallResult {
+        let includeScrollback = v2Bool(params, "include_scrollback")
+            ?? v2Bool(params, "scrollback")
+            ?? false
+        let persist = v2Bool(params, "persist") ?? true
+        var payload: [String: Any]?
+        v2MainSync {
+            payload = AppDelegate.shared?.debugBenchmarkSessionSnapshot(
+                includeScrollback: includeScrollback,
+                persist: persist
+            )
+        }
+        guard let payload else {
+            return .err(code: "unavailable", message: "AppDelegate not available", data: nil)
+        }
+        return .ok(payload)
+    }
+
+    private func v2DebugSessionSnapshotSeedScrollback(params: [String: Any]) -> V2CallResult {
+        let charactersPerTerminal = v2Int(params, "characters_per_terminal")
+            ?? v2Int(params, "chars_per_terminal")
+            ?? 0
+        var payload: [String: Any]?
+        v2MainSync {
+            payload = AppDelegate.shared?.debugSeedSessionSnapshotScrollback(
+                charactersPerTerminal: charactersPerTerminal
+            )
+        }
+        guard let payload else {
+            return .err(code: "unavailable", message: "AppDelegate not available", data: nil)
+        }
+        return .ok(payload)
+    }
+#endif
 
     private func v2TreeWindowNode(
         summary: AppDelegate.MainWindowSummary,
