@@ -11,8 +11,9 @@ Chromium work is split into a smaller proper branch.
 The Swift verifier expects a Chromium build with:
 
 - `fresh_owl/owl_fresh_mojo_runtime.*`, exposing one generic Mojo invocation
-  entry point that launches Content Shell through Mojo, binds `OwlFreshHost`,
-  and returns `OwlFreshClient` events into Swift callbacks.
+  entry point that launches Content Shell through Mojo, binds `OwlFreshSession`,
+  and then binds child remotes for profile, web view, input, surface tree, and
+  native surfaces before returning `OwlFreshClient` events into Swift callbacks.
 - `content/shell/browser/owl_fresh_host_mac.mm`, implementing the host-side
   Mojo service, input forwarding, capture diagnostics, and compositor context
   publication.
@@ -26,8 +27,10 @@ blank Swift `CALayerHost` windows. The passing path publishes a browser-process
 portal context id, hosts Chromium's compositor `CAContext` inside that portal,
 then Swift hosts the portal id in `CALayerHost`.
 
-`Mojo/OwlFresh.mojom` is the Swift-side source of truth for the current
-`OwlFreshHost` and `OwlFreshClient` surface. `OwlMojoBindingsGenerator` emits
+`Mojo/OwlFresh.mojom` is the Swift-side source of truth for `OwlFreshClient`,
+`OwlFreshSession`, and the child `OwlFreshProfile`, `OwlFreshWebView`,
+`OwlFreshInput`, `OwlFreshSurfaceTreeHost`, and `OwlFreshNativeSurfaceHost`
+surfaces. `OwlMojoBindingsGenerator` emits
 `Sources/OwlMojoBindingsGenerated/OwlFresh.generated.swift`, and the verifier
 uses those generated Swift request/event and transport types before invoking
 the generic Mojo runtime. Host control no longer calls per-method C symbols.

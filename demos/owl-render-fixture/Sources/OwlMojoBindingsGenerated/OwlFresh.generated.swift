@@ -10,6 +10,14 @@ public struct MojoPendingRemote<Interface>: Equatable, Codable {
     }
 }
 
+public struct MojoPendingReceiver<Interface>: Equatable, Codable {
+    public let handle: UInt64
+
+    public init(handle: UInt64) {
+        self.handle = handle
+    }
+}
+
 public struct OwlFreshMojoTransportCall: Equatable, Codable {
     public let interface: String
     public let method: String
@@ -21,6 +29,25 @@ public struct OwlFreshMojoTransportCall: Equatable, Codable {
         self.method = method
         self.payloadType = payloadType
         self.payloadSummary = payloadSummary
+    }
+}
+
+public final class OwlFreshMojoTransportRecorder {
+    public private(set) var recordedCalls: [OwlFreshMojoTransportCall] = []
+
+    public init() {}
+
+    public func record(interface: String, method: String, payloadType: String, payloadSummary: String) {
+        recordedCalls.append(OwlFreshMojoTransportCall(
+            interface: interface,
+            method: method,
+            payloadType: payloadType,
+            payloadSummary: payloadSummary
+        ))
+    }
+
+    public func reset() {
+        recordedCalls.removeAll()
     }
 }
 
@@ -438,6 +465,7 @@ public struct OwlFreshCaptureResult: Equatable, Codable {
 
 public enum OwlFreshClientMojoInterfaceMarker {}
 public typealias OwlFreshClientRemote = MojoPendingRemote<OwlFreshClientMojoInterfaceMarker>
+public typealias OwlFreshClientReceiver = MojoPendingReceiver<OwlFreshClientMojoInterfaceMarker>
 
 public protocol OwlFreshClientMojoInterface {
     func onReady(_ request: OwlFreshClientOnReadyRequest)
@@ -515,24 +543,26 @@ public protocol OwlFreshClientMojoSink: AnyObject {
 }
 
 public final class GeneratedOwlFreshClientMojoTransport: OwlFreshClientMojoInterface {
-    public private(set) var recordedCalls: [OwlFreshMojoTransportCall] = []
+    public var recordedCalls: [OwlFreshMojoTransportCall] { recorder.recordedCalls }
     private let sink: OwlFreshClientMojoSink
+    private let recorder: OwlFreshMojoTransportRecorder
 
-    public init(sink: OwlFreshClientMojoSink) {
+    public init(sink: OwlFreshClientMojoSink, recorder: OwlFreshMojoTransportRecorder = OwlFreshMojoTransportRecorder()) {
         self.sink = sink
+        self.recorder = recorder
     }
 
     public func resetRecordedCalls() {
-        recordedCalls.removeAll()
+        recorder.reset()
     }
 
     private func record(method: String, payloadType: String, payloadSummary: String) {
-        recordedCalls.append(OwlFreshMojoTransportCall(
+        recorder.record(
             interface: "OwlFreshClient",
             method: method,
             payloadType: payloadType,
             payloadSummary: payloadSummary
-        ))
+        )
     }
 
     public func onReady(_ request: OwlFreshClientOnReadyRequest) {
@@ -561,24 +591,141 @@ public final class GeneratedOwlFreshClientMojoTransport: OwlFreshClientMojoInter
     }
 }
 
-public enum OwlFreshHostMojoInterfaceMarker {}
-public typealias OwlFreshHostRemote = MojoPendingRemote<OwlFreshHostMojoInterfaceMarker>
+public enum OwlFreshSessionMojoInterfaceMarker {}
+public typealias OwlFreshSessionRemote = MojoPendingRemote<OwlFreshSessionMojoInterfaceMarker>
+public typealias OwlFreshSessionReceiver = MojoPendingReceiver<OwlFreshSessionMojoInterfaceMarker>
 
-public protocol OwlFreshHostMojoInterface {
+public protocol OwlFreshSessionMojoInterface {
     func setClient(_ client: OwlFreshClientRemote)
-    func navigate(_ url: String)
-    func resize(_ request: OwlFreshHostResizeRequest)
-    func setFocus(_ focused: Bool)
-    func sendMouse(_ event: OwlFreshMouseEvent)
-    func sendKey(_ event: OwlFreshKeyEvent)
+    func bindProfile(_ profile: OwlFreshProfileReceiver)
+    func bindWebView(_ webView: OwlFreshWebViewReceiver)
+    func bindInput(_ input: OwlFreshInputReceiver)
+    func bindSurfaceTree(_ surfaceTree: OwlFreshSurfaceTreeHostReceiver)
+    func bindNativeSurfaceHost(_ nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver)
     func flush() async throws -> Bool
-    func captureSurface() async throws -> OwlFreshCaptureResult
-    func getSurfaceTree() async throws -> OwlFreshSurfaceTree
-    func acceptActivePopupMenuItem(_ index: UInt32) async throws -> Bool
-    func cancelActivePopup() async throws -> Bool
 }
 
-public struct OwlFreshHostResizeRequest: Equatable, Codable {
+public protocol OwlFreshSessionMojoSink: AnyObject {
+    func setClient(_ client: OwlFreshClientRemote)
+    func bindProfile(_ profile: OwlFreshProfileReceiver)
+    func bindWebView(_ webView: OwlFreshWebViewReceiver)
+    func bindInput(_ input: OwlFreshInputReceiver)
+    func bindSurfaceTree(_ surfaceTree: OwlFreshSurfaceTreeHostReceiver)
+    func bindNativeSurfaceHost(_ nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver)
+    func flush() async throws -> Bool
+}
+
+public final class GeneratedOwlFreshSessionMojoTransport: OwlFreshSessionMojoInterface {
+    public var recordedCalls: [OwlFreshMojoTransportCall] { recorder.recordedCalls }
+    private let sink: OwlFreshSessionMojoSink
+    private let recorder: OwlFreshMojoTransportRecorder
+
+    public init(sink: OwlFreshSessionMojoSink, recorder: OwlFreshMojoTransportRecorder = OwlFreshMojoTransportRecorder()) {
+        self.sink = sink
+        self.recorder = recorder
+    }
+
+    public func resetRecordedCalls() {
+        recorder.reset()
+    }
+
+    private func record(method: String, payloadType: String, payloadSummary: String) {
+        recorder.record(
+            interface: "OwlFreshSession",
+            method: method,
+            payloadType: payloadType,
+            payloadSummary: payloadSummary
+        )
+    }
+
+    public func setClient(_ client: OwlFreshClientRemote) {
+        record(method: "setClient", payloadType: "OwlFreshClientRemote", payloadSummary: String(describing: client))
+        sink.setClient(client)
+    }
+
+    public func bindProfile(_ profile: OwlFreshProfileReceiver) {
+        record(method: "bindProfile", payloadType: "OwlFreshProfileReceiver", payloadSummary: String(describing: profile))
+        sink.bindProfile(profile)
+    }
+
+    public func bindWebView(_ webView: OwlFreshWebViewReceiver) {
+        record(method: "bindWebView", payloadType: "OwlFreshWebViewReceiver", payloadSummary: String(describing: webView))
+        sink.bindWebView(webView)
+    }
+
+    public func bindInput(_ input: OwlFreshInputReceiver) {
+        record(method: "bindInput", payloadType: "OwlFreshInputReceiver", payloadSummary: String(describing: input))
+        sink.bindInput(input)
+    }
+
+    public func bindSurfaceTree(_ surfaceTree: OwlFreshSurfaceTreeHostReceiver) {
+        record(method: "bindSurfaceTree", payloadType: "OwlFreshSurfaceTreeHostReceiver", payloadSummary: String(describing: surfaceTree))
+        sink.bindSurfaceTree(surfaceTree)
+    }
+
+    public func bindNativeSurfaceHost(_ nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver) {
+        record(method: "bindNativeSurfaceHost", payloadType: "OwlFreshNativeSurfaceHostReceiver", payloadSummary: String(describing: nativeSurfaceHost))
+        sink.bindNativeSurfaceHost(nativeSurfaceHost)
+    }
+
+    public func flush() async throws -> Bool {
+        record(method: "flush", payloadType: "Void", payloadSummary: "")
+        return try await sink.flush()
+    }
+}
+
+public enum OwlFreshProfileMojoInterfaceMarker {}
+public typealias OwlFreshProfileRemote = MojoPendingRemote<OwlFreshProfileMojoInterfaceMarker>
+public typealias OwlFreshProfileReceiver = MojoPendingReceiver<OwlFreshProfileMojoInterfaceMarker>
+
+public protocol OwlFreshProfileMojoInterface {
+    func getPath() async throws -> String
+}
+
+public protocol OwlFreshProfileMojoSink: AnyObject {
+    func getPath() async throws -> String
+}
+
+public final class GeneratedOwlFreshProfileMojoTransport: OwlFreshProfileMojoInterface {
+    public var recordedCalls: [OwlFreshMojoTransportCall] { recorder.recordedCalls }
+    private let sink: OwlFreshProfileMojoSink
+    private let recorder: OwlFreshMojoTransportRecorder
+
+    public init(sink: OwlFreshProfileMojoSink, recorder: OwlFreshMojoTransportRecorder = OwlFreshMojoTransportRecorder()) {
+        self.sink = sink
+        self.recorder = recorder
+    }
+
+    public func resetRecordedCalls() {
+        recorder.reset()
+    }
+
+    private func record(method: String, payloadType: String, payloadSummary: String) {
+        recorder.record(
+            interface: "OwlFreshProfile",
+            method: method,
+            payloadType: payloadType,
+            payloadSummary: payloadSummary
+        )
+    }
+
+    public func getPath() async throws -> String {
+        record(method: "getPath", payloadType: "Void", payloadSummary: "")
+        return try await sink.getPath()
+    }
+}
+
+public enum OwlFreshWebViewMojoInterfaceMarker {}
+public typealias OwlFreshWebViewRemote = MojoPendingRemote<OwlFreshWebViewMojoInterfaceMarker>
+public typealias OwlFreshWebViewReceiver = MojoPendingReceiver<OwlFreshWebViewMojoInterfaceMarker>
+
+public protocol OwlFreshWebViewMojoInterface {
+    func navigate(_ url: String)
+    func resize(_ request: OwlFreshWebViewResizeRequest)
+    func setFocus(_ focused: Bool)
+}
+
+public struct OwlFreshWebViewResizeRequest: Equatable, Codable {
     public let width: UInt32
     public let height: UInt32
     public let scale: Float
@@ -610,44 +757,33 @@ public struct OwlFreshHostResizeRequest: Equatable, Codable {
     }
 }
 
-public protocol OwlFreshHostMojoSink: AnyObject {
-    func setClient(_ client: OwlFreshClientRemote)
+public protocol OwlFreshWebViewMojoSink: AnyObject {
     func navigate(_ url: String)
-    func resize(_ request: OwlFreshHostResizeRequest)
+    func resize(_ request: OwlFreshWebViewResizeRequest)
     func setFocus(_ focused: Bool)
-    func sendMouse(_ event: OwlFreshMouseEvent)
-    func sendKey(_ event: OwlFreshKeyEvent)
-    func flush() async throws -> Bool
-    func captureSurface() async throws -> OwlFreshCaptureResult
-    func getSurfaceTree() async throws -> OwlFreshSurfaceTree
-    func acceptActivePopupMenuItem(_ index: UInt32) async throws -> Bool
-    func cancelActivePopup() async throws -> Bool
 }
 
-public final class GeneratedOwlFreshHostMojoTransport: OwlFreshHostMojoInterface {
-    public private(set) var recordedCalls: [OwlFreshMojoTransportCall] = []
-    private let sink: OwlFreshHostMojoSink
+public final class GeneratedOwlFreshWebViewMojoTransport: OwlFreshWebViewMojoInterface {
+    public var recordedCalls: [OwlFreshMojoTransportCall] { recorder.recordedCalls }
+    private let sink: OwlFreshWebViewMojoSink
+    private let recorder: OwlFreshMojoTransportRecorder
 
-    public init(sink: OwlFreshHostMojoSink) {
+    public init(sink: OwlFreshWebViewMojoSink, recorder: OwlFreshMojoTransportRecorder = OwlFreshMojoTransportRecorder()) {
         self.sink = sink
+        self.recorder = recorder
     }
 
     public func resetRecordedCalls() {
-        recordedCalls.removeAll()
+        recorder.reset()
     }
 
     private func record(method: String, payloadType: String, payloadSummary: String) {
-        recordedCalls.append(OwlFreshMojoTransportCall(
-            interface: "OwlFreshHost",
+        recorder.record(
+            interface: "OwlFreshWebView",
             method: method,
             payloadType: payloadType,
             payloadSummary: payloadSummary
-        ))
-    }
-
-    public func setClient(_ client: OwlFreshClientRemote) {
-        record(method: "setClient", payloadType: "OwlFreshClientRemote", payloadSummary: String(describing: client))
-        sink.setClient(client)
+        )
     }
 
     public func navigate(_ url: String) {
@@ -655,14 +791,52 @@ public final class GeneratedOwlFreshHostMojoTransport: OwlFreshHostMojoInterface
         sink.navigate(url)
     }
 
-    public func resize(_ request: OwlFreshHostResizeRequest) {
-        record(method: "resize", payloadType: "OwlFreshHostResizeRequest", payloadSummary: String(describing: request))
+    public func resize(_ request: OwlFreshWebViewResizeRequest) {
+        record(method: "resize", payloadType: "OwlFreshWebViewResizeRequest", payloadSummary: String(describing: request))
         sink.resize(request)
     }
 
     public func setFocus(_ focused: Bool) {
         record(method: "setFocus", payloadType: "Bool", payloadSummary: String(describing: focused))
         sink.setFocus(focused)
+    }
+}
+
+public enum OwlFreshInputMojoInterfaceMarker {}
+public typealias OwlFreshInputRemote = MojoPendingRemote<OwlFreshInputMojoInterfaceMarker>
+public typealias OwlFreshInputReceiver = MojoPendingReceiver<OwlFreshInputMojoInterfaceMarker>
+
+public protocol OwlFreshInputMojoInterface {
+    func sendMouse(_ event: OwlFreshMouseEvent)
+    func sendKey(_ event: OwlFreshKeyEvent)
+}
+
+public protocol OwlFreshInputMojoSink: AnyObject {
+    func sendMouse(_ event: OwlFreshMouseEvent)
+    func sendKey(_ event: OwlFreshKeyEvent)
+}
+
+public final class GeneratedOwlFreshInputMojoTransport: OwlFreshInputMojoInterface {
+    public var recordedCalls: [OwlFreshMojoTransportCall] { recorder.recordedCalls }
+    private let sink: OwlFreshInputMojoSink
+    private let recorder: OwlFreshMojoTransportRecorder
+
+    public init(sink: OwlFreshInputMojoSink, recorder: OwlFreshMojoTransportRecorder = OwlFreshMojoTransportRecorder()) {
+        self.sink = sink
+        self.recorder = recorder
+    }
+
+    public func resetRecordedCalls() {
+        recorder.reset()
+    }
+
+    private func record(method: String, payloadType: String, payloadSummary: String) {
+        recorder.record(
+            interface: "OwlFreshInput",
+            method: method,
+            payloadType: payloadType,
+            payloadSummary: payloadSummary
+        )
     }
 
     public func sendMouse(_ event: OwlFreshMouseEvent) {
@@ -674,10 +848,43 @@ public final class GeneratedOwlFreshHostMojoTransport: OwlFreshHostMojoInterface
         record(method: "sendKey", payloadType: "OwlFreshKeyEvent", payloadSummary: String(describing: event))
         sink.sendKey(event)
     }
+}
 
-    public func flush() async throws -> Bool {
-        record(method: "flush", payloadType: "Void", payloadSummary: "")
-        return try await sink.flush()
+public enum OwlFreshSurfaceTreeHostMojoInterfaceMarker {}
+public typealias OwlFreshSurfaceTreeHostRemote = MojoPendingRemote<OwlFreshSurfaceTreeHostMojoInterfaceMarker>
+public typealias OwlFreshSurfaceTreeHostReceiver = MojoPendingReceiver<OwlFreshSurfaceTreeHostMojoInterfaceMarker>
+
+public protocol OwlFreshSurfaceTreeHostMojoInterface {
+    func captureSurface() async throws -> OwlFreshCaptureResult
+    func getSurfaceTree() async throws -> OwlFreshSurfaceTree
+}
+
+public protocol OwlFreshSurfaceTreeHostMojoSink: AnyObject {
+    func captureSurface() async throws -> OwlFreshCaptureResult
+    func getSurfaceTree() async throws -> OwlFreshSurfaceTree
+}
+
+public final class GeneratedOwlFreshSurfaceTreeHostMojoTransport: OwlFreshSurfaceTreeHostMojoInterface {
+    public var recordedCalls: [OwlFreshMojoTransportCall] { recorder.recordedCalls }
+    private let sink: OwlFreshSurfaceTreeHostMojoSink
+    private let recorder: OwlFreshMojoTransportRecorder
+
+    public init(sink: OwlFreshSurfaceTreeHostMojoSink, recorder: OwlFreshMojoTransportRecorder = OwlFreshMojoTransportRecorder()) {
+        self.sink = sink
+        self.recorder = recorder
+    }
+
+    public func resetRecordedCalls() {
+        recorder.reset()
+    }
+
+    private func record(method: String, payloadType: String, payloadSummary: String) {
+        recorder.record(
+            interface: "OwlFreshSurfaceTreeHost",
+            method: method,
+            payloadType: payloadType,
+            payloadSummary: payloadSummary
+        )
     }
 
     public func captureSurface() async throws -> OwlFreshCaptureResult {
@@ -688,6 +895,44 @@ public final class GeneratedOwlFreshHostMojoTransport: OwlFreshHostMojoInterface
     public func getSurfaceTree() async throws -> OwlFreshSurfaceTree {
         record(method: "getSurfaceTree", payloadType: "Void", payloadSummary: "")
         return try await sink.getSurfaceTree()
+    }
+}
+
+public enum OwlFreshNativeSurfaceHostMojoInterfaceMarker {}
+public typealias OwlFreshNativeSurfaceHostRemote = MojoPendingRemote<OwlFreshNativeSurfaceHostMojoInterfaceMarker>
+public typealias OwlFreshNativeSurfaceHostReceiver = MojoPendingReceiver<OwlFreshNativeSurfaceHostMojoInterfaceMarker>
+
+public protocol OwlFreshNativeSurfaceHostMojoInterface {
+    func acceptActivePopupMenuItem(_ index: UInt32) async throws -> Bool
+    func cancelActivePopup() async throws -> Bool
+}
+
+public protocol OwlFreshNativeSurfaceHostMojoSink: AnyObject {
+    func acceptActivePopupMenuItem(_ index: UInt32) async throws -> Bool
+    func cancelActivePopup() async throws -> Bool
+}
+
+public final class GeneratedOwlFreshNativeSurfaceHostMojoTransport: OwlFreshNativeSurfaceHostMojoInterface {
+    public var recordedCalls: [OwlFreshMojoTransportCall] { recorder.recordedCalls }
+    private let sink: OwlFreshNativeSurfaceHostMojoSink
+    private let recorder: OwlFreshMojoTransportRecorder
+
+    public init(sink: OwlFreshNativeSurfaceHostMojoSink, recorder: OwlFreshMojoTransportRecorder = OwlFreshMojoTransportRecorder()) {
+        self.sink = sink
+        self.recorder = recorder
+    }
+
+    public func resetRecordedCalls() {
+        recorder.reset()
+    }
+
+    private func record(method: String, payloadType: String, payloadSummary: String) {
+        recorder.record(
+            interface: "OwlFreshNativeSurfaceHost",
+            method: method,
+            payloadType: payloadType,
+            payloadSummary: payloadSummary
+        )
     }
 
     public func acceptActivePopupMenuItem(_ index: UInt32) async throws -> Bool {
@@ -708,7 +953,7 @@ public struct MojoSchemaDeclaration: Equatable, Codable {
 
 public enum OwlFreshMojoSchema {
     public static let module = "content.mojom"
-    public static let sourceChecksum = "fnv1a64:dcb099b165bc7b16"
+    public static let sourceChecksum = "fnv1a64:b97ac780ba2c98b1"
     public static let declarations: [MojoSchemaDeclaration] = [
         MojoSchemaDeclaration(kind: "enum", name: "OwlFreshMouseKind"),
         MojoSchemaDeclaration(kind: "struct", name: "OwlFreshMouseEvent"),
@@ -720,6 +965,11 @@ public enum OwlFreshMojoSchema {
         MojoSchemaDeclaration(kind: "struct", name: "OwlFreshSurfaceTree"),
         MojoSchemaDeclaration(kind: "struct", name: "OwlFreshCaptureResult"),
         MojoSchemaDeclaration(kind: "interface", name: "OwlFreshClient"),
-        MojoSchemaDeclaration(kind: "interface", name: "OwlFreshHost")
+        MojoSchemaDeclaration(kind: "interface", name: "OwlFreshSession"),
+        MojoSchemaDeclaration(kind: "interface", name: "OwlFreshProfile"),
+        MojoSchemaDeclaration(kind: "interface", name: "OwlFreshWebView"),
+        MojoSchemaDeclaration(kind: "interface", name: "OwlFreshInput"),
+        MojoSchemaDeclaration(kind: "interface", name: "OwlFreshSurfaceTreeHost"),
+        MojoSchemaDeclaration(kind: "interface", name: "OwlFreshNativeSurfaceHost")
     ]
 }

@@ -399,10 +399,10 @@ index 462cfd3ef3..cdb2ef0ef6 100644
 +}
 diff --git a/content/shell/browser/owl_fresh_host_mac.h b/content/shell/browser/owl_fresh_host_mac.h
 new file mode 100644
-index 0000000000..09928bd888
+index 0000000000..4db9e0ece0
 --- /dev/null
 +++ b/content/shell/browser/owl_fresh_host_mac.h
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,14 @@
 +#ifndef CONTENT_SHELL_BROWSER_OWL_FRESH_HOST_MAC_H_
 +#define CONTENT_SHELL_BROWSER_OWL_FRESH_HOST_MAC_H_
 +
@@ -411,19 +411,18 @@ index 0000000000..09928bd888
 +
 +namespace content {
 +
-+void BindOwlFreshHostForCurrentShell(
-+    mojo::PendingReceiver<mojom::OwlFreshHost> receiver);
++void BindOwlFreshSessionForCurrentShell(
++    mojo::PendingReceiver<mojom::OwlFreshSession> receiver);
 +
 +}  // namespace content
 +
 +#endif
-+
 diff --git a/content/shell/browser/owl_fresh_host_mac.mm b/content/shell/browser/owl_fresh_host_mac.mm
 new file mode 100644
-index 0000000000..0986158706
+index 0000000000..fda22c6b17
 --- /dev/null
 +++ b/content/shell/browser/owl_fresh_host_mac.mm
-@@ -0,0 +1,1059 @@
+@@ -0,0 +1,1104 @@
 +#include "content/shell/browser/owl_fresh_host_mac.h"
 +
 +#import <Cocoa/Cocoa.h>
@@ -454,6 +453,7 @@ index 0000000000..0986158706
 +#include "content/browser/renderer_host/render_widget_host_view_base.h"
 +#include "content/browser/web_contents/web_contents_impl.h"
 +#include "components/input/native_web_keyboard_event.h"
++#include "content/public/browser/browser_context.h"
 +#include "content/public/browser/render_widget_host_view.h"
 +#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/render_widget_host.h"
@@ -463,6 +463,7 @@ index 0000000000..0986158706
 +#include "media/base/video_types.h"
 +#include "media/capture/mojom/video_capture_buffer.mojom.h"
 +#include "media/capture/mojom/video_capture_types.mojom.h"
++#include "mojo/public/cpp/bindings/receiver_set.h"
 +#include "mojo/public/cpp/bindings/remote.h"
 +#include "mojo/public/cpp/bindings/self_owned_receiver.h"
 +#include "third_party/skia/include/core/SkBitmap.h"
@@ -845,13 +846,18 @@ index 0000000000..0986158706
 +  return tree;
 +}
 +
-+class OwlFreshHostImpl final : public mojom::OwlFreshHost {
++class OwlFreshSessionImpl final : public mojom::OwlFreshSession,
++                                  public mojom::OwlFreshProfile,
++                                  public mojom::OwlFreshWebView,
++                                  public mojom::OwlFreshInput,
++                                  public mojom::OwlFreshSurfaceTreeHost,
++                                  public mojom::OwlFreshNativeSurfaceHost {
 + public:
-+  OwlFreshHostImpl() = default;
-+  ~OwlFreshHostImpl() override = default;
++  OwlFreshSessionImpl() = default;
++  ~OwlFreshSessionImpl() override = default;
 +
-+  OwlFreshHostImpl(const OwlFreshHostImpl&) = delete;
-+  OwlFreshHostImpl& operator=(const OwlFreshHostImpl&) = delete;
++  OwlFreshSessionImpl(const OwlFreshSessionImpl&) = delete;
++  OwlFreshSessionImpl& operator=(const OwlFreshSessionImpl&) = delete;
 +
 +  void SetClient(mojo::PendingRemote<mojom::OwlFreshClient> client) override {
 +    client_.Bind(std::move(client));
@@ -859,9 +865,42 @@ index 0000000000..0986158706
 +    if (client_) {
 +      client_->OnReady(base::GetCurrentProcId(), CurrentCompositorInfo());
 +      client_->OnSurfaceTreeChanged(SurfaceTreeFromRegistry());
-+      client_->OnHostLog("OwlFreshHost bound over Mojo");
++      client_->OnHostLog("OwlFreshSession bound over Mojo");
 +    }
 +    PublishCompositorWithRetry(80);
++  }
++
++  void BindProfile(
++      mojo::PendingReceiver<mojom::OwlFreshProfile> receiver) override {
++    profile_receivers_.Add(this, std::move(receiver));
++  }
++
++  void BindWebView(
++      mojo::PendingReceiver<mojom::OwlFreshWebView> receiver) override {
++    web_view_receivers_.Add(this, std::move(receiver));
++  }
++
++  void BindInput(
++      mojo::PendingReceiver<mojom::OwlFreshInput> receiver) override {
++    input_receivers_.Add(this, std::move(receiver));
++  }
++
++  void BindSurfaceTree(
++      mojo::PendingReceiver<mojom::OwlFreshSurfaceTreeHost> receiver) override {
++    surface_tree_receivers_.Add(this, std::move(receiver));
++  }
++
++  void BindNativeSurfaceHost(
++      mojo::PendingReceiver<mojom::OwlFreshNativeSurfaceHost> receiver)
++      override {
++    native_surface_receivers_.Add(this, std::move(receiver));
++  }
++
++  void GetPath(GetPathCallback callback) override {
++    WebContents* contents = CurrentWebContents();
++    BrowserContext* context = contents ? contents->GetBrowserContext() : nullptr;
++    std::move(callback).Run(
++        context ? context->GetPath().AsUTF8Unsafe() : std::string());
 +  }
 +
 +  void Navigate(const std::string& url) override {
@@ -1130,15 +1169,15 @@ index 0000000000..0986158706
 +    pending_capture_callback_ = std::move(callback);
 +    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
 +        FROM_HERE,
-+        base::BindOnce(&OwlFreshHostImpl::OnCaptureSurfaceTimeout,
++        base::BindOnce(&OwlFreshSessionImpl::OnCaptureSurfaceTimeout,
 +                       weak_factory_.GetWeakPtr()),
 +        base::Seconds(20));
 +
 +    video_capture_ = std::make_unique<OwlFreshVideoCapture>(
 +        view,
-+        base::BindOnce(&OwlFreshHostImpl::OnVideoCaptureFrame,
++        base::BindOnce(&OwlFreshSessionImpl::OnVideoCaptureFrame,
 +                       weak_factory_.GetWeakPtr()),
-+        base::BindOnce(&OwlFreshHostImpl::OnVideoCaptureError,
++        base::BindOnce(&OwlFreshSessionImpl::OnVideoCaptureError,
 +                       weak_factory_.GetWeakPtr()));
 +    video_capture_->Start();
 +    return;
@@ -1197,7 +1236,7 @@ index 0000000000..0986158706
 +    }
 +    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
 +        FROM_HERE,
-+        base::BindOnce(&OwlFreshHostImpl::PublishCompositorWithRetry,
++        base::BindOnce(&OwlFreshSessionImpl::PublishCompositorWithRetry,
 +                       weak_factory_.GetWeakPtr(), attempts_remaining - 1),
 +        base::Milliseconds(100));
 +  }
@@ -1471,14 +1510,19 @@ index 0000000000..0986158706
 +  std::string pending_capture_state_;
 +  std::string pending_capture_mode_;
 +  std::unique_ptr<OwlFreshVideoCapture> video_capture_;
-+  base::WeakPtrFactory<OwlFreshHostImpl> weak_factory_{this};
++  mojo::ReceiverSet<mojom::OwlFreshProfile> profile_receivers_;
++  mojo::ReceiverSet<mojom::OwlFreshWebView> web_view_receivers_;
++  mojo::ReceiverSet<mojom::OwlFreshInput> input_receivers_;
++  mojo::ReceiverSet<mojom::OwlFreshSurfaceTreeHost> surface_tree_receivers_;
++  mojo::ReceiverSet<mojom::OwlFreshNativeSurfaceHost> native_surface_receivers_;
++  base::WeakPtrFactory<OwlFreshSessionImpl> weak_factory_{this};
 +};
 +
 +}  // namespace
 +
-+void BindOwlFreshHostForCurrentShell(
-+    mojo::PendingReceiver<mojom::OwlFreshHost> receiver) {
-+  mojo::MakeSelfOwnedReceiver(std::make_unique<OwlFreshHostImpl>(),
++void BindOwlFreshSessionForCurrentShell(
++    mojo::PendingReceiver<mojom::OwlFreshSession> receiver) {
++  mojo::MakeSelfOwnedReceiver(std::make_unique<OwlFreshSessionImpl>(),
 +                              std::move(receiver));
 +}
 +
@@ -1502,7 +1546,7 @@ index 76ba15e7f8..f4c221edad 100644
    return 0;
  }
 diff --git a/content/shell/browser/shell_content_browser_client.cc b/content/shell/browser/shell_content_browser_client.cc
-index a926ca5c57..b89573bbab 100644
+index a926ca5c57..80a6ca2739 100644
 --- a/content/shell/browser/shell_content_browser_client.cc
 +++ b/content/shell/browser/shell_content_browser_client.cc
 @@ -3,6 +3,9 @@
@@ -1520,10 +1564,10 @@ index a926ca5c57..b89573bbab 100644
  
    void ShutDown() override { Shell::Shutdown(); }
 +
-+  void BindOwlFreshHost(
-+      mojo::PendingReceiver<mojom::OwlFreshHost> receiver) override {
++  void BindOwlFreshSession(
++      mojo::PendingReceiver<mojom::OwlFreshSession> receiver) override {
 +#if BUILDFLAG(IS_MAC)
-+    BindOwlFreshHostForCurrentShell(std::move(receiver));
++    BindOwlFreshSessionForCurrentShell(std::move(receiver));
 +#else
 +    receiver.reset();
 +#endif
@@ -1640,10 +1684,10 @@ index b11f388bcd..3cc18e5cdf 100644
    NSPoint position = parent_view.window.mouseLocationOutsideOfEventStream;
    NSTimeInterval eventTime = NSApp.currentEvent.timestamp;
 diff --git a/content/shell/common/shell_controller.test-mojom b/content/shell/common/shell_controller.test-mojom
-index 53b2a8b770..53a564b196 100644
+index 53b2a8b770..1a80b09670 100644
 --- a/content/shell/common/shell_controller.test-mojom
 +++ b/content/shell/common/shell_controller.test-mojom
-@@ -7,6 +7,106 @@ module content.mojom;
+@@ -7,6 +7,127 @@ module content.mojom;
  import "mojo/public/mojom/base/string16.mojom";
  import "mojo/public/mojom/base/values.mojom";
  
@@ -1733,16 +1777,37 @@ index 53b2a8b770..53a564b196 100644
 +  OnHostLog(string message);
 +};
 +
-+interface OwlFreshHost {
++interface OwlFreshSession {
 +  SetClient(pending_remote<OwlFreshClient> client);
++  BindProfile(pending_receiver<OwlFreshProfile> profile);
++  BindWebView(pending_receiver<OwlFreshWebView> web_view);
++  BindInput(pending_receiver<OwlFreshInput> input);
++  BindSurfaceTree(pending_receiver<OwlFreshSurfaceTreeHost> surface_tree);
++  BindNativeSurfaceHost(pending_receiver<OwlFreshNativeSurfaceHost> native_surface_host);
++  Flush() => (bool ok);
++};
++
++interface OwlFreshProfile {
++  GetPath() => (string path);
++};
++
++interface OwlFreshWebView {
 +  Navigate(string url);
 +  Resize(uint32 width, uint32 height, float scale);
 +  SetFocus(bool focused);
++};
++
++interface OwlFreshInput {
 +  SendMouse(OwlFreshMouseEvent event);
 +  SendKey(OwlFreshKeyEvent event);
-+  Flush() => (bool ok);
++};
++
++interface OwlFreshSurfaceTreeHost {
 +  CaptureSurface() => (OwlFreshCaptureResult result);
 +  GetSurfaceTree() => (OwlFreshSurfaceTree surface_tree);
++};
++
++interface OwlFreshNativeSurfaceHost {
 +  AcceptActivePopupMenuItem(uint32 index) => (bool ok);
 +  CancelActivePopup() => (bool ok);
 +};
@@ -1750,7 +1815,7 @@ index 53b2a8b770..53a564b196 100644
  // A control interface which can be accessed by clients launching Content Shell
  // with a Mojo invitation on the command line. This is used by
  // LaunchAsMojoClientBrowserTest to exercise that mode of execution.
-@@ -21,7 +121,10 @@ interface ShellController {
+@@ -21,7 +142,10 @@ interface ShellController {
        => (mojo_base.mojom.Value value);
  
    // Tells Content Shell to close all windows and shut down. After sending this
@@ -1761,7 +1826,7 @@ index 53b2a8b770..53a564b196 100644
 +
 +  // Binds the fresh OWL browser host. Every browser command after this point
 +  // uses typed Mojo messages, never sockets or DevTools.
-+  BindOwlFreshHost(pending_receiver<OwlFreshHost> receiver);
++  BindOwlFreshSession(pending_receiver<OwlFreshSession> receiver);
  };
 diff --git a/content/shell/common/shell_switches.h b/content/shell/common/shell_switches.h
 index 8757fa418d..b9d7d028b7 100644
@@ -1801,10 +1866,10 @@ index 0000000000..ab883e226a
 +}
 diff --git a/fresh_owl/owl_fresh_mojo_runtime.cc b/fresh_owl/owl_fresh_mojo_runtime.cc
 new file mode 100644
-index 0000000000..fbbb92e9fe
+index 0000000000..be2f477c1a
 --- /dev/null
 +++ b/fresh_owl/owl_fresh_mojo_runtime.cc
-@@ -0,0 +1,728 @@
+@@ -0,0 +1,804 @@
 +#include "fresh_owl/owl_fresh_mojo_runtime.h"
 +
 +#include <cstdlib>
@@ -2053,7 +2118,12 @@ index 0000000000..fbbb92e9fe
 +struct OwlFreshMojoSession {
 +  base::Process process;
 +  mojo::Remote<content::mojom::ShellController> controller;
-+  mojo::Remote<content::mojom::OwlFreshHost> host;
++  mojo::Remote<content::mojom::OwlFreshSession> owl_session;
++  mojo::Remote<content::mojom::OwlFreshProfile> profile;
++  mojo::Remote<content::mojom::OwlFreshWebView> web_view;
++  mojo::Remote<content::mojom::OwlFreshInput> input;
++  mojo::Remote<content::mojom::OwlFreshSurfaceTreeHost> surface_tree;
++  mojo::Remote<content::mojom::OwlFreshNativeSurfaceHost> native_surface_host;
 +  std::unique_ptr<OwlFreshMojoClientImpl> client_impl;
 +  std::unique_ptr<mojo::Receiver<content::mojom::OwlFreshClient>>
 +      client_receiver;
@@ -2208,13 +2278,23 @@ index 0000000000..fbbb92e9fe
 +                                 session->process.Handle(),
 +                                 channel.TakeLocalEndpoint());
 +
-+  session->controller->BindOwlFreshHost(
-+      session->host.BindNewPipeAndPassReceiver());
++  session->controller->BindOwlFreshSession(
++      session->owl_session.BindNewPipeAndPassReceiver());
++  session->owl_session->BindProfile(
++      session->profile.BindNewPipeAndPassReceiver());
++  session->owl_session->BindWebView(
++      session->web_view.BindNewPipeAndPassReceiver());
++  session->owl_session->BindInput(
++      session->input.BindNewPipeAndPassReceiver());
++  session->owl_session->BindSurfaceTree(
++      session->surface_tree.BindNewPipeAndPassReceiver());
++  session->owl_session->BindNativeSurfaceHost(
++      session->native_surface_host.BindNewPipeAndPassReceiver());
 +  session->client_impl = std::make_unique<OwlFreshMojoClientImpl>(session.get());
 +  session->client_receiver =
 +      std::make_unique<mojo::Receiver<content::mojom::OwlFreshClient>>(
 +          session->client_impl.get());
-+  session->host->SetClient(
++  session->owl_session->SetClient(
 +      session->client_receiver->BindNewPipeAndPassRemote());
 +
 +  session->controller.set_disconnect_handler(base::BindRepeating(
@@ -2224,7 +2304,7 @@ index 0000000000..fbbb92e9fe
 +        Emit(session->callback, session->user_data, event);
 +      },
 +      session.get()));
-+  session->host.set_disconnect_handler(base::BindRepeating(
++  session->owl_session.set_disconnect_handler(base::BindRepeating(
 +      [](OwlFreshMojoSession* session) {
 +        OwlFreshMojoEvent event = {};
 +        event.kind = kOwlFreshMojoEventDisconnected;
@@ -2243,7 +2323,12 @@ index 0000000000..fbbb92e9fe
 +  if (session->controller.is_bound()) {
 +    session->controller->ShutDown();
 +  }
-+  session->host.reset();
++  session->native_surface_host.reset();
++  session->surface_tree.reset();
++  session->input.reset();
++  session->web_view.reset();
++  session->profile.reset();
++  session->owl_session.reset();
 +  session->controller.reset();
 +  base::RunLoop loop;
 +  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
@@ -2322,89 +2407,17 @@ index 0000000000..fbbb92e9fe
 +    return status;
 +  }
 +
-+  if (interface != "OwlFreshHost") {
-+    return Fail(error, base::StrCat({"unsupported Mojo interface ", interface}));
-+  }
-+  if (!session->host.is_bound()) {
-+    return Fail(error, "OwlFreshHost is not bound");
-+  }
-+
-+  if (method == "navigate") {
-+    const std::string* url = RequiredString(dict, "url", error);
-+    if (!url) {
-+      return 1;
++  if (interface == "OwlFreshSession") {
++    if (!session->owl_session.is_bound()) {
++      return Fail(error, "OwlFreshSession is not bound");
 +    }
-+    session->host->Navigate(*url);
-+    return Succeed(result_json, "{}");
-+  }
-+
-+  if (method == "resize") {
-+    std::optional<uint32_t> width = RequiredUInt32(dict, "width", error);
-+    std::optional<uint32_t> height = RequiredUInt32(dict, "height", error);
-+    std::optional<float> scale = RequiredFloat(dict, "scale", error);
-+    if (!width || !height || !scale) {
-+      return 1;
++    if (method != "flush") {
++      return Fail(error,
++                  base::StrCat({"unsupported OwlFreshSession method ", method}));
 +    }
-+    session->host->Resize(*width, *height, *scale);
-+    return Succeed(result_json, "{}");
-+  }
-+
-+  if (method == "setFocus") {
-+    std::optional<bool> focused = RequiredBool(dict, "focused", error);
-+    if (!focused) {
-+      return 1;
-+    }
-+    session->host->SetFocus(*focused);
-+    return Succeed(result_json, "{}");
-+  }
-+
-+  if (method == "sendMouse") {
-+    std::optional<uint32_t> kind = RequiredUInt32(dict, "kind", error);
-+    std::optional<float> x = RequiredFloat(dict, "x", error);
-+    std::optional<float> y = RequiredFloat(dict, "y", error);
-+    std::optional<uint32_t> button = RequiredUInt32(dict, "button", error);
-+    std::optional<uint32_t> click_count = RequiredUInt32(dict, "clickCount", error);
-+    std::optional<float> delta_x = RequiredFloat(dict, "deltaX", error);
-+    std::optional<float> delta_y = RequiredFloat(dict, "deltaY", error);
-+    std::optional<uint32_t> modifiers = RequiredUInt32(dict, "modifiers", error);
-+    if (!kind || !x || !y || !button || !click_count || !delta_x || !delta_y ||
-+        !modifiers) {
-+      return 1;
-+    }
-+    auto event = content::mojom::OwlFreshMouseEvent::New();
-+    event->kind = static_cast<content::mojom::OwlFreshMouseKind>(*kind);
-+    event->x = *x;
-+    event->y = *y;
-+    event->button = *button;
-+    event->click_count = *click_count;
-+    event->delta_x = *delta_x;
-+    event->delta_y = *delta_y;
-+    event->modifiers = *modifiers;
-+    session->host->SendMouse(std::move(event));
-+    return Succeed(result_json, "{}");
-+  }
-+
-+  if (method == "sendKey") {
-+    std::optional<bool> key_down = RequiredBool(dict, "keyDown", error);
-+    std::optional<uint32_t> key_code = RequiredUInt32(dict, "keyCode", error);
-+    const std::string* text = RequiredString(dict, "text", error);
-+    std::optional<uint32_t> modifiers = RequiredUInt32(dict, "modifiers", error);
-+    if (!key_down || !key_code || !text || !modifiers) {
-+      return 1;
-+    }
-+    auto event = content::mojom::OwlFreshKeyEvent::New();
-+    event->key_down = *key_down;
-+    event->key_code = *key_code;
-+    event->text = *text;
-+    event->modifiers = *modifiers;
-+    session->host->SendKey(std::move(event));
-+    return Succeed(result_json, "{}");
-+  }
-+
-+  if (method == "flush") {
 +    int status = 1;
 +    base::RunLoop loop;
-+    session->host->Flush(base::BindOnce(
++    session->owl_session->Flush(base::BindOnce(
 +        [](base::OnceClosure quit,
 +           int* status,
 +           char** result_json,
@@ -2422,26 +2435,24 @@ index 0000000000..fbbb92e9fe
 +    return status;
 +  }
 +
-+  if (method == "captureSurface") {
++  if (interface == "OwlFreshProfile") {
++    if (!session->profile.is_bound()) {
++      return Fail(error, "OwlFreshProfile is not bound");
++    }
++    if (method != "getPath") {
++      return Fail(error,
++                  base::StrCat({"unsupported OwlFreshProfile method ", method}));
++    }
 +    int status = 1;
 +    base::RunLoop loop;
-+    session->host->CaptureSurface(base::BindOnce(
++    session->profile->GetPath(base::BindOnce(
 +        [](base::OnceClosure quit,
 +           int* status,
 +           char** result_json,
 +           char** error,
-+           content::mojom::OwlFreshCaptureResultPtr result) {
-+          if (!result) {
-+            Fail(error, "CaptureSurface returned no result");
-+            std::move(quit).Run();
-+            return;
-+          }
++           const std::string& path) {
 +          base::DictValue dict;
-+          dict.Set("pngBase64", base::Base64Encode(base::span(result->png)));
-+          dict.Set("width", static_cast<int>(result->width));
-+          dict.Set("height", static_cast<int>(result->height));
-+          dict.Set("captureMode", result->capture_mode);
-+          dict.Set("error", result->error);
++          dict.Set("path", path);
 +          if (WriteDictResult(std::move(dict), result_json, error) == 0) {
 +            *status = 0;
 +          }
@@ -2452,75 +2463,205 @@ index 0000000000..fbbb92e9fe
 +    return status;
 +  }
 +
-+  if (method == "getSurfaceTree") {
-+    int status = 1;
-+    base::RunLoop loop;
-+    session->host->GetSurfaceTree(base::BindOnce(
-+        [](base::OnceClosure quit,
-+           int* status,
-+           char** result_json,
-+           char** error,
-+           content::mojom::OwlFreshSurfaceTreePtr surface_tree) {
-+          if (WriteDictResult(SurfaceTreeToDict(surface_tree), result_json,
-+                              error) == 0) {
-+            *status = 0;
-+          }
-+          std::move(quit).Run();
-+        },
-+        loop.QuitClosure(), &status, result_json, error));
-+    loop.Run();
-+    return status;
++  if (interface == "OwlFreshWebView") {
++    if (!session->web_view.is_bound()) {
++      return Fail(error, "OwlFreshWebView is not bound");
++    }
++    if (method == "navigate") {
++      const std::string* url = RequiredString(dict, "url", error);
++      if (!url) {
++        return 1;
++      }
++      session->web_view->Navigate(*url);
++      return Succeed(result_json, "{}");
++    }
++    if (method == "resize") {
++      std::optional<uint32_t> width = RequiredUInt32(dict, "width", error);
++      std::optional<uint32_t> height = RequiredUInt32(dict, "height", error);
++      std::optional<float> scale = RequiredFloat(dict, "scale", error);
++      if (!width || !height || !scale) {
++        return 1;
++      }
++      session->web_view->Resize(*width, *height, *scale);
++      return Succeed(result_json, "{}");
++    }
++    if (method == "setFocus") {
++      std::optional<bool> focused = RequiredBool(dict, "focused", error);
++      if (!focused) {
++        return 1;
++      }
++      session->web_view->SetFocus(*focused);
++      return Succeed(result_json, "{}");
++    }
++    return Fail(error,
++                base::StrCat({"unsupported OwlFreshWebView method ", method}));
 +  }
 +
-+  if (method == "acceptActivePopupMenuItem") {
-+    std::optional<uint32_t> index = RequiredUInt32(dict, "index", error);
-+    if (!index) {
-+      return 1;
++  if (interface == "OwlFreshInput") {
++    if (!session->input.is_bound()) {
++      return Fail(error, "OwlFreshInput is not bound");
 +    }
-+    int status = 1;
-+    base::RunLoop loop;
-+    session->host->AcceptActivePopupMenuItem(
-+        *index,
-+        base::BindOnce(
-+            [](base::OnceClosure quit,
-+               int* status,
-+               char** result_json,
-+               char** error,
-+               bool ok) {
-+              base::DictValue dict;
-+              dict.Set("ok", ok);
-+              if (WriteDictResult(std::move(dict), result_json, error) == 0) {
-+                *status = 0;
-+              }
++    if (method == "sendMouse") {
++      std::optional<uint32_t> kind = RequiredUInt32(dict, "kind", error);
++      std::optional<float> x = RequiredFloat(dict, "x", error);
++      std::optional<float> y = RequiredFloat(dict, "y", error);
++      std::optional<uint32_t> button = RequiredUInt32(dict, "button", error);
++      std::optional<uint32_t> click_count =
++          RequiredUInt32(dict, "clickCount", error);
++      std::optional<float> delta_x = RequiredFloat(dict, "deltaX", error);
++      std::optional<float> delta_y = RequiredFloat(dict, "deltaY", error);
++      std::optional<uint32_t> modifiers =
++          RequiredUInt32(dict, "modifiers", error);
++      if (!kind || !x || !y || !button || !click_count || !delta_x ||
++          !delta_y || !modifiers) {
++        return 1;
++      }
++      auto event = content::mojom::OwlFreshMouseEvent::New();
++      event->kind = static_cast<content::mojom::OwlFreshMouseKind>(*kind);
++      event->x = *x;
++      event->y = *y;
++      event->button = *button;
++      event->click_count = *click_count;
++      event->delta_x = *delta_x;
++      event->delta_y = *delta_y;
++      event->modifiers = *modifiers;
++      session->input->SendMouse(std::move(event));
++      return Succeed(result_json, "{}");
++    }
++    if (method == "sendKey") {
++      std::optional<bool> key_down = RequiredBool(dict, "keyDown", error);
++      std::optional<uint32_t> key_code = RequiredUInt32(dict, "keyCode", error);
++      const std::string* text = RequiredString(dict, "text", error);
++      std::optional<uint32_t> modifiers =
++          RequiredUInt32(dict, "modifiers", error);
++      if (!key_down || !key_code || !text || !modifiers) {
++        return 1;
++      }
++      auto event = content::mojom::OwlFreshKeyEvent::New();
++      event->key_down = *key_down;
++      event->key_code = *key_code;
++      event->text = *text;
++      event->modifiers = *modifiers;
++      session->input->SendKey(std::move(event));
++      return Succeed(result_json, "{}");
++    }
++    return Fail(error,
++                base::StrCat({"unsupported OwlFreshInput method ", method}));
++  }
++
++  if (interface == "OwlFreshSurfaceTreeHost") {
++    if (!session->surface_tree.is_bound()) {
++      return Fail(error, "OwlFreshSurfaceTreeHost is not bound");
++    }
++    if (method == "captureSurface") {
++      int status = 1;
++      base::RunLoop loop;
++      session->surface_tree->CaptureSurface(base::BindOnce(
++          [](base::OnceClosure quit,
++             int* status,
++             char** result_json,
++             char** error,
++             content::mojom::OwlFreshCaptureResultPtr result) {
++            if (!result) {
++              Fail(error, "CaptureSurface returned no result");
 +              std::move(quit).Run();
-+            },
-+            loop.QuitClosure(), &status, result_json, error));
-+    loop.Run();
-+    return status;
++              return;
++            }
++            base::DictValue dict;
++            dict.Set("pngBase64", base::Base64Encode(base::span(result->png)));
++            dict.Set("width", static_cast<int>(result->width));
++            dict.Set("height", static_cast<int>(result->height));
++            dict.Set("captureMode", result->capture_mode);
++            dict.Set("error", result->error);
++            if (WriteDictResult(std::move(dict), result_json, error) == 0) {
++              *status = 0;
++            }
++            std::move(quit).Run();
++          },
++          loop.QuitClosure(), &status, result_json, error));
++      loop.Run();
++      return status;
++    }
++    if (method == "getSurfaceTree") {
++      int status = 1;
++      base::RunLoop loop;
++      session->surface_tree->GetSurfaceTree(base::BindOnce(
++          [](base::OnceClosure quit,
++             int* status,
++             char** result_json,
++             char** error,
++             content::mojom::OwlFreshSurfaceTreePtr surface_tree) {
++            if (WriteDictResult(SurfaceTreeToDict(surface_tree), result_json,
++                                error) == 0) {
++              *status = 0;
++            }
++            std::move(quit).Run();
++          },
++          loop.QuitClosure(), &status, result_json, error));
++      loop.Run();
++      return status;
++    }
++    return Fail(
++        error,
++        base::StrCat({"unsupported OwlFreshSurfaceTreeHost method ", method}));
 +  }
 +
-+  if (method == "cancelActivePopup") {
-+    int status = 1;
-+    base::RunLoop loop;
-+    session->host->CancelActivePopup(base::BindOnce(
-+        [](base::OnceClosure quit,
-+           int* status,
-+           char** result_json,
-+           char** error,
-+           bool ok) {
-+          base::DictValue dict;
-+          dict.Set("ok", ok);
-+          if (WriteDictResult(std::move(dict), result_json, error) == 0) {
-+            *status = 0;
-+          }
-+          std::move(quit).Run();
-+        },
-+        loop.QuitClosure(), &status, result_json, error));
-+    loop.Run();
-+    return status;
++  if (interface == "OwlFreshNativeSurfaceHost") {
++    if (!session->native_surface_host.is_bound()) {
++      return Fail(error, "OwlFreshNativeSurfaceHost is not bound");
++    }
++    if (method == "acceptActivePopupMenuItem") {
++      std::optional<uint32_t> index = RequiredUInt32(dict, "index", error);
++      if (!index) {
++        return 1;
++      }
++      int status = 1;
++      base::RunLoop loop;
++      session->native_surface_host->AcceptActivePopupMenuItem(
++          *index,
++          base::BindOnce(
++              [](base::OnceClosure quit,
++                 int* status,
++                 char** result_json,
++                 char** error,
++                 bool ok) {
++                base::DictValue dict;
++                dict.Set("ok", ok);
++                if (WriteDictResult(std::move(dict), result_json, error) == 0) {
++                  *status = 0;
++                }
++                std::move(quit).Run();
++              },
++              loop.QuitClosure(), &status, result_json, error));
++      loop.Run();
++      return status;
++    }
++    if (method == "cancelActivePopup") {
++      int status = 1;
++      base::RunLoop loop;
++      session->native_surface_host->CancelActivePopup(base::BindOnce(
++          [](base::OnceClosure quit,
++             int* status,
++             char** result_json,
++             char** error,
++             bool ok) {
++            base::DictValue dict;
++            dict.Set("ok", ok);
++            if (WriteDictResult(std::move(dict), result_json, error) == 0) {
++              *status = 0;
++            }
++            std::move(quit).Run();
++          },
++          loop.QuitClosure(), &status, result_json, error));
++      loop.Run();
++      return status;
++    }
++    return Fail(
++        error,
++        base::StrCat({"unsupported OwlFreshNativeSurfaceHost method ", method}));
 +  }
 +
-+  return Fail(error, base::StrCat({"unsupported OwlFreshHost method ", method}));
++  return Fail(error, base::StrCat({"unsupported Mojo interface ", interface}));
 +}
 +
 +extern "C" void owl_fresh_mojo_poll_events(uint32_t timeout_ms) {

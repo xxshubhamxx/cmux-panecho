@@ -86,16 +86,37 @@ interface OwlFreshClient {
   OnHostLog(string message);
 };
 
-interface OwlFreshHost {
+interface OwlFreshSession {
   SetClient(pending_remote<OwlFreshClient> client);
+  BindProfile(pending_receiver<OwlFreshProfile> profile);
+  BindWebView(pending_receiver<OwlFreshWebView> web_view);
+  BindInput(pending_receiver<OwlFreshInput> input);
+  BindSurfaceTree(pending_receiver<OwlFreshSurfaceTreeHost> surface_tree);
+  BindNativeSurfaceHost(pending_receiver<OwlFreshNativeSurfaceHost> native_surface_host);
+  Flush() => (bool ok);
+};
+
+interface OwlFreshProfile {
+  GetPath() => (string path);
+};
+
+interface OwlFreshWebView {
   Navigate(string url);
   Resize(uint32 width, uint32 height, float scale);
   SetFocus(bool focused);
+};
+
+interface OwlFreshInput {
   SendMouse(OwlFreshMouseEvent event);
   SendKey(OwlFreshKeyEvent event);
-  Flush() => (bool ok);
+};
+
+interface OwlFreshSurfaceTreeHost {
   CaptureSurface() => (OwlFreshCaptureResult result);
   GetSurfaceTree() => (OwlFreshSurfaceTree surface_tree);
+};
+
+interface OwlFreshNativeSurfaceHost {
   AcceptActivePopupMenuItem(uint32 index) => (bool ok);
   CancelActivePopup() => (bool ok);
 };

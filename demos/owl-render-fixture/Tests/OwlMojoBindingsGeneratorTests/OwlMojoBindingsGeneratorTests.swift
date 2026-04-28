@@ -7,7 +7,7 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
         let file = try MojoParser.parse(source: sampleMojo)
 
         XCTAssertEqual(file.module, "content.mojom")
-        XCTAssertEqual(file.declarations.count, 3)
+        XCTAssertEqual(file.declarations.count, 5)
 
         guard case .enumeration(let mouseKind) = file.declarations[0] else {
             return XCTFail("expected enum")
@@ -22,12 +22,21 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
         XCTAssertEqual(event.fields.map(\.name), ["kind", "delta_x"])
         XCTAssertEqual(event.fields.map { $0.type.swiftName }, ["OwlFreshMouseKind", "Float"])
 
-        guard case .interface(let host) = file.declarations[2] else {
+        guard case .interface(let session) = file.declarations[2] else {
             return XCTFail("expected interface")
         }
-        XCTAssertEqual(host.methods.map(\.name), ["Resize", "SendMouse", "CaptureSurface"])
-        XCTAssertEqual(host.methods[0].parameters.map(\.name), ["width", "height", "scale"])
-        XCTAssertEqual(host.methods[2].responseParameters.map(\.name), ["result"])
+        XCTAssertEqual(session.name, "OwlFreshSession")
+        XCTAssertEqual(session.methods.map(\.name), ["BindWebView", "BindInput", "Flush"])
+        XCTAssertEqual(session.methods[0].parameters.map(\.name), ["web_view"])
+        XCTAssertEqual(session.methods[0].parameters.first?.type.mojoName, "pending_receiver<OwlFreshWebView>")
+        XCTAssertEqual(session.methods[0].parameters.first?.type.swiftName, "OwlFreshWebViewReceiver")
+        XCTAssertEqual(session.methods[2].responseParameters.map(\.name), ["ok"])
+
+        guard case .interface(let webView) = file.declarations[3] else {
+            return XCTFail("expected web view interface")
+        }
+        XCTAssertEqual(webView.methods.map(\.name), ["Navigate", "Resize"])
+        XCTAssertEqual(webView.methods[1].parameters.map(\.name), ["width", "height", "scale"])
     }
 
     func testGeneratorEmitsSwiftTypesAndSchemaChecksum() throws {
@@ -38,10 +47,13 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
         XCTAssertTrue(result.swift.contains("case down = 0"))
         XCTAssertTrue(result.swift.contains("public struct OwlFreshMouseEvent"))
         XCTAssertTrue(result.swift.contains("public let deltaX: Float"))
-        XCTAssertTrue(result.swift.contains("public struct OwlFreshHostResizeRequest"))
-        XCTAssertTrue(result.swift.contains("func resize(_ request: OwlFreshHostResizeRequest)"))
-        XCTAssertTrue(result.swift.contains("public final class GeneratedOwlFreshHostMojoTransport"))
-        XCTAssertTrue(result.swift.contains("public private(set) var recordedCalls"))
+        XCTAssertTrue(result.swift.contains("public struct MojoPendingReceiver<Interface>"))
+        XCTAssertTrue(result.swift.contains("public typealias OwlFreshWebViewReceiver"))
+        XCTAssertTrue(result.swift.contains("public struct OwlFreshWebViewResizeRequest"))
+        XCTAssertTrue(result.swift.contains("func resize(_ request: OwlFreshWebViewResizeRequest)"))
+        XCTAssertTrue(result.swift.contains("public final class GeneratedOwlFreshSessionMojoTransport"))
+        XCTAssertTrue(result.swift.contains("public final class GeneratedOwlFreshWebViewMojoTransport"))
+        XCTAssertTrue(result.swift.contains("public final class OwlFreshMojoTransportRecorder"))
         XCTAssertTrue(result.swift.contains("public static let sourceChecksum = \"\(result.checksum)\""))
     }
 
@@ -59,16 +71,23 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
         XCTAssertTrue(report.contains("PASS"))
         XCTAssertTrue(report.contains("OwlFreshMouseKind"))
         XCTAssertTrue(report.contains(result.checksum))
-        XCTAssertTrue(report.contains("protocol OwlFreshHostMojoInterface"))
+        XCTAssertTrue(report.contains("protocol OwlFreshSessionMojoInterface"))
+        XCTAssertTrue(report.contains("pending_receiver&lt;OwlFreshWebView&gt; web_view -&gt; OwlFreshWebViewReceiver webView"))
     }
 
-    func testGeneratedHostTransportRecordsAndForwardsCalls() async throws {
-        let sink = FakeHostSink()
-        let transport = GeneratedOwlFreshHostMojoTransport(sink: sink)
+    func testGeneratedTransportsShareRecorderAndForwardCalls() async throws {
+        let sink = FakeOwlFreshSink()
+        let recorder = OwlFreshMojoTransportRecorder()
+        let session = GeneratedOwlFreshSessionMojoTransport(sink: sink, recorder: recorder)
+        let webView = GeneratedOwlFreshWebViewMojoTransport(sink: sink, recorder: recorder)
+        let input = GeneratedOwlFreshInputMojoTransport(sink: sink, recorder: recorder)
+        let surfaceTree = GeneratedOwlFreshSurfaceTreeHostMojoTransport(sink: sink, recorder: recorder)
+        let nativeSurface = GeneratedOwlFreshNativeSurfaceHostMojoTransport(sink: sink, recorder: recorder)
 
-        transport.navigate("https://example.com/")
-        transport.resize(OwlFreshHostResizeRequest(width: 960, height: 640, scale: 1.0))
-        transport.sendMouse(OwlFreshMouseEvent(
+        session.bindWebView(OwlFreshWebViewReceiver(handle: 10))
+        webView.navigate("https://example.com/")
+        webView.resize(OwlFreshWebViewResizeRequest(width: 960, height: 640, scale: 1.0))
+        input.sendMouse(OwlFreshMouseEvent(
             kind: .wheel,
             x: 520,
             y: 520,
@@ -78,17 +97,18 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
             deltaY: -900,
             modifiers: 0
         ))
-        transport.sendKey(OwlFreshKeyEvent(keyDown: true, keyCode: 83, text: "S", modifiers: 1))
-        let flushed = try await transport.flush()
-        let tree = try await transport.getSurfaceTree()
-        let accepted = try await transport.acceptActivePopupMenuItem(1)
-        let canceled = try await transport.cancelActivePopup()
+        input.sendKey(OwlFreshKeyEvent(keyDown: true, keyCode: 83, text: "S", modifiers: 1))
+        let flushed = try await session.flush()
+        let tree = try await surfaceTree.getSurfaceTree()
+        let accepted = try await nativeSurface.acceptActivePopupMenuItem(1)
+        let canceled = try await nativeSurface.cancelActivePopup()
 
         XCTAssertTrue(flushed)
         XCTAssertEqual(tree.generation, 7)
         XCTAssertTrue(accepted)
         XCTAssertTrue(canceled)
         XCTAssertEqual(sink.calls, [
+            "bindWebView",
             "navigate",
             "resize",
             "sendMouse",
@@ -98,7 +118,8 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
             "acceptActivePopupMenuItem",
             "cancelActivePopup",
         ])
-        XCTAssertEqual(transport.recordedCalls.map(\.method), [
+        XCTAssertEqual(session.recordedCalls.map(\.method), [
+            "bindWebView",
             "navigate",
             "resize",
             "sendMouse",
@@ -108,13 +129,25 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
             "acceptActivePopupMenuItem",
             "cancelActivePopup",
         ])
-        XCTAssertEqual(transport.recordedCalls.map(\.interface), Array(repeating: "OwlFreshHost", count: 8))
-        XCTAssertEqual(transport.recordedCalls[1].payloadType, "OwlFreshHostResizeRequest")
-        XCTAssertEqual(transport.recordedCalls[2].payloadType, "OwlFreshMouseEvent")
-        XCTAssertTrue(transport.recordedCalls[3].payloadSummary.contains("keyCode: 83"))
-        XCTAssertEqual(transport.recordedCalls[4].payloadType, "Void")
-        XCTAssertEqual(transport.recordedCalls[5].payloadType, "Void")
-        XCTAssertEqual(transport.recordedCalls[6].payloadType, "UInt32")
+        XCTAssertEqual(session.recordedCalls.map(\.interface), [
+            "OwlFreshSession",
+            "OwlFreshWebView",
+            "OwlFreshWebView",
+            "OwlFreshInput",
+            "OwlFreshInput",
+            "OwlFreshSession",
+            "OwlFreshSurfaceTreeHost",
+            "OwlFreshNativeSurfaceHost",
+            "OwlFreshNativeSurfaceHost",
+        ])
+        XCTAssertEqual(webView.recordedCalls, session.recordedCalls)
+        XCTAssertEqual(session.recordedCalls[0].payloadType, "OwlFreshWebViewReceiver")
+        XCTAssertEqual(session.recordedCalls[2].payloadType, "OwlFreshWebViewResizeRequest")
+        XCTAssertEqual(session.recordedCalls[3].payloadType, "OwlFreshMouseEvent")
+        XCTAssertTrue(session.recordedCalls[4].payloadSummary.contains("keyCode: 83"))
+        XCTAssertEqual(session.recordedCalls[5].payloadType, "Void")
+        XCTAssertEqual(session.recordedCalls[6].payloadType, "Void")
+        XCTAssertEqual(session.recordedCalls[7].payloadType, "UInt32")
     }
 
     func testGeneratedSurfaceTreeDecodesWrappedUnsignedContextID() throws {
@@ -164,26 +197,62 @@ final class OwlMojoBindingsGeneratorTests: XCTestCase {
       float delta_x;
     };
 
-    interface OwlFreshHost {
+    interface OwlFreshSession {
+      BindWebView(pending_receiver<OwlFreshWebView> web_view);
+      BindInput(pending_receiver<OwlFreshInput> input);
+      Flush() => (bool ok);
+    };
+
+    interface OwlFreshWebView {
+      Navigate(string url);
       Resize(uint32 width, uint32 height, float scale);
+    };
+
+    interface OwlFreshInput {
       SendMouse(OwlFreshMouseEvent event);
-      CaptureSurface() => (OwlFreshMouseEvent result);
     };
     """
 }
 
-private final class FakeHostSink: OwlFreshHostMojoSink {
+private final class FakeOwlFreshSink:
+    OwlFreshSessionMojoSink,
+    OwlFreshProfileMojoSink,
+    OwlFreshWebViewMojoSink,
+    OwlFreshInputMojoSink,
+    OwlFreshSurfaceTreeHostMojoSink,
+    OwlFreshNativeSurfaceHostMojoSink
+{
     var calls: [String] = []
 
     func setClient(_ client: OwlFreshClientRemote) {
         calls.append("setClient")
     }
 
+    func bindProfile(_ profile: OwlFreshProfileReceiver) {
+        calls.append("bindProfile")
+    }
+
+    func bindWebView(_ webView: OwlFreshWebViewReceiver) {
+        calls.append("bindWebView")
+    }
+
+    func bindInput(_ input: OwlFreshInputReceiver) {
+        calls.append("bindInput")
+    }
+
+    func bindSurfaceTree(_ surfaceTree: OwlFreshSurfaceTreeHostReceiver) {
+        calls.append("bindSurfaceTree")
+    }
+
+    func bindNativeSurfaceHost(_ nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver) {
+        calls.append("bindNativeSurfaceHost")
+    }
+
     func navigate(_ url: String) {
         calls.append("navigate")
     }
 
-    func resize(_ request: OwlFreshHostResizeRequest) {
+    func resize(_ request: OwlFreshWebViewResizeRequest) {
         calls.append("resize")
     }
 
@@ -197,6 +266,11 @@ private final class FakeHostSink: OwlFreshHostMojoSink {
 
     func sendKey(_ event: OwlFreshKeyEvent) {
         calls.append("sendKey")
+    }
+
+    func getPath() async throws -> String {
+        calls.append("getPath")
+        return "/tmp/owl-profile"
     }
 
     func flush() async throws -> Bool {

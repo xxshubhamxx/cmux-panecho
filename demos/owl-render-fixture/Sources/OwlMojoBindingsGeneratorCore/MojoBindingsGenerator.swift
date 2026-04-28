@@ -74,6 +74,7 @@ public indirect enum MojoType: Equatable {
     case named(String)
     case array(MojoType)
     case pendingRemote(String)
+    case pendingReceiver(String)
 
     public var mojoName: String {
         switch self {
@@ -83,6 +84,8 @@ public indirect enum MojoType: Equatable {
             return "array<\(element.mojoName)>"
         case .pendingRemote(let name):
             return "pending_remote<\(name)>"
+        case .pendingReceiver(let name):
+            return "pending_receiver<\(name)>"
         }
     }
 
@@ -108,6 +111,8 @@ public indirect enum MojoType: Equatable {
             return "[\(element.swiftName)]"
         case .pendingRemote(let name):
             return "\(name)Remote"
+        case .pendingReceiver(let name):
+            return "\(name)Receiver"
         }
     }
 }
@@ -315,6 +320,11 @@ private struct Parser {
             let name = try consumeIdentifier()
             try consume(">")
             return .pendingRemote(name)
+        case "pending_receiver":
+            try consume("<")
+            let name = try consumeIdentifier()
+            try consume(">")
+            return .pendingReceiver(name)
         case "bool", "float", "int32", "uint8", "uint32", "uint64", "string":
             return .primitive(token)
         default:
@@ -412,6 +422,14 @@ public enum MojoSwiftGenerator {
             "    }",
             "}",
             "",
+            "public struct MojoPendingReceiver<Interface>: Equatable, Codable {",
+            "    public let handle: UInt64",
+            "",
+            "    public init(handle: UInt64) {",
+            "        self.handle = handle",
+            "    }",
+            "}",
+            "",
             "public struct OwlFreshMojoTransportCall: Equatable, Codable {",
             "    public let interface: String",
             "    public let method: String",
@@ -423,6 +441,25 @@ public enum MojoSwiftGenerator {
             "        self.method = method",
             "        self.payloadType = payloadType",
             "        self.payloadSummary = payloadSummary",
+            "    }",
+            "}",
+            "",
+            "public final class OwlFreshMojoTransportRecorder {",
+            "    public private(set) var recordedCalls: [OwlFreshMojoTransportCall] = []",
+            "",
+            "    public init() {}",
+            "",
+            "    public func record(interface: String, method: String, payloadType: String, payloadSummary: String) {",
+            "        recordedCalls.append(OwlFreshMojoTransportCall(",
+            "            interface: interface,",
+            "            method: method,",
+            "            payloadType: payloadType,",
+            "            payloadSummary: payloadSummary",
+            "        ))",
+            "    }",
+            "",
+            "    public func reset() {",
+            "        recordedCalls.removeAll()",
             "    }",
             "}",
             "",
@@ -577,6 +614,7 @@ public enum MojoSwiftGenerator {
         var lines: [String] = [
             "public enum \(interface.name)MojoInterfaceMarker {}",
             "public typealias \(interface.name)Remote = MojoPendingRemote<\(interface.name)MojoInterfaceMarker>",
+            "public typealias \(interface.name)Receiver = MojoPendingReceiver<\(interface.name)MojoInterfaceMarker>",
             "",
             "public protocol \(interface.name)MojoInterface {",
         ]
@@ -620,24 +658,26 @@ public enum MojoSwiftGenerator {
     private static func generateTransportClass(_ interface: MojoInterface) -> String {
         var lines: [String] = [
             "public final class Generated\(interface.name)MojoTransport: \(interface.name)MojoInterface {",
-            "    public private(set) var recordedCalls: [OwlFreshMojoTransportCall] = []",
+            "    public var recordedCalls: [OwlFreshMojoTransportCall] { recorder.recordedCalls }",
             "    private let sink: \(interface.name)MojoSink",
+            "    private let recorder: OwlFreshMojoTransportRecorder",
             "",
-            "    public init(sink: \(interface.name)MojoSink) {",
+            "    public init(sink: \(interface.name)MojoSink, recorder: OwlFreshMojoTransportRecorder = OwlFreshMojoTransportRecorder()) {",
             "        self.sink = sink",
+            "        self.recorder = recorder",
             "    }",
             "",
             "    public func resetRecordedCalls() {",
-            "        recordedCalls.removeAll()",
+            "        recorder.reset()",
             "    }",
             "",
             "    private func record(method: String, payloadType: String, payloadSummary: String) {",
-            "        recordedCalls.append(OwlFreshMojoTransportCall(",
+            "        recorder.record(",
             "            interface: \"\(interface.name)\",",
             "            method: method,",
             "            payloadType: payloadType,",
             "            payloadSummary: payloadSummary",
-            "        ))",
+            "        )",
             "    }",
         ]
 
@@ -893,7 +933,7 @@ public enum BindingsReportRenderer {
         case .interface(let interface):
             let lines = ["protocol \(interface.name)MojoInterface"] + interface.methods.map { method in
                 let params = method.parameters
-                    .map { "\($0.type.swiftName) \(MojoSwiftGenerator.swiftPropertyName($0.name))" }
+                    .map { "\($0.type.mojoName) \($0.name) -> \($0.type.swiftName) \(MojoSwiftGenerator.swiftPropertyName($0.name))" }
                     .joined(separator: ", ")
                 let response = method.responseParameters.isEmpty
                     ? ""

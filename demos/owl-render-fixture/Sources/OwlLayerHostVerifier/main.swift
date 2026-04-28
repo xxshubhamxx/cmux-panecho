@@ -51,7 +51,7 @@ private enum InputAction {
     case mouseClick(MouseClick)
     case mouseWheel(OwlFreshMouseEvent)
     case key(OwlFreshKeyEvent)
-    case resize(OwlFreshHostResizeRequest, waitForMode: String)
+    case resize(OwlFreshWebViewResizeRequest, waitForMode: String)
     case text(String)
     case waitForJavaScript(label: String, script: String, expectations: [JavaScriptExpectation])
     case waitForSurfaceTree(label: String, expectations: [SurfaceTreeExpectation])
@@ -645,7 +645,7 @@ private final class LayerHostRunner {
                         preInputScreenshotName: "resize-small-before.png",
                         preInputExpected: [.blue, .dark, .light],
                         inputActions: [
-                            .resize(OwlFreshHostResizeRequest(width: 720, height: 480, scale: 1.0), waitForMode: "small"),
+                            .resize(OwlFreshWebViewResizeRequest(width: 720, height: 480, scale: 1.0), waitForMode: "small"),
                         ],
                         postInputDiagnosticScript: """
                         ({
@@ -668,8 +668,8 @@ private final class LayerHostRunner {
                         preInputScreenshotName: "resize-roundtrip-before.png",
                         preInputExpected: [.blue, .dark, .light],
                         inputActions: [
-                            .resize(OwlFreshHostResizeRequest(width: 720, height: 480, scale: 1.0), waitForMode: "small"),
-                            .resize(OwlFreshHostResizeRequest(width: 960, height: 640, scale: 1.0), waitForMode: "restored"),
+                            .resize(OwlFreshWebViewResizeRequest(width: 720, height: 480, scale: 1.0), waitForMode: "small"),
+                            .resize(OwlFreshWebViewResizeRequest(width: 960, height: 640, scale: 1.0), waitForMode: "restored"),
                         ],
                         postInputDiagnosticScript: """
                         ({
@@ -1102,7 +1102,7 @@ private final class LayerHostRunner {
         )
 
         try hostController.resize(
-            OwlFreshHostResizeRequest(
+            OwlFreshWebViewResizeRequest(
                 width: UInt32(contentSize.width),
                 height: UInt32(contentSize.height),
                 scale: 1.0
@@ -1680,7 +1680,7 @@ private final class LayerHostRunner {
             runtime.pollEvents(milliseconds: 20)
             pumpApp(app, for: 0.02)
             do {
-                try runtime.flushHost(session)
+                try runtime.flushSession(session)
                 return
             } catch {
                 lastError = String(describing: error)
@@ -2401,21 +2401,26 @@ private final class OwlFreshMojoRuntime {
         )
     }
 
-    func flushHost(_ session: OpaquePointer?) throws {
-        let result = try invokeJSON(session: session, interface: "OwlFreshHost", method: "flush")
+    func profilePath(_ session: OpaquePointer?) throws -> String {
+        let result = try invokeJSON(session: session, interface: "OwlFreshProfile", method: "getPath")
+        return try result.jsonObjectStringValue(for: "path")
+    }
+
+    func flushSession(_ session: OpaquePointer?) throws {
+        let result = try invokeJSON(session: session, interface: "OwlFreshSession", method: "flush")
         guard try result.jsonObjectBoolValue(for: "ok") else {
-            throw VerifierError.bridge("OwlFreshHost.flush returned false")
+            throw VerifierError.bridge("OwlFreshSession.flush returned false")
         }
     }
 
     func captureSurface(_ session: OpaquePointer?) throws -> RuntimeCaptureSurfaceResult {
-        let json = try invokeJSON(session: session, interface: "OwlFreshHost", method: "captureSurface")
+        let json = try invokeJSON(session: session, interface: "OwlFreshSurfaceTreeHost", method: "captureSurface")
         let data = Data(json.utf8)
         return try JSONDecoder().decode(RuntimeCaptureSurfaceResult.self, from: data)
     }
 
     func getSurfaceTree(_ session: OpaquePointer?) throws -> OwlFreshSurfaceTree {
-        let json = try invokeJSON(session: session, interface: "OwlFreshHost", method: "getSurfaceTree")
+        let json = try invokeJSON(session: session, interface: "OwlFreshSurfaceTreeHost", method: "getSurfaceTree")
         let data = Data(json.utf8)
         return try JSONDecoder().decode(OwlFreshSurfaceTree.self, from: data)
     }
@@ -2423,7 +2428,7 @@ private final class OwlFreshMojoRuntime {
     func acceptActivePopupMenuItem(_ session: OpaquePointer?, index: UInt32) throws -> Bool {
         let result = try invokeJSON(
             session: session,
-            interface: "OwlFreshHost",
+            interface: "OwlFreshNativeSurfaceHost",
             method: "acceptActivePopupMenuItem",
             payload: try runtimePayloadJSON(["index": Int(index)])
         )
@@ -2433,7 +2438,7 @@ private final class OwlFreshMojoRuntime {
     func cancelActivePopup(_ session: OpaquePointer?) throws -> Bool {
         let result = try invokeJSON(
             session: session,
-            interface: "OwlFreshHost",
+            interface: "OwlFreshNativeSurfaceHost",
             method: "cancelActivePopup"
         )
         return try result.jsonObjectBoolValue(for: "ok")
@@ -2451,53 +2456,61 @@ private struct RuntimeCaptureSurfaceResult: Decodable {
 private final class OwlFreshMojoHostController {
     private let runtime: OwlFreshMojoRuntime
     private let session: OpaquePointer
-    private let sink: OwlFreshMojoRuntimeHostSink
-    private let transport: GeneratedOwlFreshHostMojoTransport
+    private let sink: OwlFreshMojoRuntimeSink
+    private let recorder: OwlFreshMojoTransportRecorder
+    private let sessionTransport: GeneratedOwlFreshSessionMojoTransport
+    private let webViewTransport: GeneratedOwlFreshWebViewMojoTransport
+    private let inputTransport: GeneratedOwlFreshInputMojoTransport
+    private let surfaceTreeTransport: GeneratedOwlFreshSurfaceTreeHostMojoTransport
 
     init(runtime: OwlFreshMojoRuntime, session: OpaquePointer) {
         self.runtime = runtime
         self.session = session
-        self.sink = OwlFreshMojoRuntimeHostSink(runtime: runtime, session: session)
-        self.transport = GeneratedOwlFreshHostMojoTransport(sink: sink)
+        self.sink = OwlFreshMojoRuntimeSink(runtime: runtime, session: session)
+        self.recorder = OwlFreshMojoTransportRecorder()
+        self.sessionTransport = GeneratedOwlFreshSessionMojoTransport(sink: sink, recorder: recorder)
+        self.webViewTransport = GeneratedOwlFreshWebViewMojoTransport(sink: sink, recorder: recorder)
+        self.inputTransport = GeneratedOwlFreshInputMojoTransport(sink: sink, recorder: recorder)
+        self.surfaceTreeTransport = GeneratedOwlFreshSurfaceTreeHostMojoTransport(sink: sink, recorder: recorder)
     }
 
     var recordedCalls: [OwlFreshMojoTransportCall] {
-        transport.recordedCalls
+        recorder.recordedCalls
     }
 
     func navigate(_ url: String) throws {
-        transport.navigate(url)
+        webViewTransport.navigate(url)
         try sink.throwIfFailed()
     }
 
-    func resize(_ request: OwlFreshHostResizeRequest) throws {
-        transport.resize(request)
+    func resize(_ request: OwlFreshWebViewResizeRequest) throws {
+        webViewTransport.resize(request)
         try sink.throwIfFailed()
     }
 
     func setFocus(_ focused: Bool) throws {
-        transport.setFocus(focused)
+        webViewTransport.setFocus(focused)
         try sink.throwIfFailed()
     }
 
     func sendMouse(_ event: OwlFreshMouseEvent) throws {
-        transport.sendMouse(event)
+        inputTransport.sendMouse(event)
         try sink.throwIfFailed()
     }
 
     func sendKey(_ event: OwlFreshKeyEvent) throws {
-        transport.sendKey(event)
+        inputTransport.sendKey(event)
         try sink.throwIfFailed()
     }
 
     func flush() async throws -> Bool {
-        let result = try await transport.flush()
+        let result = try await sessionTransport.flush()
         try sink.throwIfFailed()
         return result
     }
 
     func captureSurface() async throws -> OwlFreshCaptureResult {
-        let result = try await transport.captureSurface()
+        let result = try await surfaceTreeTransport.captureSurface()
         try sink.throwIfFailed()
         return result
     }
@@ -2515,7 +2528,14 @@ private final class OwlFreshMojoHostController {
     }
 }
 
-private final class OwlFreshMojoRuntimeHostSink: OwlFreshHostMojoSink {
+private final class OwlFreshMojoRuntimeSink:
+    OwlFreshSessionMojoSink,
+    OwlFreshProfileMojoSink,
+    OwlFreshWebViewMojoSink,
+    OwlFreshInputMojoSink,
+    OwlFreshSurfaceTreeHostMojoSink,
+    OwlFreshNativeSurfaceHostMojoSink
+{
     private let runtime: OwlFreshMojoRuntime
     private let session: OpaquePointer
     private var lastError: VerifierError?
@@ -2536,12 +2556,36 @@ private final class OwlFreshMojoRuntimeHostSink: OwlFreshHostMojoSink {
         lastError = VerifierError.bridge("Swift cannot synthesize pending_remote handles yet")
     }
 
-    func navigate(_ url: String) {
-        invoke(method: "navigate", payload: ["url": url])
+    func bindProfile(_ profile: OwlFreshProfileReceiver) {
+        lastError = VerifierError.bridge("Swift cannot synthesize pending_receiver handles yet")
     }
 
-    func resize(_ request: OwlFreshHostResizeRequest) {
-        invoke(method: "resize", payload: [
+    func bindWebView(_ webView: OwlFreshWebViewReceiver) {
+        lastError = VerifierError.bridge("Swift cannot synthesize pending_receiver handles yet")
+    }
+
+    func bindInput(_ input: OwlFreshInputReceiver) {
+        lastError = VerifierError.bridge("Swift cannot synthesize pending_receiver handles yet")
+    }
+
+    func bindSurfaceTree(_ surfaceTree: OwlFreshSurfaceTreeHostReceiver) {
+        lastError = VerifierError.bridge("Swift cannot synthesize pending_receiver handles yet")
+    }
+
+    func bindNativeSurfaceHost(_ nativeSurfaceHost: OwlFreshNativeSurfaceHostReceiver) {
+        lastError = VerifierError.bridge("Swift cannot synthesize pending_receiver handles yet")
+    }
+
+    func getPath() async throws -> String {
+        try runtime.profilePath(session)
+    }
+
+    func navigate(_ url: String) {
+        invoke(interface: "OwlFreshWebView", method: "navigate", payload: ["url": url])
+    }
+
+    func resize(_ request: OwlFreshWebViewResizeRequest) {
+        invoke(interface: "OwlFreshWebView", method: "resize", payload: [
             "width": Int(request.width),
             "height": Int(request.height),
             "scale": Double(request.scale),
@@ -2549,11 +2593,11 @@ private final class OwlFreshMojoRuntimeHostSink: OwlFreshHostMojoSink {
     }
 
     func setFocus(_ focused: Bool) {
-        invoke(method: "setFocus", payload: ["focused": focused])
+        invoke(interface: "OwlFreshWebView", method: "setFocus", payload: ["focused": focused])
     }
 
     func sendMouse(_ event: OwlFreshMouseEvent) {
-        invoke(method: "sendMouse", payload: [
+        invoke(interface: "OwlFreshInput", method: "sendMouse", payload: [
             "kind": Int(event.kind.rawValue),
             "x": Double(event.x),
             "y": Double(event.y),
@@ -2566,7 +2610,7 @@ private final class OwlFreshMojoRuntimeHostSink: OwlFreshHostMojoSink {
     }
 
     func sendKey(_ event: OwlFreshKeyEvent) {
-        invoke(method: "sendKey", payload: [
+        invoke(interface: "OwlFreshInput", method: "sendKey", payload: [
             "keyDown": event.keyDown,
             "keyCode": Int(event.keyCode),
             "text": event.text,
@@ -2575,7 +2619,7 @@ private final class OwlFreshMojoRuntimeHostSink: OwlFreshHostMojoSink {
     }
 
     func flush() async throws -> Bool {
-        try runtime.flushHost(session)
+        try runtime.flushSession(session)
         return true
     }
 
@@ -2606,9 +2650,9 @@ private final class OwlFreshMojoRuntimeHostSink: OwlFreshHostMojoSink {
         try runtime.cancelActivePopup(session)
     }
 
-    private func invoke(method: String, payload: [String: Any]) {
+    private func invoke(interface: String, method: String, payload: [String: Any]) {
         do {
-            try runtime.invokeVoid(session: session, interface: "OwlFreshHost", method: method, payload: payload)
+            try runtime.invokeVoid(session: session, interface: interface, method: method, payload: payload)
         } catch let error as VerifierError {
             lastError = error
         } catch {
