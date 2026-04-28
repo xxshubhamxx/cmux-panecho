@@ -8624,6 +8624,20 @@ struct ContentView: View {
             return "browser.addressBar"
         case .browser(.findField):
             return "browser.findField"
+        case .filePreview(.textEditor):
+            return "filePreview.textEditor"
+        case .filePreview(.pdfCanvas):
+            return "filePreview.pdfCanvas"
+        case .filePreview(.pdfThumbnails):
+            return "filePreview.pdfThumbnails"
+        case .filePreview(.pdfOutline):
+            return "filePreview.pdfOutline"
+        case .filePreview(.imageCanvas):
+            return "filePreview.imageCanvas"
+        case .filePreview(.mediaPlayer):
+            return "filePreview.mediaPlayer"
+        case .filePreview(.quickLook):
+            return "filePreview.quickLook"
         }
     }
 

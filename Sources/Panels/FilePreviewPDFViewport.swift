@@ -144,4 +144,30 @@ struct FilePreviewPDFViewportSnapshot {
         guard pointInDocument.x.isFinite, pointInDocument.y.isFinite else { return nil }
         return pointInDocument
     }
+
+    #if DEBUG
+    func debugSummary(document: PDFDocument?) -> String {
+        let pageDescription: String
+        if let page, let document {
+            let pageIndex = document.index(for: page)
+            pageDescription = pageIndex >= 0 ? "\(pageIndex + 1)/\(document.pageCount)" : "unknown"
+        } else {
+            pageDescription = "nil"
+        }
+        return "page=\(pageDescription) " +
+            "pagePoint=\(Self.debugPoint(pagePoint)) " +
+            "ratio=\(Self.debugPoint(documentAnchorRatio)) " +
+            "offset=\(Self.debugPoint(anchorOffsetInClip))"
+    }
+
+    private static func debugPoint(_ point: CGPoint?) -> String {
+        guard let point else { return "nil" }
+        return "(\(debugNumber(point.x)),\(debugNumber(point.y)))"
+    }
+
+    private static func debugNumber(_ value: CGFloat) -> String {
+        guard value.isFinite else { return "nan" }
+        return String(format: "%.1f", Double(value))
+    }
+    #endif
 }

@@ -12229,7 +12229,7 @@ extension Workspace: BonsplitDelegate {
         switch intent {
         case .browser(.addressBar), .browser(.findField), .terminal(.findField):
             return true
-        case .panel, .browser(.webView), .terminal(.surface):
+        case .panel, .browser(.webView), .terminal(.surface), .filePreview:
             return false
         }
     }

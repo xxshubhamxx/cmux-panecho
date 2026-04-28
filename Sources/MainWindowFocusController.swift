@@ -302,7 +302,7 @@ final class MainWindowFocusController {
             publishFeedFocusSnapshot()
             return
         }
-        if let mainPanel = selectedFocusedBrowserPanelRequest() {
+        if let mainPanel = selectedFocusedPanelRequest(owning: responder) {
             noteMainPanelInteraction(workspaceId: mainPanel.workspaceId, panelId: mainPanel.panelId)
             return
         }
@@ -464,6 +464,27 @@ final class MainWindowFocusController {
         let panelId: UUID
     }
 
+    private func selectedFocusedPanelRequest(owning responder: NSResponder) -> FocusedPanelRequest? {
+        guard let window,
+              let tabManager,
+              let workspace = tabManager.selectedWorkspace else {
+            return nil
+        }
+        if let panelId = workspace.focusedPanelId,
+           let panel = workspace.panels[panelId],
+           panel.ownedFocusIntent(for: responder, in: window) != nil {
+            return FocusedPanelRequest(workspaceId: workspace.id, panelId: panelId)
+        }
+        for (panelId, panel) in workspace.panels {
+            guard panelId != workspace.focusedPanelId,
+                  panel.ownedFocusIntent(for: responder, in: window) != nil else {
+                continue
+            }
+            return FocusedPanelRequest(workspaceId: workspace.id, panelId: panelId)
+        }
+        return nil
+    }
+
     private func selectedFocusedBrowserPanelRequest() -> FocusedPanelRequest? {
         guard let tabManager,
               let workspace = tabManager.selectedWorkspace,
@@ -505,6 +526,9 @@ final class MainWindowFocusController {
             }
             if rightSidebarModeOwning(responder) != nil {
                 return .rightSidebar
+            }
+            if selectedFocusedPanelRequest(owning: responder) != nil {
+                return .mainPanel
             }
         }
 

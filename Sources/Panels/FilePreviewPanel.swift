@@ -23,6 +23,7 @@ private enum FilePreviewInteraction {
         guard factor.isFinite else { return 1 }
         return min(max(factor, 0.2), 5.0)
     }
+
 }
 
 struct FilePreviewDragEntry {
@@ -311,7 +312,7 @@ final class FilePreviewPanel: Panel, ObservableObject {
     private var originalTextContent = ""
     private var textEncoding: String.Encoding = .utf8
     private weak var textView: NSTextView?
-    private var hasPendingTextFocus = false
+    private let focusCoordinator: FilePreviewFocusCoordinator
 
     var fileURL: URL {
         URL(fileURLWithPath: filePath)
@@ -325,6 +326,9 @@ final class FilePreviewPanel: Panel, ObservableObject {
         let fileURL = URL(fileURLWithPath: filePath)
         self.previewMode = FilePreviewKindResolver.mode(for: fileURL)
         self.displayIcon = FilePreviewKindResolver.tabIconName(for: fileURL)
+        self.focusCoordinator = FilePreviewFocusCoordinator(
+            preferredIntent: Self.defaultFocusIntent(for: previewMode)
+        )
 
         if previewMode == .text {
             loadTextContent()
@@ -334,12 +338,7 @@ final class FilePreviewPanel: Panel, ObservableObject {
     }
 
     func focus() {
-        guard let textView else {
-            hasPendingTextFocus = true
-            return
-        }
-        hasPendingTextFocus = false
-        textView.window?.makeFirstResponder(textView)
+        _ = restoreFocusIntent(preferredFocusIntentForActivation())
     }
 
     func unfocus() {
@@ -348,6 +347,7 @@ final class FilePreviewPanel: Panel, ObservableObject {
 
     func close() {
         textView = nil
+        focusCoordinator.unregisterAll()
     }
 
     func triggerFlash(reason: WorkspaceAttentionFlashReason) {
@@ -358,9 +358,78 @@ final class FilePreviewPanel: Panel, ObservableObject {
 
     func attachTextView(_ textView: NSTextView) {
         self.textView = textView
-        if hasPendingTextFocus {
-            focus()
+        focusCoordinator.register(root: textView, primaryResponder: textView, intent: .textEditor)
+    }
+
+    func attachPDFPreview(root: NSView, primaryResponder: NSView) {
+        attachPreviewFocus(root: root, primaryResponder: primaryResponder, intent: .pdfCanvas)
+    }
+
+    func attachPreviewFocus(
+        root: NSView,
+        primaryResponder: NSView,
+        intent: FilePreviewPanelFocusIntent
+    ) {
+        focusCoordinator.register(root: root, primaryResponder: primaryResponder, intent: intent)
+    }
+
+    func noteFilePreviewFocusIntent(_ intent: FilePreviewPanelFocusIntent) {
+        focusCoordinator.notePreferredIntent(intent)
+    }
+
+    func currentFilePreviewFocusIntent(in window: NSWindow?) -> FilePreviewPanelFocusIntent? {
+        guard let window,
+              let responder = window.firstResponder else { return nil }
+        return focusCoordinator.ownedIntent(for: responder, in: window)
+    }
+
+    func captureFocusIntent(in window: NSWindow?) -> PanelFocusIntent {
+        if let window,
+           let responder = window.firstResponder,
+           let intent = ownedFocusIntent(for: responder, in: window) {
+            return intent
         }
+        return preferredFocusIntentForActivation()
+    }
+
+    func preferredFocusIntentForActivation() -> PanelFocusIntent {
+        .filePreview(focusCoordinator.preferredIntent)
+    }
+
+    func prepareFocusIntentForActivation(_ intent: PanelFocusIntent) {
+        if case .filePreview(let filePreviewIntent) = intent {
+            focusCoordinator.notePreferredIntent(filePreviewIntent)
+        }
+    }
+
+    @discardableResult
+    func restoreFocusIntent(_ intent: PanelFocusIntent) -> Bool {
+        let filePreviewIntent: FilePreviewPanelFocusIntent
+        switch intent {
+        case .filePreview(let target):
+            filePreviewIntent = target
+        case .panel:
+            filePreviewIntent = focusCoordinator.preferredIntent
+        case .terminal, .browser:
+            return false
+        }
+        return focusCoordinator.focus(filePreviewIntent)
+    }
+
+    func ownedFocusIntent(for responder: NSResponder, in window: NSWindow) -> PanelFocusIntent? {
+        if let intent = focusCoordinator.ownedIntent(for: responder, in: window) {
+            return .filePreview(intent)
+        }
+        return nil
+    }
+
+    @discardableResult
+    func yieldFocusIntent(_ intent: PanelFocusIntent, in window: NSWindow) -> Bool {
+        guard let responder = window.firstResponder,
+              ownedFocusIntent(for: responder, in: window) == intent else {
+            return false
+        }
+        return window.makeFirstResponder(nil)
     }
 
     func updateTextContent(_ nextContent: String) {
@@ -431,6 +500,21 @@ final class FilePreviewPanel: Panel, ObservableObject {
             return (decoded, .isoLatin1)
         }
         return nil
+    }
+
+    private static func defaultFocusIntent(for mode: FilePreviewMode) -> FilePreviewPanelFocusIntent {
+        switch mode {
+        case .text:
+            return .textEditor
+        case .pdf:
+            return .pdfCanvas
+        case .image:
+            return .imageCanvas
+        case .media:
+            return .mediaPlayer
+        case .quickLook:
+            return .quickLook
+        }
     }
 }
 
@@ -520,13 +604,13 @@ struct FilePreviewPanelView: View {
             case .text:
                 FilePreviewTextEditor(panel: panel)
             case .pdf:
-                FilePreviewPDFView(url: panel.fileURL)
+                FilePreviewPDFView(panel: panel)
             case .image:
-                FilePreviewImageView(url: panel.fileURL)
+                FilePreviewImageView(panel: panel)
             case .media:
-                FilePreviewMediaView(url: panel.fileURL)
+                FilePreviewMediaView(panel: panel)
             case .quickLook:
-                QuickLookPreviewView(url: panel.fileURL, title: panel.displayTitle)
+                QuickLookPreviewView(panel: panel)
             }
         }
     }
@@ -728,16 +812,18 @@ final class SavingTextView: NSTextView {
 }
 
 private struct FilePreviewPDFView: NSViewRepresentable {
-    let url: URL
+    let panel: FilePreviewPanel
 
     func makeNSView(context: Context) -> FilePreviewPDFContainerView {
         let view = FilePreviewPDFContainerView()
-        view.setURL(url)
+        view.setPanel(panel)
+        view.setURL(panel.fileURL)
         return view
     }
 
     func updateNSView(_ nsView: FilePreviewPDFContainerView, context: Context) {
-        nsView.setURL(url)
+        nsView.setPanel(panel)
+        nsView.setURL(panel.fileURL)
     }
 }
 
@@ -1222,13 +1308,16 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
     }
 
     private let scrollView = NSScrollView()
-    private let collectionView = NSCollectionView()
+    private let collectionView = FilePreviewPDFThumbnailCollectionView()
     private let flowLayout = NSCollectionViewFlowLayout()
     private var document: PDFDocument?
     private var isApplyingSelection = false
     private var selectedPageIndex: Int?
+    private var selectionIsActive = false
 
     var onSelectPage: ((PDFPage) -> Void)?
+    var onFocusChanged: ((Bool) -> Void)?
+    var onPageNavigation: ((Int) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1289,8 +1378,20 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
         collectionView.reloadItems(at: [IndexPath(item: pageIndex, section: 0)])
     }
 
+    func setSelectionActive(_ isActive: Bool) {
+        guard selectionIsActive != isActive else { return }
+        selectionIsActive = isActive
+        for item in collectionView.visibleItems() {
+            (item as? FilePreviewPDFThumbnailItem)?.isSelectionActiveForPreview = isActive
+        }
+    }
+
     func preferredSidebarWidth() -> CGFloat {
         FilePreviewPDFSizing.preferredThumbnailSidebarWidth(for: document)
+    }
+
+    func focusResponder() -> NSView {
+        collectionView
     }
 
     private func setupView() {
@@ -1309,6 +1410,12 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
         collectionView.backgroundColors = [.clear]
         collectionView.dataSource = self
         collectionView.delegate = self
+        collectionView.onFocusChanged = { [weak self] isActive in
+            self?.onFocusChanged?(isActive)
+        }
+        collectionView.onPageNavigation = { [weak self] delta in
+            self?.onPageNavigation?(delta)
+        }
         collectionView.isSelectable = true
         collectionView.allowsMultipleSelection = false
         collectionView.register(
@@ -1373,7 +1480,8 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
         item.configure(
             page: page,
             pageNumber: indexPath.item + 1,
-            isSelectedForPreview: indexPath.item == selectedPageIndex
+            isSelectedForPreview: indexPath.item == selectedPageIndex,
+            isSelectionActiveForPreview: selectionIsActive
         )
         return item
     }
@@ -1382,6 +1490,8 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
         guard !isApplyingSelection,
               let pageIndex = indexPaths.first?.item,
               let page = document?.page(at: pageIndex) else { return }
+        window?.makeFirstResponder(collectionView)
+        setSelectionActive(true)
         onSelectPage?(page)
     }
 
@@ -1391,6 +1501,88 @@ final class FilePreviewPDFThumbnailSidebarView: NSView, NSCollectionViewDataSour
         sizeForItemAt indexPath: IndexPath
     ) -> NSSize {
         thumbnailItemSize(width: thumbnailItemWidth())
+    }
+}
+
+private final class FilePreviewPDFThumbnailCollectionView: NSCollectionView {
+    var onFocusChanged: ((Bool) -> Void)?
+    var onPageNavigation: ((Int) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            onFocusChanged?(true)
+        }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            onFocusChanged?(false)
+        }
+        return resigned
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if handlePageNavigation(event) {
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if handlePageNavigation(event) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    private func handlePageNavigation(_ event: NSEvent) -> Bool {
+        guard case .navigatePage(let delta) = FilePreviewPDFKeyboardRouting.action(
+            for: event,
+            region: .pdfThumbnails
+        ), let onPageNavigation else {
+            return false
+        }
+        onPageNavigation(delta)
+        return true
+    }
+}
+
+private final class FilePreviewPDFOutlineView: NSOutlineView {
+    var onFocusChanged: ((Bool) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            onFocusChanged?(true)
+        }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            onFocusChanged?(false)
+        }
+        return resigned
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
     }
 }
 
@@ -1407,6 +1599,12 @@ private final class FilePreviewPDFThumbnailItem: NSCollectionViewItem {
         }
     }
 
+    var isSelectionActiveForPreview = false {
+        didSet {
+            thumbnailItemView?.isSelectionActiveForPreview = isSelectionActiveForPreview
+        }
+    }
+
     override func loadView() {
         view = FilePreviewPDFThumbnailItemView()
     }
@@ -1415,21 +1613,39 @@ private final class FilePreviewPDFThumbnailItem: NSCollectionViewItem {
         super.prepareForReuse()
         thumbnailItemView?.configure(image: nil, pageNumber: "")
         thumbnailItemView?.isSelectedForPreview = false
+        thumbnailItemView?.isSelectionActiveForPreview = false
     }
 
-    func configure(page: PDFPage?, pageNumber: Int, isSelectedForPreview: Bool) {
+    func configure(
+        page: PDFPage?,
+        pageNumber: Int,
+        isSelectedForPreview: Bool,
+        isSelectionActiveForPreview: Bool
+    ) {
         let thumbnail = page?.thumbnail(of: FilePreviewPDFSizing.thumbnailMaximumSize, for: .cropBox)
         thumbnailItemView?.configure(image: thumbnail, pageNumber: "\(pageNumber)")
         thumbnailItemView?.isSelectedForPreview = isSelectedForPreview
+        thumbnailItemView?.isSelectionActiveForPreview = isSelectionActiveForPreview
     }
 }
 
 private final class FilePreviewPDFThumbnailItemView: NSView {
+    private enum Metrics {
+        static let selectionHorizontalInset: CGFloat = 8
+        static let thumbnailHorizontalInset: CGFloat = 4
+    }
+
     private let selectionView = NSView()
     private let imageView = NSImageView()
     private let pageLabel = NSTextField(labelWithString: "")
 
     var isSelectedForPreview = false {
+        didSet {
+            updateSelectionAppearance()
+        }
+    }
+
+    var isSelectionActiveForPreview = false {
         didSet {
             updateSelectionAppearance()
         }
@@ -1475,13 +1691,13 @@ private final class FilePreviewPDFThumbnailItemView: NSView {
 
         NSLayoutConstraint.activate([
             selectionView.topAnchor.constraint(equalTo: topAnchor),
-            selectionView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            selectionView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            selectionView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.selectionHorizontalInset),
+            selectionView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.selectionHorizontalInset),
             selectionView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             imageView.topAnchor.constraint(equalTo: selectionView.topAnchor, constant: 8),
-            imageView.leadingAnchor.constraint(equalTo: selectionView.leadingAnchor, constant: 10),
-            imageView.trailingAnchor.constraint(equalTo: selectionView.trailingAnchor, constant: -10),
+            imageView.leadingAnchor.constraint(equalTo: selectionView.leadingAnchor, constant: Metrics.thumbnailHorizontalInset),
+            imageView.trailingAnchor.constraint(equalTo: selectionView.trailingAnchor, constant: -Metrics.thumbnailHorizontalInset),
             imageView.heightAnchor.constraint(equalToConstant: 106),
 
             pageLabel.topAnchor.constraint(equalTo: imageView.bottomAnchor, constant: 4),
@@ -1492,10 +1708,17 @@ private final class FilePreviewPDFThumbnailItemView: NSView {
     }
 
     private func updateSelectionAppearance() {
-        selectionView.layer?.backgroundColor = isSelectedForPreview
-            ? NSColor.controlAccentColor.cgColor
-            : NSColor.clear.cgColor
-        pageLabel.textColor = isSelectedForPreview ? .white : .secondaryLabelColor
+        if isSelectedForPreview {
+            selectionView.layer?.backgroundColor = (isSelectionActiveForPreview
+                ? NSColor.selectedContentBackgroundColor
+                : NSColor.unemphasizedSelectedContentBackgroundColor
+            ).cgColor
+        } else {
+            selectionView.layer?.backgroundColor = NSColor.clear.cgColor
+        }
+        pageLabel.textColor = isSelectedForPreview
+            ? (isSelectionActiveForPreview ? .white : .labelColor)
+            : .secondaryLabelColor
     }
 }
 
@@ -1516,12 +1739,13 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     private let pdfView = FilePreviewMagnifyingPDFView()
     private let thumbnailView = FilePreviewPDFThumbnailSidebarView()
     private let outlineScrollView = NSScrollView()
-    private let outlineView = NSOutlineView()
+    private let outlineView = FilePreviewPDFOutlineView()
     private let outlinePlaceholder = NSTextField(wrappingLabelWithString: "")
     private let sidebarChromeHost = FilePreviewPDFChromeHostingView(rootView: AnyView(EmptyView()))
     private let zoomChromeHost = FilePreviewPDFChromeHostingView(rootView: AnyView(EmptyView()))
     private let titleLabel = NSTextField(labelWithString: "")
     private let pageLabel = NSTextField(labelWithString: "")
+    private weak var panel: FilePreviewPanel?
     private var currentURL: URL?
     private var outlineRoot: PDFOutline?
     private var sidebarMode: FilePreviewPDFSidebarMode = .thumbnails
@@ -1534,6 +1758,9 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     private var isApplyingSidebarWidth = false
     private var pendingSidebarResizeSnapshot: FilePreviewPDFViewportSnapshot?
     private var suppressPDFPageChangeNotifications = false
+    private var pdfResizeSequence = 0
+    private var activePDFResizeID: Int?
+    private var activePDFRegion: FilePreviewPanelFocusIntent?
     private var rotationAccumulator: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
@@ -1547,6 +1774,12 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerFocusEndpoint()
+        updatePDFThumbnailSelectionFocus()
     }
 
     override func layout() {
@@ -1568,6 +1801,11 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
             return chromeHit
         }
         return super.hitTest(point)
+    }
+
+    func setPanel(_ panel: FilePreviewPanel) {
+        self.panel = panel
+        registerFocusEndpoint()
     }
 
     func setURL(_ url: URL) {
@@ -1624,7 +1862,6 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         pdfView.onSwipe = { [weak self] event in
             self?.swipePDF(with: event)
         }
-
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(pdfPageChanged),
@@ -1637,6 +1874,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
             name: .filePreviewPDFChromeStyleDidChange,
             object: nil
         )
+        registerFocusEndpoint()
     }
 
     private func setupSplitView() {
@@ -1664,8 +1902,15 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         sidebarHost.state = .active
 
         thumbnailView.onSelectPage = { [weak self] page in
+            self?.setActivePDFRegion(.pdfThumbnails)
             self?.pdfView.go(to: page)
             self?.updatePageControls()
+        }
+        thumbnailView.onFocusChanged = { [weak self] isActive in
+            self?.setActivePDFRegion(isActive ? .pdfThumbnails : nil)
+        }
+        thumbnailView.onPageNavigation = { [weak self] delta in
+            self?.navigatePDFPage(by: delta)
         }
         thumbnailView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1677,6 +1922,9 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         outlineView.rowSizeStyle = .medium
         outlineView.dataSource = self
         outlineView.delegate = self
+        outlineView.onFocusChanged = { [weak self] isActive in
+            self?.setActivePDFRegion(isActive ? .pdfOutline : nil)
+        }
         outlineView.translatesAutoresizingMaskIntoConstraints = false
 
         outlineScrollView.hasVerticalScroller = true
@@ -1718,6 +1966,9 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         contentHost.wantsLayer = true
         contentHost.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
         pdfView.translatesAutoresizingMaskIntoConstraints = false
+        pdfView.onFocusChanged = { [weak self] isActive in
+            self?.setActivePDFRegion(isActive ? .pdfCanvas : nil)
+        }
         contentHost.addSubview(pdfView)
         NSLayoutConstraint.activate([
             pdfView.topAnchor.constraint(equalTo: contentHost.topAnchor),
@@ -1883,6 +2134,9 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     }
 
     @objc private func pdfPageChanged() {
+        logPDFResizeProbe(
+            "pageChanged suppressed=\(suppressPDFPageChangeNotifications ? 1 : 0) \(pdfDebugState())"
+        )
         guard !suppressPDFPageChangeNotifications else { return }
         updatePageControls()
     }
@@ -1897,18 +2151,44 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     private func updatePageControls(scrollThumbnailToVisible: Bool = true) {
         guard let document = pdfView.document, document.pageCount > 0 else {
             pageLabel.stringValue = ""
+            logPDFResizeProbe("updatePageControls emptyDoc scrollThumb=\(scrollThumbnailToVisible ? 1 : 0)")
             return
         }
 
         let pageIndex: Int
-        if let currentPage = pdfView.currentPage {
-            pageIndex = max(0, document.index(for: currentPage))
+        if let visiblePageIndex = visiblePDFPageIndex(for: document) {
+            pageIndex = visiblePageIndex
         } else {
             pageIndex = 0
         }
         let format = String(localized: "filePreview.pdf.pageCount", defaultValue: "Page %d of %d")
         pageLabel.stringValue = String(format: format, pageIndex + 1, document.pageCount)
         thumbnailView.selectPage(at: pageIndex, scrollToVisible: scrollThumbnailToVisible)
+        logPDFResizeProbe(
+            "updatePageControls page=\(pageIndex + 1)/\(document.pageCount) " +
+            "scrollThumb=\(scrollThumbnailToVisible ? 1 : 0) \(pdfDebugState())"
+        )
+    }
+
+    private func visiblePDFPageIndex(for document: PDFDocument) -> Int? {
+        let page = displayMode == .continuousScroll
+            ? topVisiblePDFPage()
+            : pdfView.currentPage
+        guard let page else { return nil }
+        let pageIndex = document.index(for: page)
+        guard pageIndex >= 0 else { return nil }
+        return pageIndex
+    }
+
+    private func topVisiblePDFPage() -> PDFPage? {
+        guard let scrollView = pdfScrollView() else { return pdfView.currentPage }
+        let clipView = scrollView.contentView
+        let clipBounds = clipView.bounds
+        guard clipBounds.width > 1, clipBounds.height > 1 else { return pdfView.currentPage }
+        let topY = clipView.isFlipped ? clipBounds.minY : clipBounds.maxY
+        let topPoint = CGPoint(x: clipBounds.midX, y: topY)
+        let pointInPDFView = pdfView.convert(topPoint, from: clipView)
+        return pdfView.page(for: pointInPDFView, nearest: true) ?? pdfView.currentPage
     }
 
     private func updateSidebarVisibility() {
@@ -2035,11 +2315,17 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
               isSidebarVisible,
               !sidebarHost.isHidden,
               pdfView.document != nil else { return }
+        pdfResizeSequence += 1
+        activePDFResizeID = pdfResizeSequence
         preparePDFViewportSnapshot()
         pendingSidebarResizeSnapshot = FilePreviewPDFViewportSnapshot.capture(
             in: pdfView,
             scrollView: pdfScrollView(),
             anchor: .top
+        )
+        logPDFResizeProbe(
+            "will id=\(activePDFResizeID ?? -1) event=\(debugEventType()) " +
+            "snapshot=\(debugSnapshot(pendingSidebarResizeSnapshot)) \(pdfDebugState())"
         )
     }
 
@@ -2049,6 +2335,18 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         guard sidebarWidth >= minimumSidebarWidthForCurrentMode() else { return }
         logSidebarWidth(reason: "splitViewDidResize", applied: sidebarWidth)
         guard !isApplyingSidebarWidth else { return }
+        let resizeID: Int
+        if let activePDFResizeID {
+            resizeID = activePDFResizeID
+        } else {
+            pdfResizeSequence += 1
+            resizeID = pdfResizeSequence
+            self.activePDFResizeID = resizeID
+        }
+        logPDFResizeProbe(
+            "did.begin id=\(resizeID) event=\(debugEventType()) " +
+            "snapshot=\(debugSnapshot(pendingSidebarResizeSnapshot)) \(pdfDebugState())"
+        )
         if NSApp.currentEvent?.type == .leftMouseDragged {
             didUserResizeSidebar = true
         }
@@ -2064,6 +2362,8 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
                 refreshPDFSmartFitPreservingVisibleTop()
             }
         }
+        logPDFResizeProbe("did.end id=\(resizeID) \(pdfDebugState())")
+        activePDFResizeID = nil
     }
 
     func splitView(
@@ -2109,11 +2409,13 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
 
     private func refreshPDFSmartFitWithoutViewportRestore() {
         guard pdfView.document != nil, pdfView.autoScales else { return }
+        logPDFResizeProbe("smartFit.begin \(pdfDebugState())")
         contentHost.layoutSubtreeIfNeeded()
         pdfView.layoutSubtreeIfNeeded()
         pdfView.autoScales = false
         pdfView.autoScales = true
         pdfView.layoutDocumentView()
+        logPDFResizeProbe("smartFit.end \(pdfDebugState())")
     }
 
     private func refreshPDFSmartFitPreservingVisibleTop() {
@@ -2156,12 +2458,22 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
 
     private func swipePDF(with event: NSEvent) {
         if event.deltaX < 0 {
-            pdfView.goToNextPage(nil)
-            updatePageControls()
+            navigatePDFPage(by: 1)
         } else if event.deltaX > 0 {
-            pdfView.goToPreviousPage(nil)
-            updatePageControls()
+            navigatePDFPage(by: -1)
         }
+    }
+
+    private func navigatePDFPage(by delta: Int) {
+        guard delta != 0,
+              let document = pdfView.document,
+              document.pageCount > 0 else { return }
+        let currentPageIndex = visiblePDFPageIndex(for: document) ?? 0
+        let nextPageIndex = min(max(currentPageIndex + delta, 0), document.pageCount - 1)
+        guard nextPageIndex != currentPageIndex,
+              let page = document.page(at: nextPageIndex) else { return }
+        pdfView.go(to: page)
+        updatePageControls()
     }
 
     private func rotateCurrentPDFPage(by degrees: Int) {
@@ -2209,13 +2521,18 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
             scrollView: pdfScrollView(),
             anchor: anchor
         ) else {
+            logPDFResizeProbe("preserve.noSnapshot anchor=\(debugAnchor(anchor)) \(pdfDebugState())")
             viewportChange()
             return
         }
+        logPDFResizeProbe(
+            "preserve.begin anchor=\(debugAnchor(anchor)) snapshot=\(debugSnapshot(snapshot)) \(pdfDebugState())"
+        )
         withSuppressedPDFPageChangeNotifications {
             viewportChange()
             snapshot.restore(in: pdfView, scrollView: pdfScrollView())
         }
+        logPDFResizeProbe("preserve.end anchor=\(debugAnchor(anchor)) \(pdfDebugState())")
     }
 
     private func withSuppressedPDFPageChangeNotifications(_ body: () -> Void) {
@@ -2224,6 +2541,111 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         defer { suppressPDFPageChangeNotifications = previousValue }
         body()
     }
+
+    private func registerFocusEndpoint() {
+        panel?.attachPreviewFocus(root: pdfView, primaryResponder: pdfView, intent: .pdfCanvas)
+        panel?.attachPreviewFocus(
+            root: thumbnailView,
+            primaryResponder: thumbnailView.focusResponder(),
+            intent: .pdfThumbnails
+        )
+        panel?.attachPreviewFocus(root: outlineView, primaryResponder: outlineView, intent: .pdfOutline)
+    }
+
+    private func setActivePDFRegion(_ region: FilePreviewPanelFocusIntent?) {
+        guard activePDFRegion != region else { return }
+        activePDFRegion = region
+        thumbnailView.setSelectionActive(region == .pdfThumbnails)
+        guard let region else { return }
+        panel?.noteFilePreviewFocusIntent(region)
+        AppDelegate.shared?.syncKeyboardFocusAfterFirstResponderChange(in: window)
+    }
+
+    private func updatePDFThumbnailSelectionFocus() {
+        setActivePDFRegion(currentPDFFocusRegion())
+    }
+
+    private func currentPDFFocusRegion() -> FilePreviewPanelFocusIntent? {
+        guard window?.isKeyWindow == true,
+              !isHiddenOrHasHiddenAncestor,
+              let intent = panel?.currentFilePreviewFocusIntent(in: window) else { return nil }
+        switch intent {
+        case .pdfCanvas, .pdfThumbnails, .pdfOutline:
+            return intent
+        case .textEditor, .imageCanvas, .mediaPlayer, .quickLook:
+            return nil
+        }
+    }
+
+    private func logPDFResizeProbe(_ message: String) {
+        #if DEBUG
+        cmuxDebugLog("filePreview.pdf.resize \(message)")
+        #endif
+    }
+
+    #if DEBUG
+    private func pdfDebugState() -> String {
+        let document = pdfView.document
+        let pageDescription: String
+        if let document, let currentPage = pdfView.currentPage {
+            let pageIndex = document.index(for: currentPage)
+            pageDescription = pageIndex >= 0 ? "\(pageIndex + 1)/\(document.pageCount)" : "unknown/\(document.pageCount)"
+        } else if let document {
+            pageDescription = "nil/\(document.pageCount)"
+        } else {
+            pageDescription = "nil"
+        }
+        let topPageDescription: String
+        if let document, let topPage = topVisiblePDFPage() {
+            let pageIndex = document.index(for: topPage)
+            topPageDescription = pageIndex >= 0 ? "\(pageIndex + 1)/\(document.pageCount)" : "unknown/\(document.pageCount)"
+        } else {
+            topPageDescription = "nil"
+        }
+        let scrollView = pdfScrollView()
+        let clipBounds = scrollView?.contentView.bounds
+        let documentBounds = scrollView?.documentView?.bounds
+        return "mode=\(sidebarMode == .tableOfContents ? "toc" : "thumbs") " +
+            "visible=\(isSidebarVisible ? 1 : 0) " +
+            "sidebar=\(debugNumber(sidebarHost.frame.width)) " +
+            "content=\(debugNumber(contentHost.frame.width)) " +
+            "auto=\(pdfView.autoScales ? 1 : 0) " +
+            "scale=\(debugNumber(pdfView.scaleFactor)) " +
+            "page=\(pageDescription) " +
+            "topPage=\(topPageDescription) " +
+            "clip=\(debugRect(clipBounds)) " +
+            "doc=\(debugRect(documentBounds))"
+    }
+
+    private func debugSnapshot(_ snapshot: FilePreviewPDFViewportSnapshot?) -> String {
+        snapshot?.debugSummary(document: pdfView.document) ?? "nil"
+    }
+
+    private func debugAnchor(_ anchor: FilePreviewPDFViewportAnchor) -> String {
+        switch anchor {
+        case .center:
+            "center"
+        case .top:
+            "top"
+        }
+    }
+
+    private func debugEventType() -> String {
+        guard let event = NSApp.currentEvent else { return "nil" }
+        return "\(event.type.rawValue)"
+    }
+
+    private func debugRect(_ rect: CGRect?) -> String {
+        guard let rect else { return "nil" }
+        return "(\(debugNumber(rect.origin.x)),\(debugNumber(rect.origin.y)) " +
+            "\(debugNumber(rect.width))x\(debugNumber(rect.height)))"
+    }
+
+    private func debugNumber(_ value: CGFloat) -> String {
+        guard value.isFinite else { return "nan" }
+        return String(format: "%.1f", Double(value))
+    }
+    #endif
 
     private func pdfScrollView() -> NSScrollView? {
         firstScrollView(in: pdfView)
@@ -2274,6 +2696,7 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
+        setActivePDFRegion(.pdfOutline)
         let selectedRow = outlineView.selectedRow
         guard selectedRow >= 0,
               let outline = outlineView.item(atRow: selectedRow) as? PDFOutline,
@@ -2305,8 +2728,30 @@ private final class FilePreviewMagnifyingPDFView: PDFView {
     var onSmartMagnify: (() -> Void)?
     var onRotate: ((NSEvent) -> Void)?
     var onSwipe: ((NSEvent) -> Void)?
+    var onFocusChanged: ((Bool) -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            onFocusChanged?(true)
+        }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            onFocusChanged?(false)
+        }
+        return resigned
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
 
     override func magnify(with event: NSEvent) {
         if let onMagnify {
@@ -2347,19 +2792,22 @@ private final class FilePreviewMagnifyingPDFView: PDFView {
             super.swipe(with: event)
         }
     }
+
 }
 
 private struct FilePreviewImageView: NSViewRepresentable {
-    let url: URL
+    let panel: FilePreviewPanel
 
     func makeNSView(context: Context) -> FilePreviewImageContainerView {
         let view = FilePreviewImageContainerView()
-        view.setURL(url)
+        view.setPanel(panel)
+        view.setURL(panel.fileURL)
         return view
     }
 
     func updateNSView(_ nsView: FilePreviewImageContainerView, context: Context) {
-        nsView.setURL(url)
+        nsView.setPanel(panel)
+        nsView.setURL(panel.fileURL)
     }
 }
 
@@ -2430,6 +2878,7 @@ private final class FilePreviewImageContainerView: NSView {
     private let scrollView = FilePreviewImageScrollView()
     private let documentView = FilePreviewImageDocumentView()
     private let chromeHost = FilePreviewPDFChromeHostingView(rootView: AnyView(EmptyView()))
+    private weak var panel: FilePreviewPanel?
     private var currentURL: URL?
     private var imageSize = CGSize(width: 1, height: 1)
     private var scale: CGFloat = 1
@@ -2446,12 +2895,38 @@ private final class FilePreviewImageContainerView: NSView {
         nil
     }
 
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerFocusEndpoint()
+    }
+
     override func layout() {
         super.layout()
         if isFitMode {
             scale = fitScale()
         }
         applyScale()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            panel?.noteFilePreviewFocusIntent(.imageCanvas)
+        }
+        return accepted
+    }
+
+    func setPanel(_ panel: FilePreviewPanel) {
+        self.panel = panel
+        registerFocusEndpoint()
     }
 
     func setURL(_ url: URL) {
@@ -2465,6 +2940,10 @@ private final class FilePreviewImageContainerView: NSView {
         rotationAccumulator = 0
         scale = fitScale()
         applyScale()
+    }
+
+    private func registerFocusEndpoint() {
+        panel?.attachPreviewFocus(root: self, primaryResponder: self, intent: .imageCanvas)
     }
 
     private func setupView() {
@@ -3002,7 +3481,7 @@ private final class FilePreviewMagnifyingImageView: NSImageView {
 }
 
 private struct FilePreviewMediaView: NSViewRepresentable {
-    let url: URL
+    let panel: FilePreviewPanel
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -3013,12 +3492,14 @@ private struct FilePreviewMediaView: NSViewRepresentable {
         playerView.controlsStyle = .floating
         playerView.showsFullScreenToggleButton = true
         playerView.videoGravity = .resizeAspect
-        context.coordinator.update(playerView: playerView, url: url)
+        panel.attachPreviewFocus(root: playerView, primaryResponder: playerView, intent: .mediaPlayer)
+        context.coordinator.update(playerView: playerView, url: panel.fileURL)
         return playerView
     }
 
     func updateNSView(_ nsView: AVPlayerView, context: Context) {
-        context.coordinator.update(playerView: nsView, url: url)
+        panel.attachPreviewFocus(root: nsView, primaryResponder: nsView, intent: .mediaPlayer)
+        context.coordinator.update(playerView: nsView, url: panel.fileURL)
     }
 
     final class Coordinator {
@@ -3041,21 +3522,22 @@ private struct FilePreviewMediaView: NSViewRepresentable {
 }
 
 private struct QuickLookPreviewView: NSViewRepresentable {
-    let url: URL
-    let title: String
+    let panel: FilePreviewPanel
 
     func makeNSView(context: Context) -> NSView {
         guard let previewView = QLPreviewView(frame: .zero, style: .normal) else {
             return NSView()
         }
         previewView.autostarts = true
-        previewView.previewItem = context.coordinator.item(for: url, title: title)
+        panel.attachPreviewFocus(root: previewView, primaryResponder: previewView, intent: .quickLook)
+        previewView.previewItem = context.coordinator.item(for: panel.fileURL, title: panel.displayTitle)
         return previewView
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let previewView = nsView as? QLPreviewView else { return }
-        previewView.previewItem = context.coordinator.item(for: url, title: title)
+        panel.attachPreviewFocus(root: previewView, primaryResponder: previewView, intent: .quickLook)
+        previewView.previewItem = context.coordinator.item(for: panel.fileURL, title: panel.displayTitle)
     }
 
     func makeCoordinator() -> Coordinator {

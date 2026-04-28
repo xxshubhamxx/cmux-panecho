@@ -43,10 +43,21 @@ public enum BrowserPanelFocusIntent: Equatable {
     case findField
 }
 
+public enum FilePreviewPanelFocusIntent: Hashable {
+    case textEditor
+    case pdfCanvas
+    case pdfThumbnails
+    case pdfOutline
+    case imageCanvas
+    case mediaPlayer
+    case quickLook
+}
+
 public enum PanelFocusIntent: Equatable {
     case panel
     case terminal(TerminalPanelFocusIntent)
     case browser(BrowserPanelFocusIntent)
+    case filePreview(FilePreviewPanelFocusIntent)
 }
 
 public enum WorkspaceAttentionFlashReason: String, Equatable, Sendable {
