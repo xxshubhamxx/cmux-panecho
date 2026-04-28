@@ -1370,11 +1370,12 @@ final class FilePreviewFocusCoordinatorTests: XCTestCase {
 
 @MainActor
 final class FilePreviewPanelTextSavingTests: XCTestCase {
-    func testSaveTextContentWritesLiveTextViewContent() throws {
+    func testSaveTextContentWritesLiveTextViewContent() async throws {
         let url = try temporaryTextFile(contents: "original", encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let panel = FilePreviewPanel(workspaceId: UUID(), filePath: url.path)
+        await panel.loadTextContent().value
         let textView = NSTextView()
         textView.string = "edited from text view"
         panel.attachTextView(textView)
@@ -1386,11 +1387,49 @@ final class FilePreviewPanelTextSavingTests: XCTestCase {
         XCTAssertFalse(panel.isDirty)
     }
 
-    func testSaveTextContentPreservesLoadedEncoding() throws {
+    func testSavingTextViewUsesConfiguredSaveShortcut() async throws {
+        KeyboardShortcutSettings.resetAll()
+        defer { KeyboardShortcutSettings.resetAll() }
+
+        KeyboardShortcutSettings.setShortcut(
+            StoredShortcut(key: "u", command: true, shift: false, option: true, control: false),
+            for: .saveFilePreview
+        )
+
+        let url = try temporaryTextFile(contents: "original", encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let panel = FilePreviewPanel(workspaceId: UUID(), filePath: url.path)
+        await panel.loadTextContent().value
+
+        let textView = SavingTextView()
+        textView.string = "saved by configured shortcut"
+        textView.panel = panel
+        panel.attachTextView(textView)
+
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command, .option],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0,
+            context: nil,
+            characters: "u",
+            charactersIgnoringModifiers: "u",
+            isARepeat: false,
+            keyCode: UInt16(kVK_ANSI_U)
+        ))
+
+        XCTAssertTrue(textView.performKeyEquivalent(with: event))
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "saved by configured shortcut")
+    }
+
+    func testSaveTextContentPreservesLoadedEncoding() async throws {
         let url = try temporaryTextFile(contents: "original", encoding: .utf16)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let panel = FilePreviewPanel(workspaceId: UUID(), filePath: url.path)
+        await panel.loadTextContent().value
         panel.updateTextContent("edited")
         panel.saveTextContent()
 
@@ -1399,7 +1438,7 @@ final class FilePreviewPanelTextSavingTests: XCTestCase {
         XCTAssertFalse(panel.isDirty)
     }
 
-    func testSaveTextContentWritesThroughSymlink() throws {
+    func testSaveTextContentWritesThroughSymlink() async throws {
         let targetURL = try temporaryTextFile(contents: "original", encoding: .utf8)
         let linkURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -1414,6 +1453,7 @@ final class FilePreviewPanelTextSavingTests: XCTestCase {
         )
 
         let panel = FilePreviewPanel(workspaceId: UUID(), filePath: linkURL.path)
+        await panel.loadTextContent().value
         panel.updateTextContent("edited through link")
         panel.saveTextContent()
 
@@ -1422,7 +1462,7 @@ final class FilePreviewPanelTextSavingTests: XCTestCase {
         XCTAssertFalse(panel.isDirty)
     }
 
-    func testCleanSaveDoesNotWriteReadOnlyTextFile() throws {
+    func testCleanSaveDoesNotWriteReadOnlyTextFile() async throws {
         let url = try temporaryTextFile(contents: "original", encoding: .utf8)
         defer {
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
@@ -1431,6 +1471,7 @@ final class FilePreviewPanelTextSavingTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: url.path)
 
         let panel = FilePreviewPanel(workspaceId: UUID(), filePath: url.path)
+        await panel.loadTextContent().value
         panel.saveTextContent()
 
         XCTAssertFalse(panel.isDirty)
@@ -1438,15 +1479,16 @@ final class FilePreviewPanelTextSavingTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "original")
     }
 
-    func testLoadTextContentClearsDirtyStateWhenFileVanishes() throws {
+    func testLoadTextContentClearsDirtyStateWhenFileVanishes() async throws {
         let url = try temporaryTextFile(contents: "original", encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let panel = FilePreviewPanel(workspaceId: UUID(), filePath: url.path)
+        await panel.loadTextContent().value
         panel.updateTextContent("edited")
         try FileManager.default.removeItem(at: url)
 
-        panel.loadTextContent()
+        await panel.loadTextContent().value
 
         XCTAssertEqual(panel.textContent, "")
         XCTAssertFalse(panel.isDirty)

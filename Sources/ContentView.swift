@@ -89,7 +89,6 @@ enum DragOverlayRoutingPolicy {
         return hasBonsplitTabTransfer(pasteboardTypes)
             || hasFilePreviewTransfer(pasteboardTypes)
             || hasSidebarTabReorder(pasteboardTypes)
-            || hasFileURL(pasteboardTypes)
     }
 
     private static func isDragMouseEvent(_ eventType: NSEvent.EventType?) -> Bool {

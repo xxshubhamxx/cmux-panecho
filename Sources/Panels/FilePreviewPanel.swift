@@ -294,6 +294,48 @@ enum FilePreviewKindResolver {
     }
 }
 
+enum FilePreviewTextLoader {
+    enum Result: Sendable {
+        case loaded(content: String, encoding: String.Encoding)
+        case unavailable
+    }
+
+    static func load(url: URL) async -> Result {
+        await Task.detached(priority: .userInitiated) {
+            loadSynchronously(url: url)
+        }.value
+    }
+
+    static func loadSynchronously(url: URL) -> Result {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return .unavailable
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            guard let decoded = decodeText(data) else {
+                return .unavailable
+            }
+            return .loaded(content: decoded.content, encoding: decoded.encoding)
+        } catch {
+            return .unavailable
+        }
+    }
+
+    private static func decodeText(_ data: Data) -> (content: String, encoding: String.Encoding)? {
+        if let decoded = String(data: data, encoding: .utf8) {
+            return (decoded, .utf8)
+        }
+        if let decoded = String(data: data, encoding: .utf16) {
+            return (decoded, .utf16)
+        }
+        if let decoded = String(data: data, encoding: .isoLatin1) {
+            return (decoded, .isoLatin1)
+        }
+        return nil
+    }
+}
+
 @MainActor
 final class FilePreviewPanel: Panel, ObservableObject {
     let id: UUID
@@ -311,6 +353,7 @@ final class FilePreviewPanel: Panel, ObservableObject {
     let previewMode: FilePreviewMode
     private var originalTextContent = ""
     private var textEncoding: String.Encoding = .utf8
+    private var textLoadGeneration = 0
     private weak var textView: NSTextView?
     private let focusCoordinator: FilePreviewFocusCoordinator
 
@@ -331,7 +374,7 @@ final class FilePreviewPanel: Panel, ObservableObject {
         )
 
         if previewMode == .text {
-            loadTextContent()
+            loadTextContent(replacingDirtyContent: false)
         } else {
             isFileUnavailable = !FileManager.default.fileExists(atPath: filePath)
         }
@@ -438,40 +481,52 @@ final class FilePreviewPanel: Panel, ObservableObject {
         isDirty = nextContent != originalTextContent
     }
 
-    func loadTextContent() {
-        guard FileManager.default.fileExists(atPath: filePath) else {
+    @discardableResult
+    func loadTextContent(replacingDirtyContent: Bool = true) -> Task<Void, Never> {
+        textLoadGeneration += 1
+        let generation = textLoadGeneration
+        let fileURL = fileURL
+
+        return Task { [weak self, fileURL, generation, replacingDirtyContent] in
+            let result = await FilePreviewTextLoader.load(url: fileURL)
+            guard let self, self.textLoadGeneration == generation else { return }
+            self.applyTextLoadResult(result, replacingDirtyContent: replacingDirtyContent)
+        }
+    }
+
+    private func applyTextLoadResult(
+        _ result: FilePreviewTextLoader.Result,
+        replacingDirtyContent: Bool
+    ) {
+        switch result {
+        case .unavailable:
+            guard replacingDirtyContent || !isDirty else {
+                isFileUnavailable = true
+                return
+            }
             textContent = ""
             originalTextContent = ""
             isDirty = false
             isFileUnavailable = true
             return
-        }
-
-        do {
-            let data = try Data(contentsOf: fileURL)
-            let decoded = Self.decodeText(data)
-            guard let decoded else {
-                textContent = ""
-                originalTextContent = ""
-                isDirty = false
-                isFileUnavailable = true
+        case .loaded(let content, let encoding):
+            if !replacingDirtyContent && isDirty {
+                originalTextContent = content
+                textEncoding = encoding
+                isFileUnavailable = false
                 return
             }
-            textContent = decoded.content
-            originalTextContent = decoded.content
-            textEncoding = decoded.encoding
+            textContent = content
+            originalTextContent = content
+            textEncoding = encoding
             isDirty = false
             isFileUnavailable = false
-        } catch {
-            textContent = ""
-            originalTextContent = ""
-            isDirty = false
-            isFileUnavailable = true
         }
     }
 
     func saveTextContent() {
         guard previewMode == .text else { return }
+        textLoadGeneration += 1
         let currentContent = textView?.string ?? textContent
         guard currentContent != originalTextContent else {
             textContent = currentContent
@@ -487,19 +542,6 @@ final class FilePreviewPanel: Panel, ObservableObject {
         } catch {
             isFileUnavailable = !FileManager.default.fileExists(atPath: filePath)
         }
-    }
-
-    private static func decodeText(_ data: Data) -> (content: String, encoding: String.Encoding)? {
-        if let decoded = String(data: data, encoding: .utf8) {
-            return (decoded, .utf8)
-        }
-        if let decoded = String(data: data, encoding: .utf16) {
-            return (decoded, .utf16)
-        }
-        if let decoded = String(data: data, encoding: .isoLatin1) {
-            return (decoded, .isoLatin1)
-        }
-        return nil
     }
 
     private static func defaultFocusIntent(for mode: FilePreviewMode) -> FilePreviewPanelFocusIntent {
@@ -767,8 +809,10 @@ final class SavingTextView: NSTextView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-           event.charactersIgnoringModifiers?.lowercased() == "s" {
+        guard event.type == .keyDown else {
+            return super.performKeyEquivalent(with: event)
+        }
+        if KeyboardShortcutSettings.shortcut(for: .saveFilePreview).matches(event: event) {
             panel?.saveTextContent()
             return true
         }

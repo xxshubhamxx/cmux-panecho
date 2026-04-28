@@ -315,6 +315,21 @@ final class WorkspaceRenameShortcutDefaultsTests: XCTestCase {
         XCTAssertFalse(shortcut.control)
     }
 
+    func testSaveFilePreviewShortcutDefaultsAndMetadata() {
+        XCTAssertEqual(KeyboardShortcutSettings.Action.saveFilePreview.label, "Save File Preview")
+        XCTAssertEqual(
+            KeyboardShortcutSettings.Action.saveFilePreview.defaultsKey,
+            "shortcut.saveFilePreview"
+        )
+
+        let shortcut = KeyboardShortcutSettings.Action.saveFilePreview.defaultShortcut
+        XCTAssertEqual(shortcut.key, "s")
+        XCTAssertTrue(shortcut.command)
+        XCTAssertFalse(shortcut.shift)
+        XCTAssertFalse(shortcut.option)
+        XCTAssertFalse(shortcut.control)
+    }
+
     func testMenuItemKeyEquivalentHandlesArrowAndTabKeys() {
         XCTAssertNotNil(StoredShortcut(key: "←", command: true, shift: false, option: false, control: false).menuItemKeyEquivalent)
         XCTAssertNotNil(StoredShortcut(key: "→", command: true, shift: false, option: false, control: false).menuItemKeyEquivalent)
@@ -430,7 +445,7 @@ final class WorkspaceRenameShortcutDefaultsTests: XCTestCase {
         XCTAssertFalse(ShortcutStroke.isEscapeCancelEvent(event))
         XCTAssertEqual(
             ShortcutStroke.from(event: event, requireModifier: false),
-            ShortcutStroke(key: "[", command: true, shift: false, option: false, control: false)
+            ShortcutStroke(key: "[", command: true, shift: false, option: false, control: false, keyCode: 33)
         )
     }
 
