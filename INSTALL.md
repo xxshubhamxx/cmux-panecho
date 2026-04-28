@@ -9,11 +9,9 @@ The shortest path from this repo is:
 By default, that script tries the simplest install path first:
 
 1. install from `--source` or `PANECHO_APP_SOURCE`
-2. install from an existing local `Panecho.app` build
-3. install from `PANECHO_DOWNLOAD_URL`
-4. install from the current repo's rolling `panecho-nightly` prerelease asset
-5. install from the current repo's latest full `Panecho` release asset
-6. only build from source if `xcodebuild` is already usable
+2. install from `xxshubhamxx/cmux` latest `Panecho` release asset
+3. fall back to the repo's rolling `panecho-nightly` asset if needed
+4. only build from source if `--build-from-source` is explicit
 
 That means once the fork's `panecho-nightly` workflow has published at least one build, the default install path is a single command with no local Xcode or Go requirement:
 
@@ -21,13 +19,27 @@ That means once the fork's `panecho-nightly` workflow has published at least one
 ./scripts/install-panecho.sh
 ```
 
+### Verified no-Xcode path for a CLT-only Mac
+
+If `xcode-select -p` points at Command Line Tools instead of full Xcode, use a fork to let GitHub-hosted macOS build the app for you:
+
+1. Push this repo (including `.github/workflows/panecho-nightly.yml`) to your fork's `main` branch.
+2. Wait for the GitHub workflow to publish either a full `Panecho` release or the rolling `panecho-nightly` asset.
+3. Install without building locally:
+
+```bash
+./scripts/install-panecho.sh
+```
+
+That path avoids both local full Xcode and a local Go toolchain. The workflow is verified for Apple Silicon and publishes an arm64 `Panecho.app` package for this machine class.
+
 If you want the same experience without cloning the repo first, point the installer at your fork explicitly:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR-ORG/YOUR-PANECHO-FORK/main/scripts/install-panecho.sh | PANECHO_RELEASE_REPO=YOUR-ORG/YOUR-PANECHO-FORK bash
+curl -fsSL https://raw.githubusercontent.com/xxshubhamxx/cmux/main/scripts/install-panecho.sh | bash
 ```
 
-That one-liner expects the fork to publish `panecho-nightly`.
+That one-liner targets `xxshubhamxx/cmux` by default and will use the latest full release when present, falling back to `panecho-nightly` automatically.
 
 ### Build from source only when needed
 
@@ -65,7 +77,7 @@ Or set it once in your environment:
 PANECHO_DOWNLOAD_URL=https://example.com/panecho-macos.dmg ./scripts/install-panecho.sh
 ```
 
-If you want to target a different prerelease tag in GitHub, override it explicitly:
+If you want to target a different release tag in GitHub, override it explicitly:
 
 ```bash
 PANECHO_RELEASE_TAG=panecho-nightly ./scripts/install-panecho.sh

@@ -22,31 +22,46 @@ struct ConfigSettingsView: View {
     private var currentBannerText: String? {
         switch configSource {
         case .cmux:
-            return String(
-                localized: "settings.config.banner.cmux",
-                defaultValue: "This is the config file cmux reads. Edit it here, then Save to reload cmux."
+            return privacyModeBranded(
+                "This is the config file Panecho reads. Edit it here, then Save to reload Panecho.",
+                stable: String(
+                    localized: "settings.config.banner.cmux",
+                    defaultValue: "This is the config file cmux reads. Edit it here, then Save to reload cmux."
+                )
             )
         case .ghostty:
             if currentSnapshot.hasBackingFile {
-                return String(
-                    localized: "settings.config.banner.ghostty",
-                    defaultValue: "This file belongs to standalone Ghostty. cmux does not read it, so edits here do not affect cmux."
+                return privacyModeBranded(
+                    "This file belongs to standalone Ghostty. Panecho does not read it, so edits here do not affect Panecho.",
+                    stable: String(
+                        localized: "settings.config.banner.ghostty",
+                        defaultValue: "This file belongs to standalone Ghostty. cmux does not read it, so edits here do not affect cmux."
+                    )
                 )
             }
-            return String(
-                localized: "settings.config.banner.ghosttyMissing",
-                defaultValue: "No standalone Ghostty config file was found at the preferred path. cmux still does not read standalone Ghostty config."
+            return privacyModeBranded(
+                "No standalone Ghostty config file was found at the preferred path. Panecho still does not read standalone Ghostty config.",
+                stable: String(
+                    localized: "settings.config.banner.ghosttyMissing",
+                    defaultValue: "No standalone Ghostty config file was found at the preferred path. cmux still does not read standalone Ghostty config."
+                )
             )
         case .synced:
             if currentSnapshot.hasStandaloneGhosttyConfig {
-                return String(
-                    localized: "settings.config.banner.synced",
-                    defaultValue: "This is a generated preview of the effective config. Edit the cmux tab to change what cmux reads."
+                return privacyModeBranded(
+                    "This is a generated preview of the effective config. Edit the Panecho tab to change what Panecho reads.",
+                    stable: String(
+                        localized: "settings.config.banner.synced",
+                        defaultValue: "This is a generated preview of the effective config. Edit the cmux tab to change what cmux reads."
+                    )
                 )
             }
-            return String(
-                localized: "settings.config.banner.syncedNoGhostty",
-                defaultValue: "This is a generated preview of the effective config. No standalone Ghostty config file was found, so only cmux overrides are shown."
+            return privacyModeBranded(
+                "This is a generated preview of the effective config. No standalone Ghostty config file was found, so only Panecho overrides are shown.",
+                stable: String(
+                    localized: "settings.config.banner.syncedNoGhostty",
+                    defaultValue: "This is a generated preview of the effective config. No standalone Ghostty config file was found, so only cmux overrides are shown."
+                )
             )
         }
     }
@@ -217,14 +232,14 @@ struct ConfigSettingsView: View {
             GhosttyApp.shared.reloadConfiguration(source: "settings.configWindow.save")
             statusMessage = String(
                 localized: "settings.config.status.saved",
-                defaultValue: "Saved to cmux config and reloaded."
+                defaultValue: PrivacyMode.isEnabled ? "Saved to Panecho config and reloaded." : "Saved to cmux config and reloaded."
             )
             statusIsError = false
         } catch {
             NSSound.beep()
             statusMessage = String(
                 localized: "settings.config.status.saveFailed",
-                defaultValue: "Couldn't save the cmux config."
+                defaultValue: PrivacyMode.isEnabled ? "Couldn't save the Panecho config." : "Couldn't save the cmux config."
             )
             statusIsError = true
         }
@@ -368,7 +383,7 @@ private extension ConfigSource {
     var localizedTitle: String {
         switch self {
         case .cmux:
-            return String(localized: "settings.config.source.cmux", defaultValue: "cmux")
+            return privacyModeBranded("Panecho", stable: String(localized: "settings.config.source.cmux", defaultValue: "cmux"))
         case .ghostty:
             return String(localized: "settings.config.source.ghostty", defaultValue: "ghostty")
         case .synced:

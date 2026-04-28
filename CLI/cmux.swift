@@ -7,7 +7,7 @@ import LocalAuthentication
 #if canImport(Security)
 import Security
 #endif
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
 import Sentry
 #endif
 
@@ -26,7 +26,7 @@ private final class CLISocketSentryTelemetry {
     private let surfaceId: String?
     private let disabledByEnv: Bool
 
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
     private static let startupLock = NSLock()
     private static var started = false
     private static let dsn = "https://ecba1ec90ecaee02a102fba931b6d2b3@o4507547940749312.ingest.us.sentry.io/4510796264636416"
@@ -142,7 +142,7 @@ private final class CLISocketSentryTelemetry {
 
     func breadcrumb(_ message: String, data: [String: Any] = [:]) {
         guard shouldEmit else { return }
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
         Self.ensureStarted()
         var payload = baseContext()
         for (key, value) in data {
@@ -157,7 +157,7 @@ private final class CLISocketSentryTelemetry {
 
     func captureError(stage: String, error: Error) {
         guard shouldEmit else { return }
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
         Self.ensureStarted()
         var context = baseContext()
         context["stage"] = stage
@@ -179,7 +179,11 @@ private final class CLISocketSentryTelemetry {
     }
 
     private var shouldEmit: Bool {
-        !disabledByEnv
+    #if PRIVACY_MODE
+        return false
+    #else
+        return !disabledByEnv
+    #endif
     }
 
     private func baseContext() -> [String: Any] {
@@ -269,7 +273,7 @@ private final class CLISocketSentryTelemetry {
         return sockets
     }
 
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
     private static func ensureStarted() {
         startupLock.lock()
         defer { startupLock.unlock() }

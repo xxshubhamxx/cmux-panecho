@@ -113,7 +113,7 @@ enum KeyboardShortcutSettings {
             case .newWindow: return String(localized: "shortcut.newWindow.label", defaultValue: "New Window")
             case .closeWindow: return String(localized: "shortcut.closeWindow.label", defaultValue: "Close Window")
             case .toggleFullScreen: return String(localized: "command.toggleFullScreen.title", defaultValue: "Toggle Full Screen")
-            case .quit: return String(localized: "menu.quitCmux", defaultValue: "Quit cmux")
+            case .quit: return privacyModeBranded("Quit Panecho", stable: String(localized: "menu.quitCmux", defaultValue: "Quit cmux"))
             case .toggleSidebar: return String(localized: "shortcut.toggleSidebar.label", defaultValue: "Toggle Sidebar")
             case .newTab: return String(localized: "shortcut.newWorkspace.label", defaultValue: "New Workspace")
             case .openFolder: return String(localized: "shortcut.openFolder.label", defaultValue: "Open Folder")

@@ -27,6 +27,18 @@ Once the fork publishes `panecho-nightly`, the default install path is just:
 
 No local Xcode or Go toolchain is required for that published-build path.
 
+On a machine that only has Command Line Tools, the verified path is:
+
+1. push the repo (including `.github/workflows/panecho-nightly.yml`) to your fork's `main`
+2. let the **Panecho prerelease** workflow publish `panecho-nightly`
+3. install from that forked prerelease with:
+
+```bash
+PANECHO_RELEASE_REPO=YOUR-ORG/YOUR-PANECHO-FORK ./scripts/install-panecho.sh
+```
+
+That keeps the build on GitHub-hosted macOS while the local machine only handles download + install. The current hosted prerelease path is verified for Apple Silicon (`arm64`).
+
 For a remote one-liner without cloning first:
 
 ```bash

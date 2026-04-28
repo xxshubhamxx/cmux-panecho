@@ -16,6 +16,8 @@ DERIVED_DATA_PATH="${PANECHO_DERIVED_DATA_PATH:-$ROOT_DIR/build/panecho-derived-
 SCHEME="${PANECHO_SCHEME:-cmux}"
 CONFIGURATION="${PANECHO_CONFIGURATION:-Release}"
 DESTINATION="${PANECHO_DESTINATION:-platform=macOS}"
+SOURCE_APP_NAME="${PANECHO_SOURCE_APP_NAME:-cmux.app}"
+STAGED_APP_NAME="${PANECHO_STAGED_APP_NAME:-Panecho.app}"
 
 if ! command -v xcodebuild >/dev/null 2>&1; then
   echo "error: xcodebuild is not available. Install full Xcode and run xcode-select --switch /Applications/Xcode.app." >&2
@@ -47,4 +49,14 @@ if [[ "${PANECHO_ALLOW_CODESIGN:-0}" != "1" ]]; then
   XCODEBUILD_ARGS+=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO)
 fi
 
-exec xcodebuild "${XCODEBUILD_ARGS[@]}" "$@" build
+xcodebuild "${XCODEBUILD_ARGS[@]}" "$@" build
+
+BUILT_APP_PATH="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$SOURCE_APP_NAME"
+STAGED_APP_PATH="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$STAGED_APP_NAME"
+
+if [[ ! -d "$BUILT_APP_PATH" ]]; then
+  echo "error: expected built app at $BUILT_APP_PATH" >&2
+  exit 1
+fi
+
+"$ROOT_DIR/scripts/stage-panecho-app.sh" "$BUILT_APP_PATH" "$STAGED_APP_PATH"

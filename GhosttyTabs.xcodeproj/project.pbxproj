@@ -74,8 +74,6 @@
 		A5001226 /* SocketControlSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001225 /* SocketControlSettings.swift */; };
 		A5001230 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A5001231 /* Sparkle */; };
 		A5001240 /* WindowDecorationsController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001241 /* WindowDecorationsController.swift */; };
-		A5001250 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A5001251 /* Sentry */; };
-		A5001270 /* PostHog in Frameworks */ = {isa = PBXBuildFile; productRef = A5001271 /* PostHog */; };
 		A5001290 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = A5001291 /* MarkdownUI */; };
 		A50012F1 /* Backport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50012F0 /* Backport.swift */; };
 		A50012F3 /* KeyboardShortcutSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50012F2 /* KeyboardShortcutSettings.swift */; };
@@ -134,7 +132,6 @@
 		B900001BA1B2C3D4E5F60719 /* CloseWorkspacesConfirmDialogUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B900001CA1B2C3D4E5F60719 /* CloseWorkspacesConfirmDialogUITests.swift */; };
 		B9000023A1B2C3D4E5F60719 /* CloseWorkspaceCmdDUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9000022A1B2C3D4E5F60719 /* CloseWorkspaceCmdDUITests.swift */; };
 		F0F0A001A1B2C3D4E5F60718 /* WorkspaceSidebarScrollUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0F0A002A1B2C3D4E5F60718 /* WorkspaceSidebarScrollUITests.swift */; };
-		B9000024A1B2C3D4E5F60719 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A5001251 /* Sentry */; };
 		B9000025A1B2C3D4E5F60719 /* CloseWindowConfirmDialogUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9000026A1B2C3D4E5F60719 /* CloseWindowConfirmDialogUITests.swift */; };
 		B9000027A1B2C3D4E5F60719 /* RemoteRelayZshBootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001641 /* RemoteRelayZshBootstrap.swift */; };
 		C0B4D9B0A1B2C3D4E5F60718 /* UpdatePillUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B4D9B1A1B2C3D4E5F60718 /* UpdatePillUITests.swift */; };
@@ -428,8 +425,6 @@
 			files = (
 				A5001006 /* GhosttyKit.xcframework in Frameworks */,
 				A5001230 /* Sparkle in Frameworks */,
-				A5001250 /* Sentry in Frameworks */,
-				A5001270 /* PostHog in Frameworks */,
 				A5001290 /* MarkdownUI in Frameworks */,
 				5EDB6027B346C46521A93C74 /* CMUXAuthCore in Frameworks */,
 				AA11BB22CC33DD44EE550001 /* CMUXWorkstream in Frameworks */,
@@ -448,7 +443,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B9000024A1B2C3D4E5F60719 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -742,8 +736,6 @@
 			name = GhosttyTabs;
 			packageProductDependencies = (
 				A5001231 /* Sparkle */,
-				A5001251 /* Sentry */,
-				A5001271 /* PostHog */,
 				A5001261 /* Bonsplit */,
 				A5001291 /* MarkdownUI */,
 				29813FE5A6CBC1019289A251 /* CMUXAuthCore */,
@@ -768,7 +760,6 @@
 			);
 			name = "cmux-cli";
 			packageProductDependencies = (
-				A5001251 /* Sentry */,
 			);
 			productName = cmux;
 			productReference = B9000004A1B2C3D4E5F60719 /* cmux */;

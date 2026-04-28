@@ -4,10 +4,12 @@ import Bonsplit
 import CMUXWorkstream
 import CoreServices
 import UserNotifications
+#if !PRIVACY_MODE
+import Sentry
+#endif
 import WebKit
 import Combine
 import ObjectiveC.runtime
-import Darwin
 
 func cmuxJavaScriptStringLiteral(_ value: String?) -> String? {
     guard let value else { return nil }
@@ -921,9 +923,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        PrivacyEgressGuard.installIfNeeded()
         let env = ProcessInfo.processInfo.environment
         let isRunningUnderXCTest = isRunningUnderXCTest(env)
+        let telemetryEnabled = TelemetrySettings.enabledForCurrentLaunch
         AppIconLaunchState.markDidFinishLaunching()
         syncActivationPolicy()
 
@@ -986,6 +988,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self?.writeUITestDiagnosticsIfNeeded(stage: "after1s")
         }
 #endif
+
+        if telemetryEnabled {
+    #if !PRIVACY_MODE
+            // Pre-warm locale before Sentry to avoid a startup data race.
+            // Locale initialization (os.locale.ensureLocale / NSLocale._preferredLanguages)
+            // on the main thread can race with Sentry's background init thread
+            // calling posix.getenv, causing a SIGSEGV ~134ms after launch.
+            // Forcing locale access here before SentrySDK.start eliminates the race.
+            // Related to: #836
+            _ = Locale.current
+            _ = NSLocale.preferredLanguages
+
+            SentrySDK.start { options in
+                options.dsn = "https://ecba1ec90ecaee02a102fba931b6d2b3@o4507547940749312.ingest.us.sentry.io/4510796264636416"
+                #if DEBUG
+                options.environment = "development"
+                options.debug = true
+                #else
+                options.environment = "production"
+                options.debug = false
+                #endif
+                options.sendDefaultPii = false
+
+                // Performance tracing (10% of transactions)
+                options.tracesSampleRate = 0.1
+                // Keep app-hang tracking enabled, but avoid reporting short main-thread stalls
+                // as hangs in normal user interaction flows.
+                options.appHangTimeoutInterval = 8.0
+                // Attach stack traces to all events
+                options.attachStacktrace = true
+                // Avoid recursively capturing failed requests from Sentry's own ingestion endpoint.
+                options.enableCaptureFailedRequests = false
+            }
+#endif
+        }
+
+        if telemetryEnabled && !isRunningUnderXCTest {
+            PostHogAnalytics.shared.startIfNeeded()
+        }
 
         let forceDuplicateLaunchObserver = env["CMUX_UI_TEST_ENABLE_DUPLICATE_LAUNCH_OBSERVER"] == "1"
 
@@ -1313,6 +1354,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         sentryBreadcrumb("app.didBecomeActive", category: "lifecycle", data: [
             "tabCount": tabManager?.tabs.count ?? 0
         ])
+        if TelemetrySettings.enabledForCurrentLaunch && !isRunningUnderXCTestCached {
+            PostHogAnalytics.shared.trackActive(reason: "didBecomeActive")
+        }
 
         guard let notificationStore else { return }
         notificationStore.handleApplicationDidBecomeActive()
@@ -1354,7 +1398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = String(localized: "dialog.quitCmux.title", defaultValue: "Quit cmux?")
+            alert.messageText = privacyModeBranded("Quit Panecho?", stable: String(localized: "dialog.quitCmux.title", defaultValue: "Quit cmux?"))
             alert.informativeText = String(localized: "dialog.quitCmux.message", defaultValue: "This will close all windows and workspaces.")
             alert.addButton(withTitle: String(localized: "dialog.quitCmux.quit", defaultValue: "Quit"))
             alert.addButton(withTitle: String(localized: "common.cancel", defaultValue: "Cancel"))
@@ -1385,6 +1429,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         TerminalController.shared.stop()
         VSCodeServeWebController.shared.stop()
         BrowserProfileStore.shared.flushPendingSaves()
+        if TelemetrySettings.enabledForCurrentLaunch {
+            PostHogAnalytics.shared.flush()
+        }
         notificationStore?.clearAll()
         enableSuddenTerminationIfNeeded()
     }
@@ -5431,7 +5478,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func openNewMainWindow(_ sender: Any?) {
-        _ = createMainWindow()
+        _ = createMainWindow(sourceWindow: preferredSourceWindowForNewMainWindow(sender: sender))
+    }
+
+    func openNewMainWindow(preferredWindow: NSWindow?) {
+        _ = createMainWindow(sourceWindow: preferredWindow)
+    }
+
+    private func preferredSourceWindowForNewMainWindow(sender: Any?) -> NSWindow? {
+        if let window = sender as? NSWindow, isMainTerminalWindow(window) {
+            return window
+        }
+        if let event = NSApp.currentEvent,
+           let window = mainWindowForShortcutEvent(event) {
+            return window
+        }
+        if let keyWindow = NSApp.keyWindow, isMainTerminalWindow(keyWindow) {
+            return keyWindow
+        }
+        if let mainWindow = NSApp.mainWindow, isMainTerminalWindow(mainWindow) {
+            return mainWindow
+        }
+        if let context = preferredRegisteredMainWindowContext(),
+           let window = resolvedWindow(for: context) {
+            return window
+        }
+        return nil
     }
 
     func scheduleInitialMainWindowBootstrap(debugSource: String) {
@@ -6135,11 +6207,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return true
     }
 
+    private func resolvedMainWindowSource(_ window: NSWindow?) -> NSWindow? {
+        guard let window else { return nil }
+        if isMainTerminalWindow(window) {
+            return window
+        }
+        if let context = contextForMainWindow(window) ?? contextForMainTerminalWindow(window) {
+            return resolvedWindow(for: context)
+        }
+        return nil
+    }
+
+    private func positionNewMainWindow(_ window: NSWindow, relativeTo sourceWindow: NSWindow) {
+        let sourceFrame = sourceWindow.frame
+        let sourceScreen = sourceWindow.screen
+            ?? NSScreen.screens.first(where: { $0.frame.intersects(sourceFrame) })
+        guard let visibleFrame = sourceScreen?.visibleFrame else {
+            window.center()
+            return
+        }
+
+        let cascadeOffset: CGFloat = 24
+        let minimumWindowSize = NSSize(width: 460, height: 360)
+        var frame = window.frame
+        frame.origin = NSPoint(
+            x: sourceFrame.minX + cascadeOffset,
+            y: sourceFrame.maxY - cascadeOffset - frame.height
+        )
+        window.setFrame(
+            Self.clampFrame(
+                frame,
+                within: visibleFrame,
+                minWidth: minimumWindowSize.width,
+                minHeight: minimumWindowSize.height
+            ),
+            display: false
+        )
+    }
+
     @discardableResult
     func createMainWindow(
         initialWorkingDirectory: String? = nil,
         sessionWindowSnapshot: SessionWindowSnapshot? = nil,
-        shouldActivate: Bool = true
+        shouldActivate: Bool = true,
+        sourceWindow preferredSourceWindow: NSWindow? = nil
     ) -> UUID {
         let windowId = UUID()
         let tabManager = TabManager(initialWorkingDirectory: initialWorkingDirectory)
@@ -6193,7 +6304,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let sourceContext = preferredMainWindowContextForWorkspaceCreation(
             debugSource: "createMainWindow.initialGeometry"
         )
-        let sourceWindow = sourceContext.flatMap { resolvedWindow(for: $0) }
+        let sourceWindow = resolvedMainWindowSource(preferredSourceWindow)
+            ?? sourceContext.flatMap { resolvedWindow(for: $0) }
         let existingFrame = sourceWindow?.frame
         let sourceWindowIsNativeFullScreen: Bool = {
 #if DEBUG
@@ -6237,6 +6349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let restoredFrame = resolvedWindowFrame(from: sessionWindowSnapshot)
         if let restoredFrame {
             window.setFrame(restoredFrame, display: false)
+        } else if let sourceWindow {
+            positionNewMainWindow(window, relativeTo: sourceWindow)
         } else {
             window.center()
             // Cascade using the same algorithm as upstream Ghostty: seed from
@@ -6323,7 +6437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func sendWelcomeCommandWhenReady(to workspace: Workspace, markShownOnSend: Bool = false) {
-        sendTextWhenReady("cmux welcome\n", to: workspace) {
+		sendTextWhenReady(privacyModeBranded("panecho welcome\n", stable: "cmux welcome\n"), to: workspace) {
             if markShownOnSend {
                 UserDefaults.standard.set(true, forKey: WelcomeSettings.shownKey)
             }
@@ -6353,13 +6467,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 informativeText += "\n\n" + String(localized: "cli.install.adminRequired", defaultValue: "Administrator privileges were required to write to /usr/local/bin.")
             }
             presentCLIPathAlert(
-                title: String(localized: "cli.installed", defaultValue: "cmux CLI Installed"),
+                title: privacyModeBranded("Panecho CLI Installed", stable: String(localized: "cli.installed", defaultValue: "cmux CLI Installed")),
                 informativeText: informativeText,
                 style: .informational
             )
         } catch {
             presentCLIPathAlert(
-                title: String(localized: "cli.installFailed", defaultValue: "Couldn't Install cmux CLI"),
+                title: privacyModeBranded("Couldn't Install Panecho CLI", stable: String(localized: "cli.installFailed", defaultValue: "Couldn't Install cmux CLI")),
                 informativeText: error.localizedDescription,
                 style: .warning
             )
@@ -6372,19 +6486,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let outcome = try installer.uninstall()
             let prefix = outcome.removedExistingEntry
                 ? String(localized: "cli.uninstall.removed", defaultValue: "Removed \(outcome.destinationURL.path).")
-                : String(localized: "cli.uninstall.notFound", defaultValue: "No cmux CLI symlink was found at \(outcome.destinationURL.path).")
+                : privacyModeBranded("No Panecho CLI symlink was found at \(outcome.destinationURL.path).", stable: String(localized: "cli.uninstall.notFound", defaultValue: "No cmux CLI symlink was found at \(outcome.destinationURL.path)."))
             var informativeText = prefix
             if outcome.usedAdministratorPrivileges {
                 informativeText += "\n\n" + String(localized: "cli.uninstall.adminRequired", defaultValue: "Administrator privileges were required to modify /usr/local/bin.")
             }
             presentCLIPathAlert(
-                title: String(localized: "cli.uninstalled", defaultValue: "cmux CLI Uninstalled"),
+                title: privacyModeBranded("Panecho CLI Uninstalled", stable: String(localized: "cli.uninstalled", defaultValue: "cmux CLI Uninstalled")),
                 informativeText: informativeText,
                 style: .informational
             )
         } catch {
             presentCLIPathAlert(
-                title: String(localized: "cli.uninstallFailed", defaultValue: "Couldn't Uninstall cmux CLI"),
+                title: privacyModeBranded("Couldn't Uninstall Panecho CLI", stable: String(localized: "cli.uninstallFailed", defaultValue: "Couldn't Uninstall cmux CLI")),
                 informativeText: error.localizedDescription,
                 style: .warning
             )
@@ -7587,7 +7701,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func triggerSentryTestCrash(_ sender: Any?) {
-        _ = sender
+        guard !PrivacyMode.isEnabled else { return }
+#if !PRIVACY_MODE
+        SentrySDK.crash()
+#endif
     }
 #endif
 
@@ -9706,7 +9823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = String(localized: "dialog.quitCmux.title", defaultValue: "Quit cmux?")
+        alert.messageText = privacyModeBranded("Quit Panecho?", stable: String(localized: "dialog.quitCmux.title", defaultValue: "Quit cmux?"))
         alert.informativeText = String(localized: "dialog.quitCmux.message", defaultValue: "This will close all windows and workspaces.")
         alert.addButton(withTitle: String(localized: "dialog.quitCmux.quit", defaultValue: "Quit"))
         alert.addButton(withTitle: String(localized: "common.cancel", defaultValue: "Cancel"))
@@ -10257,7 +10374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // after a browser panel has been shown, SwiftUI's menu dispatch can silently
         // consume the key equivalent without firing the action closure.
         if matchConfiguredShortcut(event: event, action: .newWindow) {
-            openNewMainWindow(nil)
+            openNewMainWindow(preferredWindow: mainWindowForShortcutEvent(event))
             return true
         }
 

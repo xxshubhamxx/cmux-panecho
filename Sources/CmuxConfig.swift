@@ -1467,7 +1467,10 @@ struct CmuxResolvedConfigAction: Identifiable, Sendable, Hashable {
         return CmuxResolvedConfigAction(
             id: builtIn.configID,
             title: title,
-            subtitle: String(localized: "command.cmuxConfig.builtInSubtitle", defaultValue: "cmux"),
+            subtitle: privacyModeBranded(
+                "Panecho",
+                stable: String(localized: "command.cmuxConfig.builtInSubtitle", defaultValue: "cmux")
+            ),
             keywords: keywords,
             palette: true,
             shortcut: nil,
@@ -2214,7 +2217,10 @@ final class CmuxConfigStore: ObservableObject {
                     defaultValue: "Custom: \(sanitizeConfigText(command.name))"
                 ),
                 subtitle: command.description.map { sanitizeConfigText($0) }
-                    ?? String(localized: "command.cmuxConfig.subtitle", defaultValue: "cmux.json"),
+                    ?? privacyModeBranded(
+                        "Panecho config (cmux.json)",
+                        stable: String(localized: "command.cmuxConfig.subtitle", defaultValue: "cmux.json")
+                    ),
                 keywords: command.keywords ?? [],
                 palette: true,
                 shortcut: nil,
@@ -2521,7 +2527,13 @@ final class CmuxConfigStore: ObservableObject {
 
         guard let data = fileManager.contents(atPath: path),
               !data.isEmpty else {
-            let issue = schemaIssue(path: path, message: "cmux.json is empty")
+            let issue = schemaIssue(
+                path: path,
+                message: privacyModeBranded(
+                    "Panecho config (cmux.json) is empty",
+                    stable: "cmux.json is empty"
+                )
+            )
             parsedConfigCache[path] = ParsedConfigCacheEntry(
                 fileSize: fileSize,
                 modificationDate: modificationDate,

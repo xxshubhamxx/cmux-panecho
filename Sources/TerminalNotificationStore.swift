@@ -833,7 +833,7 @@ final class TerminalNotificationStore: ObservableObject {
             guard let self, authorized else { return }
 
             let content = UNMutableNotificationContent()
-            content.title = "cmux test notification"
+            content.title = privacyModeBranded("Panecho test notification", stable: "cmux test notification")
             content.body = "Desktop notifications are enabled."
             content.sound = NotificationSoundSettings.sound()
             content.categoryIdentifier = Self.categoryIdentifier
@@ -1278,8 +1278,14 @@ final class TerminalNotificationStore: ObservableObject {
         }
 
         let alert = notificationSettingsAlertFactory()
-        alert.messageText = String(localized: "dialog.enableNotifications.title", defaultValue: "Enable Notifications for cmux")
-        alert.informativeText = String(localized: "dialog.enableNotifications.message", defaultValue: "Notifications are disabled for cmux. Enable them in System Settings to see alerts.")
+        alert.messageText = privacyModeBranded(
+            "Enable Notifications for Panecho",
+            stable: String(localized: "dialog.enableNotifications.title", defaultValue: "Enable Notifications for cmux")
+        )
+        alert.informativeText = privacyModeBranded(
+            "Notifications are disabled for Panecho. Enable them in System Settings to see alerts.",
+            stable: String(localized: "dialog.enableNotifications.message", defaultValue: "Notifications are disabled for cmux. Enable them in System Settings to see alerts.")
+        )
         alert.addButton(withTitle: String(localized: "dialog.enableNotifications.openSettings", defaultValue: "Open Settings"))
         alert.addButton(withTitle: String(localized: "dialog.enableNotifications.notNow", defaultValue: "Not Now"))
         alert.beginSheetModal(for: window) { [weak self] response in

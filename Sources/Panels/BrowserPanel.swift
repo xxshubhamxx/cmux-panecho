@@ -3976,12 +3976,15 @@ final class BrowserPanel: Panel, ObservableObject {
         let alert = insecureHTTPAlertFactory()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "browser.error.insecure.title", defaultValue: "Connection isn\u{2019}t secure")
-        alert.informativeText = String(localized: "browser.error.insecure.message", defaultValue: "\(host) uses plain HTTP, so traffic can be read or modified on the network.\n\nOpen this URL in your default browser, or proceed in cmux.")
+        alert.informativeText = privacyModeBranded(
+            "\(host) uses plain HTTP, so traffic can be read or modified on the network.\n\nOpen this URL in your default browser, or proceed in Panecho.",
+            stable: String(localized: "browser.error.insecure.message", defaultValue: "\(host) uses plain HTTP, so traffic can be read or modified on the network.\n\nOpen this URL in your default browser, or proceed in cmux.")
+        )
         alert.addButton(withTitle: String(localized: "browser.openInDefaultBrowser", defaultValue: "Open in Default Browser"))
-        alert.addButton(withTitle: String(localized: "browser.proceedInCmux", defaultValue: "Proceed in cmux"))
+        alert.addButton(withTitle: privacyModeBranded("Proceed in Panecho", stable: String(localized: "browser.proceedInCmux", defaultValue: "Proceed in cmux")))
         alert.addButton(withTitle: String(localized: "common.cancel", defaultValue: "Cancel"))
         alert.showsSuppressionButton = true
-        alert.suppressionButton?.title = String(localized: "browser.alwaysAllowHost", defaultValue: "Always allow this host in cmux")
+        alert.suppressionButton?.title = privacyModeBranded("Always allow this host in Panecho", stable: String(localized: "browser.alwaysAllowHost", defaultValue: "Always allow this host in cmux"))
 
         let handleResponse: (NSApplication.ModalResponse) -> Void = { [weak self, weak alert] response in
             self?.handleInsecureHTTPAlertResponse(
@@ -7805,15 +7808,18 @@ enum BrowserImportPlanRealizationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingDestinationProfile:
-            return String(
-                localized: "browser.import.error.destinationMissing",
-                defaultValue: "The selected cmux browser profile no longer exists. Pick a destination profile again."
+            return privacyModeBranded(
+                "The selected Panecho browser profile no longer exists. Pick a destination profile again.",
+                stable: String(
+                    localized: "browser.import.error.destinationMissing",
+                    defaultValue: "The selected cmux browser profile no longer exists. Pick a destination profile again."
+                )
             )
         case .profileCreationFailed(let name):
             return String(
                 format: String(
                     localized: "browser.import.error.destinationCreateFailed",
-                    defaultValue: "cmux could not create the destination profile \"%@\"."
+                    defaultValue: PrivacyMode.isEnabled ? "Panecho could not create the destination profile \"%@\"." : "cmux could not create the destination profile \"%@\"."
                 ),
                 name
             )
@@ -7933,7 +7939,7 @@ enum BrowserImportOutcomeFormatter {
                 String(
                     format: String(
                         localized: "browser.import.complete.createdProfiles",
-                        defaultValue: "Created cmux profiles: %@"
+                        defaultValue: PrivacyMode.isEnabled ? "Created Panecho profiles: %@" : "Created cmux profiles: %@"
                     ),
                     outcome.createdDestinationProfileNames.joined(separator: ", ")
                 )
@@ -9351,7 +9357,7 @@ final class BrowserDataImportCoordinator {
             )
             alert.informativeText = String(
                 localized: "browser.import.noBrowsers.message",
-                defaultValue: "cmux could not find browser profiles to import from on this Mac."
+                defaultValue: PrivacyMode.isEnabled ? "Panecho could not find browser profiles to import from on this Mac." : "cmux could not find browser profiles to import from on this Mac."
             )
             alert.addButton(withTitle: String(localized: "common.ok", defaultValue: "OK"))
             alert.runModal()
@@ -9941,7 +9947,7 @@ final class BrowserDataImportCoordinator {
             sourceProfilesHelpLabel.preferredMaxLayoutWidth = 500
             sourceProfilesHelpLabel.stringValue = String(
                 localized: "browser.import.sourceProfiles.help",
-                defaultValue: "Choose one or more source profiles. Step 3 lets you keep them separate or merge them into one cmux profile."
+                defaultValue: PrivacyMode.isEnabled ? "Choose one or more source profiles. Step 3 lets you keep them separate or merge them into one Panecho profile." : "Choose one or more source profiles. Step 3 lets you keep them separate or merge them into one cmux profile."
             )
 
             sourceProfilesContainer.orientation = .vertical
@@ -9986,7 +9992,7 @@ final class BrowserDataImportCoordinator {
             )
             mergeProfilesRadio.title = String(
                 localized: "browser.import.destinationMode.merge",
-                defaultValue: "Merge all into one cmux profile"
+                defaultValue: PrivacyMode.isEnabled ? "Merge all into one Panecho profile" : "Merge all into one cmux profile"
             )
             separateProfilesRadio.target = self
             separateProfilesRadio.action = #selector(handleDestinationModeChanged(_:))
@@ -10028,7 +10034,7 @@ final class BrowserDataImportCoordinator {
             let destinationTitleLabel = NSTextField(
                 labelWithString: String(
                     localized: "browser.import.destination.cmux",
-                    defaultValue: "cmux destination"
+                    defaultValue: PrivacyMode.isEnabled ? "Panecho destination" : "cmux destination"
                 )
             )
             destinationTitleLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
@@ -10275,13 +10281,13 @@ final class BrowserDataImportCoordinator {
             if presentation.showsSeparateRows {
                 destinationHelpLabel.stringValue = String(
                     localized: "browser.import.destinationProfile.separateHelp",
-                    defaultValue: "Missing cmux profiles are created when import starts."
+                    defaultValue: PrivacyMode.isEnabled ? "Missing Panecho profiles are created when import starts." : "Missing cmux profiles are created when import starts."
                 )
                 destinationHelpLabel.isHidden = false
             } else if plan.entries.count > 1 {
                 destinationHelpLabel.stringValue = String(
                     localized: "browser.import.destinationProfile.mergeHelp",
-                    defaultValue: "All selected source profiles will be merged into the chosen cmux browser profile."
+                    defaultValue: PrivacyMode.isEnabled ? "All selected source profiles will be merged into the chosen Panecho browser profile." : "All selected source profiles will be merged into the chosen cmux browser profile."
                 )
                 destinationHelpLabel.isHidden = false
             } else {

@@ -59,14 +59,20 @@ enum GhosttyStartupAppearancePreviewProfile: String, CaseIterable, Identifiable 
     var detail: String {
         switch self {
         case .realUserConfig:
-            return String(
-                localized: "debug.startupAppearance.profile.realUserConfig.detail",
-                defaultValue: "Loads your actual Ghostty and cmux config files."
+            return privacyModeBranded(
+                "Loads your actual Ghostty and Panecho config files.",
+                stable: String(
+                    localized: "debug.startupAppearance.profile.realUserConfig.detail",
+                    defaultValue: "Loads your actual Ghostty and cmux config files."
+                )
             )
         case .freshInstall:
-            return String(
-                localized: "debug.startupAppearance.profile.freshInstall.detail",
-                defaultValue: "No user theme or terminal colors, so cmux applies its managed default colors."
+            return privacyModeBranded(
+                "No user theme or terminal colors, so Panecho applies its managed default colors.",
+                stable: String(
+                    localized: "debug.startupAppearance.profile.freshInstall.detail",
+                    defaultValue: "No user theme or terminal colors, so cmux applies its managed default colors."
+                )
             )
         case .userThemePair:
             return String(
@@ -1497,7 +1503,7 @@ class GhosttyApp {
     private let _tickLock = NSLock()
     private(set) var defaultBackgroundColor: NSColor = .windowBackgroundColor
     private(set) var defaultBackgroundOpacity: Double = 1.0
-    private(set) var usesHostLayerBackground = true
+    private(set) var usesHostLayerBackground = false
     private(set) var userGhosttyShellIntegrationMode: String = "detect"
     private static func resolveBackgroundLogURL(
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -1722,6 +1728,19 @@ class GhosttyApp {
                 lastReportedUptime: lastScrollLagReportUptime,
                 cooldown: scrollLagReportCooldownSeconds
             ) {
+                if !PrivacyMode.isEnabled && TelemetrySettings.enabledForCurrentLaunch {
+                    sentryCaptureWarning(
+                        "Scroll lag detected",
+                        category: "scroll",
+                        data: [
+                            "samples": samples,
+                            "avg_ms": String(format: "%.2f", avgLag),
+                            "max_ms": String(format: "%.2f", maxLag),
+                            "threshold_ms": threshold
+                        ],
+                        contextKey: "scroll_lag"
+                    )
+                }
                 lastScrollLagReportUptime = nowUptime
             }
             // Reset stats
@@ -1909,8 +1928,8 @@ class GhosttyApp {
             loadInlineGhosttyConfig(
                 "macos-background-from-layer = true",
                 into: fallbackConfig,
-                prefix: "cmux-layer-bg",
-                logLabel: "layer background (fallback)"
+                prefix: "cmux-renderer-bg",
+                logLabel: "renderer background (fallback)"
             )
             loadInlineGhosttyConfig(
                 "shell-integration = none",
@@ -2030,17 +2049,6 @@ class GhosttyApp {
         )
     }
 
-    private func hasConfiguredBackgroundImage(_ config: ghostty_config_t) -> Bool {
-        var backgroundImage: UnsafePointer<Int8>?
-        let key = "background-image"
-        guard ghostty_config_get(config, &backgroundImage, key, UInt(key.lengthOfBytes(using: .utf8))),
-              let backgroundImage else {
-            return false
-        }
-
-        return !String(cString: backgroundImage).isEmpty
-    }
-
     private func loadDefaultConfigFilesWithLegacyFallback(_ config: ghostty_config_t) -> Bool {
         #if DEBUG
         let startupPreviewProfile = GhosttyStartupAppearancePreviewState.profile
@@ -2065,36 +2073,19 @@ class GhosttyApp {
         }
         #endif
         loadCJKFontFallbackIfNeeded(config)
-        let useHostLayerBackground = !hasConfiguredBackgroundImage(config)
         let renderingModeChanged = setUsesHostLayerBackground(
-            useHostLayerBackground,
+            true,
             source: "loadDefaultConfigFilesWithLegacyFallback"
         )
-        if !useHostLayerBackground {
-            // Background images need Ghostty's fullscreen background pass. Force
-            // the layer-backed solid-color shortcut back off even if the user
-            // config enabled it manually.
-            loadInlineGhosttyConfig(
-                "macos-background-from-layer = false",
-                into: config,
-                prefix: "cmux-layer-bg-image-override",
-                logLabel: "layer background image override"
-            )
-        } else {
-            // cmux provides the terminal background via backgroundView (CALayer)
-            // instead of the GPU full-screen bg pass, so the layer can provide
-            // instant coverage during sidebar toggle and other layout transitions.
-            //
-            // Keep Ghostty's native background rendering when a background image
-            // is configured: the separate CALayer background only matches the
-            // solid-color path, not Ghostty's combined image compositing.
-            loadInlineGhosttyConfig(
-                "macos-background-from-layer = true",
-                into: config,
-                prefix: "cmux-layer-bg",
-                logLabel: "layer background"
-            )
-        }
+        // Let cmux own the window-level backdrop once, while Ghostty keeps
+        // rendering text, cell backgrounds, and background images. This avoids
+        // separate translucent fills for terminal and chrome surfaces.
+        loadInlineGhosttyConfig(
+            "macos-background-from-layer = true",
+            into: config,
+            prefix: "cmux-renderer-bg",
+            logLabel: "renderer background"
+        )
         // Save the user's preference before we force it to none.
         userGhosttyShellIntegrationMode = "detect"
         do {
@@ -5850,15 +5841,15 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         let renderingMode = WindowAppearanceSnapshot.terminalRenderingMode(
             usesHostLayerBackground: GhosttyApp.shared.usesHostLayerBackground
         )
-        let sharesWindowBackdrop = Workspace.usesSharedSurfaceBackdrop()
+        let sharesWindowBackdrop = Workspace.usesWindowRootTerminalBackdrop()
         let usesBonsplitPaneBackdrop = Workspace.usesBonsplitPaneTerminalBackdrop(
             renderingMode: renderingMode,
             sharesWindowBackdrop: sharesWindowBackdrop
         )
-        // Window/Bonsplit backdrops are the single surface fill for solid-color
-        // terminal backgrounds. Painting the terminal host layer too
-        // double-composites it against the surrounding chrome.
-        let usesHostLayerFill = renderingMode.usesHostLayerFill &&
+        // The window root backdrop is the single surface fill for solid-color
+        // terminal backgrounds. Painting the terminal host layer too would
+        // double-composite it against the surrounding chrome.
+        let usesHostLayerFill = renderingMode.usesWindowHostBackdrop &&
             !sharesWindowBackdrop &&
             !usesBonsplitPaneBackdrop
         let color = usesHostLayerFill
@@ -6597,6 +6588,29 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
         _ = performBindingAction("copy_to_clipboard")
     }
 
+    @IBAction func copyWorkspaceAndSurfaceIdentifiers(_ sender: Any?) {
+        guard let terminalSurface else { return }
+        let paneId = terminalSurface.owningWorkspace()?.paneId(forPanelId: terminalSurface.id)?.id
+        let refs = TerminalController.shared.v2WorkspacePaneAndSurfaceRefs(
+            workspaceId: terminalSurface.tabId,
+            paneId: paneId,
+            surfaceId: terminalSurface.id
+        )
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(
+            WorkspaceSurfaceIdentifierClipboardText.make(
+                workspaceId: terminalSurface.tabId,
+                paneId: paneId,
+                surfaceId: terminalSurface.id,
+                workspaceRef: refs.workspaceRef,
+                paneRef: refs.paneRef,
+                surfaceRef: refs.surfaceRef
+            ),
+            forType: .string
+        )
+    }
+
     // MARK: - Clipboard paste
 
     @IBAction func paste(_ sender: Any?) {
@@ -6622,6 +6636,8 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             return GhosttyPasteboardHelper.hasString(for: GHOSTTY_CLIPBOARD_STANDARD)
         case #selector(splitHorizontally(_:)), #selector(splitVertically(_:)):
             return canSplitCurrentSurface()
+        case #selector(copyWorkspaceAndSurfaceIdentifiers(_:)):
+            return terminalSurface != nil
         default:
             return true
         }
@@ -8634,6 +8650,15 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             systemSymbolName: "arrow.trianglehead.2.clockwise",
             accessibilityDescription: nil
         )
+        if terminalSurface != nil {
+            menu.addItem(.separator())
+            let identifiersItem = menu.addItem(
+                withTitle: String(localized: "terminalContextMenu.copyIdentifiers", defaultValue: "Copy IDs"),
+                action: #selector(copyWorkspaceAndSurfaceIdentifiers(_:)),
+                keyEquivalent: ""
+            )
+            identifiersItem.target = self
+        }
         return menu
     }
 
@@ -9545,10 +9570,8 @@ final class GhosttySurfaceScrollView: NSView {
         layer?.masksToBounds = true
 
         backgroundView.wantsLayer = true
-        let initialTerminalBackground = GhosttyApp.shared.defaultBackgroundColor
-            .withAlphaComponent(GhosttyApp.shared.defaultBackgroundOpacity)
-        backgroundView.layer?.backgroundColor = initialTerminalBackground.cgColor
-        backgroundView.layer?.isOpaque = initialTerminalBackground.alphaComponent >= 1.0
+        backgroundView.layer?.backgroundColor = NSColor.clear.cgColor
+        backgroundView.layer?.isOpaque = false
         addSubview(backgroundView)
         addSubview(scrollView)
         synchronizeScrollbarAppearance()

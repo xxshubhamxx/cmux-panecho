@@ -180,7 +180,7 @@ struct SessionIndexView: View {
         }
 
         return ScrollViewReader { proxy in
-            ScrollView {
+            ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(sections.enumerated()), id: \.element.key) { index, section in
                         // Drop above this row → insert dragged section BEFORE this section's key.
@@ -1020,7 +1020,7 @@ private struct SectionPopoverView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.orange.opacity(0.10))
             }
-            ScrollView {
+            ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if isLoading && loaded.isEmpty {
                         loadingRow

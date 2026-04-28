@@ -93,7 +93,72 @@ Sidebar shows git branch, linked PR status/number, working directory, listening 
 
 ## Install
 
-For the hardened `Panecho` fork built from this repository, see [`INSTALL.md`](INSTALL.md) for the one-command installer path. Once the fork publishes `panecho-nightly`, `./scripts/install-panecho.sh` installs the latest prebuilt `Panecho.app` without requiring local Xcode.
+For the hardened `Panecho` fork built from this repository, the simplest path is now the prebuilt ZIP installer below. It uses only built-in macOS tools and does **not** require local Xcode, Homebrew, Go, Python, or GitHub CLI. For the broader installer that can also consume local artifacts or build from source, see [`INSTALL.md`](INSTALL.md).
+
+### Panecho ZIP install (no local toolchain required)
+
+The prebuilt installer now defaults to the fork’s latest `Panecho` release asset from `xxshubhamxx/cmux`, with an automatic fallback to `panecho-nightly` if a stable release is not available yet.
+
+Install it with:
+
+```bash
+./scripts/install-panecho-prebuilt.sh
+```
+
+That script tries, in order:
+
+```text
+https://github.com/xxshubhamxx/cmux/releases/latest/download/panecho-macos.zip
+https://github.com/xxshubhamxx/cmux/releases/download/panecho-nightly/panecho-macos.zip
+```
+
+and installs `Panecho.app` into `/Applications` when writable, or `~/Applications` otherwise.
+
+If you want the same experience without cloning the repo first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xxshubhamxx/cmux/main/scripts/install-panecho-prebuilt.sh | bash
+```
+
+If you already downloaded the ZIP manually, point the installer at it directly:
+
+```bash
+./scripts/install-panecho-prebuilt.sh --zip ~/Downloads/panecho-macos.zip
+```
+
+If you prefer the fully manual route, this does the same thing with built-in macOS commands only:
+
+```bash
+TMP_DIR="$(mktemp -d)"
+INSTALL_DIR="/Applications"
+[[ -w "$INSTALL_DIR" ]] || INSTALL_DIR="$HOME/Applications"
+curl -L --fail -o "$TMP_DIR/panecho-macos.zip" "https://github.com/xxshubhamxx/cmux/releases/latest/download/panecho-macos.zip"
+ditto -xk "$TMP_DIR/panecho-macos.zip" "$TMP_DIR/unpacked"
+mkdir -p "$INSTALL_DIR"
+rm -rf "$INSTALL_DIR/Panecho.app"
+mv "$TMP_DIR/unpacked/Panecho.app" "$INSTALL_DIR/Panecho.app"
+open "$INSTALL_DIR/Panecho.app"
+```
+
+### Panecho uninstall
+
+To remove the app bundle later:
+
+```bash
+./scripts/uninstall-panecho.sh
+```
+
+Or run the same uninstaller straight from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOUR-ORG/YOUR-PANECHO-FORK/main/scripts/uninstall-panecho.sh | bash
+```
+
+To also remove local preferences, caches, and saved state:
+
+```bash
+PANECHO_REMOVE_USER_DATA=1 ./scripts/uninstall-panecho.sh
+```
 
 ### DMG (recommended)
 
