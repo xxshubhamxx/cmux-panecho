@@ -91,6 +91,17 @@ enum DragOverlayRoutingPolicy {
             || hasSidebarTabReorder(pasteboardTypes)
     }
 
+    static func shouldPassThroughTerminalPortalHitTesting(
+        pasteboardTypes: [NSPasteboard.PasteboardType]?,
+        eventType: NSEvent.EventType?
+    ) -> Bool {
+        guard isPortalDragEvent(eventType) else { return false }
+        return shouldPassThroughPortalHitTesting(
+            pasteboardTypes: pasteboardTypes,
+            eventType: eventType
+        ) || hasFileURL(pasteboardTypes)
+    }
+
     private static func isDragMouseEvent(_ eventType: NSEvent.EventType?) -> Bool {
         eventType == .leftMouseDragged
             || eventType == .rightMouseDragged

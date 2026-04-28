@@ -12353,7 +12353,7 @@ class TerminalController {
         var shouldPassThrough = false
         DispatchQueue.main.sync {
             let pb = NSPasteboard(name: .drag)
-            shouldPassThrough = DragOverlayRoutingPolicy.shouldPassThroughPortalHitTesting(
+            shouldPassThrough = DragOverlayRoutingPolicy.shouldPassThroughTerminalPortalHitTesting(
                 pasteboardTypes: pb.types,
                 eventType: eventType
             )

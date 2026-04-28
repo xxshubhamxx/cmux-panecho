@@ -166,7 +166,7 @@ final class WindowTerminalHostView: NSView {
 
             let dragPasteboardTypes = NSPasteboard(name: .drag).types
             let eventType = currentEvent?.type
-            let shouldPassThrough = DragOverlayRoutingPolicy.shouldPassThroughPortalHitTesting(
+            let shouldPassThrough = DragOverlayRoutingPolicy.shouldPassThroughTerminalPortalHitTesting(
                 pasteboardTypes: dragPasteboardTypes,
                 eventType: eventType
             )

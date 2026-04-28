@@ -613,6 +613,18 @@ final class WindowBrowserHostViewTests: XCTestCase {
                 eventType: .leftMouseDragged
             )
         )
+        XCTAssertTrue(
+            DragOverlayRoutingPolicy.shouldPassThroughTerminalPortalHitTesting(
+                pasteboardTypes: [.fileURL],
+                eventType: .leftMouseDragged
+            )
+        )
+        XCTAssertFalse(
+            DragOverlayRoutingPolicy.shouldPassThroughTerminalPortalHitTesting(
+                pasteboardTypes: [.fileURL],
+                eventType: .mouseMoved
+            )
+        )
     }
 
     func testHostViewKeepsHostedInspectorDividerInteractive() {
