@@ -936,6 +936,7 @@ final class FileExplorerContainerView: NSView {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
+        scrollView.horizontalScrollElasticity = .none
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
@@ -975,6 +976,7 @@ final class FileExplorerContainerView: NSView {
         searchScrollView.translatesAutoresizingMaskIntoConstraints = false
         searchScrollView.hasVerticalScroller = true
         searchScrollView.hasHorizontalScroller = false
+        searchScrollView.horizontalScrollElasticity = .none
         searchScrollView.autohidesScrollers = true
         searchScrollView.borderType = .noBorder
         searchScrollView.drawsBackground = false
