@@ -2621,13 +2621,11 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         }
     }
 
-    private func logPDFResizeProbe(_ message: String) {
-        #if DEBUG
-        cmuxDebugLog("filePreview.pdf.resize \(message)")
-        #endif
+    #if DEBUG
+    private func logPDFResizeProbe(_ message: @autoclosure () -> String) {
+        cmuxDebugLog("filePreview.pdf.resize \(message())")
     }
 
-    #if DEBUG
     private func pdfDebugState() -> String {
         let document = pdfView.document
         let pageDescription: String
@@ -2689,6 +2687,16 @@ final class FilePreviewPDFContainerView: NSView, NSSplitViewDelegate, NSOutlineV
         guard value.isFinite else { return "nan" }
         return String(format: "%.1f", Double(value))
     }
+    #else
+    private func logPDFResizeProbe(_ message: @autoclosure () -> String) {}
+
+    private func pdfDebugState() -> String { "" }
+
+    private func debugSnapshot(_ snapshot: FilePreviewPDFViewportSnapshot?) -> String { "" }
+
+    private func debugAnchor(_ anchor: FilePreviewPDFViewportAnchor) -> String { "" }
+
+    private func debugEventType() -> String { "" }
     #endif
 
     private func pdfScrollView() -> NSScrollView? {
