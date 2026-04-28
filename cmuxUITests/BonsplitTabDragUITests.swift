@@ -121,49 +121,75 @@ final class BonsplitTabDragUITests: XCTestCase {
         )
     }
 
-    func testMinimalModeRightSidebarModeBarMatchesPaneTabBarHeight() {
-        let (app, dataPath) = launchConfiguredApp(showRightSidebar: true)
+    func testRightSidebarModeBarKeepsFixedHeightAcrossPresentationModes() {
+        let expectedModeBarHeight: CGFloat = 30
+        var referenceTopInset: CGFloat?
 
-        XCTAssertTrue(
-            ensureForegroundAfterLaunch(app, timeout: launchTimeout),
-            "Expected app to launch for minimal-mode right-sidebar alignment UI test. state=\(app.state.rawValue)"
-        )
-        XCTAssertTrue(waitForAnyJSON(atPath: dataPath, timeout: setupTimeout), "Expected tab-drag setup data at \(dataPath)")
-        guard let ready = waitForJSONKey("ready", equals: "1", atPath: dataPath, timeout: setupTimeout) else {
-            XCTFail("Timed out waiting for ready=1. data=\(loadJSON(atPath: dataPath) ?? [:])")
-            return
+        for presentationMode in [WorkspacePresentationMode.minimal, .standard] {
+            let (app, dataPath) = launchConfiguredApp(presentationMode: presentationMode, showRightSidebar: true)
+            defer { app.terminate() }
+
+            XCTAssertTrue(
+                ensureForegroundAfterLaunch(app, timeout: launchTimeout),
+                "Expected app to launch for \(presentationMode.rawValue)-mode right-sidebar alignment UI test. state=\(app.state.rawValue)"
+            )
+            XCTAssertTrue(waitForAnyJSON(atPath: dataPath, timeout: setupTimeout), "Expected tab-drag setup data at \(dataPath)")
+            guard let ready = waitForJSONKey("ready", equals: "1", atPath: dataPath, timeout: setupTimeout) else {
+                XCTFail("Timed out waiting for ready=1. data=\(loadJSON(atPath: dataPath) ?? [:])")
+                return
+            }
+
+            if let setupError = ready["setupError"], !setupError.isEmpty {
+                XCTFail("Setup failed: \(setupError)")
+                return
+            }
+
+            let window = app.windows.element(boundBy: 0)
+            XCTAssertTrue(window.waitForExistence(timeout: 5.0), "Expected main window to exist")
+
+            let alphaTitle = ready["alphaTitle"] ?? "UITest Alpha"
+            let alphaTab = app.buttons[alphaTitle]
+            XCTAssertTrue(alphaTab.waitForExistence(timeout: 5.0), "Expected alpha tab to exist")
+
+            let modeBar = app.descendants(matching: .any).matching(identifier: "RightSidebarModeBar").firstMatch
+            XCTAssertTrue(modeBar.waitForExistence(timeout: 5.0), "Expected right sidebar mode bar to exist")
+
+            XCTAssertEqual(
+                modeBar.frame.height,
+                expectedModeBarHeight,
+                accuracy: 2,
+                "Expected \(presentationMode.rawValue)-mode right sidebar mode bar to stay compact. modeBar=\(modeBar.frame)"
+            )
+            XCTAssertEqual(
+                modeBar.frame.height,
+                alphaTab.frame.height,
+                accuracy: 2,
+                "Expected \(presentationMode.rawValue)-mode right sidebar mode bar to match Bonsplit pane tab height. modeBar=\(modeBar.frame) alphaTab=\(alphaTab.frame)"
+            )
+
+            let modeBarTopInset = distanceToTopEdge(of: modeBar, in: window)
+            if let referenceTopInset {
+                XCTAssertEqual(
+                    modeBarTopInset,
+                    referenceTopInset,
+                    accuracy: 2,
+                    "Expected right sidebar mode bar top position not to shift between presentation modes. mode=\(presentationMode.rawValue) modeBar=\(modeBar.frame) window=\(window.frame)"
+                )
+            } else {
+                referenceTopInset = modeBarTopInset
+            }
+
+            if presentationMode == .minimal {
+                let modeBarBottomInset = modeBarTopInset + modeBar.frame.height
+                let alphaTabBottomInset = distanceToTopEdge(of: alphaTab, in: window) + alphaTab.frame.height
+                XCTAssertEqual(
+                    modeBarBottomInset,
+                    alphaTabBottomInset,
+                    accuracy: 2,
+                    "Expected minimal-mode right sidebar separator to align with Bonsplit pane tab baseline. modeBar=\(modeBar.frame) alphaTab=\(alphaTab.frame) window=\(window.frame)"
+                )
+            }
         }
-
-        if let setupError = ready["setupError"], !setupError.isEmpty {
-            XCTFail("Setup failed: \(setupError)")
-            return
-        }
-
-        let window = app.windows.element(boundBy: 0)
-        XCTAssertTrue(window.waitForExistence(timeout: 5.0), "Expected main window to exist")
-
-        let alphaTitle = ready["alphaTitle"] ?? "UITest Alpha"
-        let alphaTab = app.buttons[alphaTitle]
-        XCTAssertTrue(alphaTab.waitForExistence(timeout: 5.0), "Expected alpha tab to exist")
-
-        let modeBar = app.descendants(matching: .any).matching(identifier: "RightSidebarModeBar").firstMatch
-        XCTAssertTrue(modeBar.waitForExistence(timeout: 5.0), "Expected right sidebar mode bar to exist")
-
-        XCTAssertEqual(
-            modeBar.frame.height,
-            alphaTab.frame.height,
-            accuracy: 2,
-            "Expected minimal-mode right sidebar mode bar to match Bonsplit pane tab height. modeBar=\(modeBar.frame) alphaTab=\(alphaTab.frame)"
-        )
-
-        let modeBarBottomInset = distanceToTopEdge(of: modeBar, in: window) + modeBar.frame.height
-        let alphaTabBottomInset = distanceToTopEdge(of: alphaTab, in: window) + alphaTab.frame.height
-        XCTAssertEqual(
-            modeBarBottomInset,
-            alphaTabBottomInset,
-            accuracy: 2,
-            "Expected minimal-mode right sidebar separator to align with Bonsplit pane tab baseline. modeBar=\(modeBar.frame) alphaTab=\(alphaTab.frame) window=\(window.frame)"
-        )
     }
 
     func testMinimalModeTitlebarDoubleClickZoomsWindow() {

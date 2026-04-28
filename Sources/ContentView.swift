@@ -11,6 +11,10 @@ enum MinimalModeChromeMetrics {
     static let titlebarHeight: CGFloat = 30
 }
 
+enum RightSidebarChromeMetrics {
+    static let titlebarHeight: CGFloat = MinimalModeChromeMetrics.titlebarHeight
+}
+
 enum SidebarWorkspaceListMetrics {
     static let firstRowTopOffset: CGFloat = MinimalModeChromeMetrics.titlebarHeight + 2
     static let rowVerticalPadding: CGFloat = 8
@@ -2638,10 +2642,6 @@ struct ContentView: View {
         rightSidebarVisible ? fileExplorerWidth : 0
     }
 
-    private var rightSidebarTitlebarHeight: CGFloat {
-        isMinimalMode ? MinimalModeChromeMetrics.titlebarHeight : titlebarPadding
-    }
-
     private func sidebarBackdropLayer(
         width: CGFloat,
         role: WindowBackdropRole,
@@ -2691,7 +2691,7 @@ struct ContentView: View {
             fileExplorerStore: fileExplorerStore,
             fileExplorerState: fileExplorerState,
             sessionIndexStore: sessionIndexStore,
-            titlebarHeight: rightSidebarTitlebarHeight,
+            titlebarHeight: RightSidebarChromeMetrics.titlebarHeight,
             onResumeSession: { entry in
                 resumeSession(entry: entry)
             }
