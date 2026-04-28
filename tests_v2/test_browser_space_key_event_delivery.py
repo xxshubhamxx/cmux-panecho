@@ -9,9 +9,7 @@ the swallowed-space failure mode.
 
 import os
 import sys
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -19,7 +17,6 @@ from cmux import cmux, cmuxError
 
 
 SOCKET_PATH = os.environ.get("CMUX_SOCKET", "/tmp/cmux-debug.sock")
-_SERVERS: list[ThreadingHTTPServer] = []
 
 
 def _must(condition: bool, message: str) -> None:
@@ -84,70 +81,49 @@ def _state(client: cmux, surface_id: str) -> dict[str, Any]:
     return state
 
 
-_TEST_HTML = """
-<!doctype html>
-<html>
-  <head>
-    <title>cmux-space-key-event-delivery</title>
-    <style>
-      body { font-family: -apple-system, sans-serif; margin: 24px; }
-      input { width: 480px; font: 20px system-ui; padding: 8px; }
-    </style>
-  </head>
-  <body>
-    <input id="search" autofocus autocomplete="off" autocapitalize="off" spellcheck="false">
-    <script>
-      (() => {
-        const search = document.querySelector('#search');
-        window.__cmuxKeyEvents = [];
-        const activeName = () => {
-          const active = document.activeElement;
-          return active ? (active.id || active.tagName || '') : '';
-        };
-        const record = (type, event) => {
-          window.__cmuxKeyEvents.push({
-            type,
-            key: event.key || event.data || '',
-            code: event.code || event.inputType || '',
-            value: search.value,
-            selectionStart: search.selectionStart,
-            selectionEnd: search.selectionEnd,
-            active: activeName(),
-          });
-          if (window.__cmuxKeyEvents.length > 80) {
-            window.__cmuxKeyEvents.shift();
-          }
-        };
-        document.addEventListener('keydown', (event) => record('keydown', event), true);
-        document.addEventListener('beforeinput', (event) => record('beforeinput', event), true);
-        document.addEventListener('input', (event) => record('input', event), true);
-        document.addEventListener('keyup', (event) => record('keyup', event), true);
-      })();
-    </script>
-  </body>
-</html>
-""".strip()
-
-
-class _FixtureHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
-        body = _TEST_HTML.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, _format: str, *_args: object) -> None:
-        return
-
-
-def _test_page() -> str:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _FixtureHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    _SERVERS.append(server)
-    return f"http://127.0.0.1:{server.server_port}/"
+def _install_test_page(client: cmux, surface_id: str) -> None:
+    result = _browser_eval(
+        client,
+        surface_id,
+        """
+        (() => {
+          document.title = 'cmux-space-key-event-delivery';
+          document.body.innerHTML = `
+            <main>
+              <input id="search" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </main>
+          `;
+          const search = document.querySelector('#search');
+          window.__cmuxKeyEvents = [];
+          const activeName = () => {
+            const active = document.activeElement;
+            return active ? (active.id || active.tagName || '') : '';
+          };
+          const record = (type, event) => {
+            window.__cmuxKeyEvents.push({
+              type,
+              key: event.key || event.data || '',
+              code: event.code || event.inputType || '',
+              value: search.value,
+              selectionStart: search.selectionStart,
+              selectionEnd: search.selectionEnd,
+              active: activeName(),
+            });
+            if (window.__cmuxKeyEvents.length > 80) {
+              window.__cmuxKeyEvents.shift();
+            }
+          };
+          document.addEventListener('keydown', (event) => record('keydown', event), true);
+          document.addEventListener('beforeinput', (event) => record('beforeinput', event), true);
+          document.addEventListener('input', (event) => record('input', event), true);
+          document.addEventListener('keyup', (event) => record('keyup', event), true);
+          search.focus();
+          search.setSelectionRange(search.value.length, search.value.length);
+          return { ready: true, active: activeName() };
+        })()
+        """,
+    )
+    _must(isinstance(result, dict) and result.get("ready") is True, f"Failed to install browser fixture: {result!r}")
 
 
 def _focus_browser_input(client: cmux, surface_id: str) -> None:
@@ -199,11 +175,23 @@ def _type_via_appkit_key_events(client: cmux, surface_id: str, text: str) -> Non
 def _open_two_pane_browser_workspace(client: cmux) -> tuple[str, str, str]:
     workspace_id = client.new_workspace()
     client.select_workspace(workspace_id)
-    time.sleep(0.2)
 
-    browser_surface_id = client.new_pane(direction="right", panel_type="browser", url="about:blank")
-    client.navigate(browser_surface_id, _test_page())
-    client._call("browser.wait", {"surface_id": browser_surface_id, "selector": "#search", "timeout_ms": 5000})
+    _wait_until(
+        lambda: any(bool(row.get("in_window")) and row.get("type") == "terminal" for row in client.surface_health()),
+        timeout_s=5.0,
+        label="fresh terminal workspace in window",
+    )
+
+    browser_surface_id = client.open_browser("about:blank")
+    _wait_until(
+        lambda: str(
+            _browser_eval(client, browser_surface_id, "document.readyState")
+        ).lower()
+        == "complete",
+        timeout_s=5.0,
+        label="about:blank browser document ready",
+    )
+    _install_test_page(client, browser_surface_id)
     _focus_browser_input(client, browser_surface_id)
 
     panes = client.list_panes()
@@ -254,21 +242,16 @@ def main() -> int:
     ]
 
     failed = 0
-    try:
-        with cmux(SOCKET_PATH) as client:
-            for name, fn in tests:
-                try:
-                    ok, message = fn(client)
-                except Exception as exc:  # noqa: BLE001
-                    ok, message = False, str(exc)
-                status = "PASS" if ok else "FAIL"
-                print(f"{status}: {name} - {message}")
-                if not ok:
-                    failed += 1
-    finally:
-        for server in _SERVERS:
-            server.shutdown()
-            server.server_close()
+    with cmux(SOCKET_PATH) as client:
+        for name, fn in tests:
+            try:
+                ok, message = fn(client)
+            except Exception as exc:  # noqa: BLE001
+                ok, message = False, str(exc)
+            status = "PASS" if ok else "FAIL"
+            print(f"{status}: {name} - {message}")
+            if not ok:
+                failed += 1
 
     if failed:
         print(f"\n{failed} test(s) failed.")
