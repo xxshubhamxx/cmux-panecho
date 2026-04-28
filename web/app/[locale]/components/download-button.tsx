@@ -1,15 +1,12 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import posthog from "posthog-js";
 
 export function DownloadButton({
   size = "default",
-  location = "hero",
   className,
 }: {
   size?: "default" | "sm";
-  location?: string;
   className?: string;
 }) {
   const t = useTranslations("common");
@@ -17,7 +14,6 @@ export function DownloadButton({
   return (
     <a
       href="https://github.com/manaflow-ai/cmux/releases/latest/download/cmux-macos.dmg"
-      onClick={() => posthog.capture("cmuxterm_download_clicked", { location })}
       className={`inline-flex items-center whitespace-nowrap rounded-full font-medium bg-foreground hover:opacity-85 transition-opacity ${
         isSmall ? "gap-2 px-4 py-1.5 text-xs" : "gap-2.5 px-5 py-2.5 text-[15px]"
       } ${className ?? ""}`}

@@ -6351,7 +6351,7 @@ private class BrowserNavigationDelegate: NSObject, WKNavigationDelegate {
             buttonNumber: navigationAction.buttonNumber,
             hasRecentMiddleClickIntent: hasRecentMiddleClickIntent
         )
-#if DEBUG
+        #if DEBUG
         let currentEventType = NSApp.currentEvent.map { String(describing: $0.type) } ?? "nil"
         let currentEventButton = NSApp.currentEvent.map { String($0.buttonNumber) } ?? "nil"
         let navType = String(describing: navigationAction.navigationType)
@@ -6366,7 +6366,18 @@ private class BrowserNavigationDelegate: NSObject, WKNavigationDelegate {
             "recentMiddleIntent=\(hasRecentMiddleClickIntent ? 1 : 0) " +
             "openInNewTab=\(shouldOpenInNewTab ? 1 : 0)"
         )
-#endif
+        #endif
+
+        if PrivacyMode.isEnabled,
+           let url = navigationAction.request.url,
+           navigationAction.targetFrame?.isMainFrame != false,
+           !PrivacyEgressGuard.isAllowedURL(url) {
+            #if DEBUG
+            cmuxDebugLog("browser.nav.decidePolicy.action kind=blockedPrivacyMode url=\(url.absoluteString)")
+            #endif
+            decisionHandler(.cancel)
+            return
+        }
 
         if let url = navigationAction.request.url,
            navigationAction.targetFrame?.isMainFrame != false,

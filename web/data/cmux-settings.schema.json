@@ -103,11 +103,6 @@
           "default": true,
           "description": "Move workspaces with new notifications toward the top."
         },
-        "sendAnonymousTelemetry": {
-          "type": "boolean",
-          "default": true,
-          "description": "Allow anonymous telemetry."
-        },
         "warnBeforeQuit": {
           "type": "boolean",
           "default": true,

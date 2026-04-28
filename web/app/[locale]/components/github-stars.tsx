@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import posthog from "posthog-js";
 
 const STARS_CACHE_TTL_MS = 300_000;
 let cachedStars: number | null = null;
@@ -104,9 +103,6 @@ export function GitHubStarsBadge({
       href="https://github.com/manaflow-ai/cmux"
       target="_blank"
       rel="noopener noreferrer"
-      onClick={() =>
-        posthog.capture("cmuxterm_github_clicked", { location })
-      }
       className={classes}
     >
       {GITHUB_ICON}
