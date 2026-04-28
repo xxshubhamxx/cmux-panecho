@@ -7541,13 +7541,15 @@ final class Workspace: Identifiable, ObservableObject {
         defaults.bool(forKey: "sidebarMatchTerminalBackground")
     }
 
+    nonisolated static func usesWindowRootTerminalBackdrop() -> Bool {
+        true
+    }
+
     nonisolated static func bonsplitChromeHex(
         backgroundColor: NSColor,
         backgroundOpacity: Double,
         sharesWindowBackdrop: Bool = false
     ) -> String {
-        // Shared mode still paints Bonsplit chrome once. The terminal renderer
-        // owns the terminal canvas, so cmux no longer uses a global root fill.
         _ = sharesWindowBackdrop
         let themedColor = WindowAppearanceSnapshot.compositedTerminalColor(
             backgroundColor: backgroundColor,
@@ -7561,29 +7563,42 @@ final class Workspace: Identifiable, ObservableObject {
         renderingMode: GhosttyTerminalBackdropRenderingMode,
         sharesWindowBackdrop: Bool
     ) -> Bool {
-        renderingMode.usesHostLayerFill && !sharesWindowBackdrop
+        // The window root backdrop owns terminal fills. Bonsplit pane fills
+        // would add a second translucent layer under the Metal surface.
+        return false
     }
 
     nonisolated static func bonsplitChromeColors(
         backgroundColor: NSColor,
         backgroundOpacity: Double,
         sharesWindowBackdrop: Bool = false,
-        renderingMode: GhosttyTerminalBackdropRenderingMode = .hostLayerSolidColor
+        renderingMode: GhosttyTerminalBackdropRenderingMode = .windowHostBackdrop
     ) -> BonsplitConfiguration.Appearance.ChromeColors {
         let surfaceHex = bonsplitChromeHex(
             backgroundColor: backgroundColor,
             backgroundOpacity: backgroundOpacity,
             sharesWindowBackdrop: sharesWindowBackdrop
         )
+        let borderHex = WindowChromeSeparatorColor
+            .color(forChromeBackground: backgroundColor)
+            .hexString(includeAlpha: true)
+
+        if sharesWindowBackdrop {
+            return .init(
+                backgroundHex: surfaceHex,
+                tabBarBackgroundHex: "#00000000",
+                splitButtonBackdropHex: "#00000000",
+                paneBackgroundHex: "#00000000",
+                borderHex: borderHex
+            )
+        }
+
         let paneBackgroundHex = usesBonsplitPaneTerminalBackdrop(
             renderingMode: renderingMode,
             sharesWindowBackdrop: sharesWindowBackdrop
         )
             ? surfaceHex
             : "#00000000"
-        let borderHex = WindowChromeSeparatorColor
-            .color(forChromeBackground: backgroundColor)
-            .hexString(includeAlpha: true)
         return .init(
             backgroundHex: surfaceHex,
             tabBarBackgroundHex: surfaceHex,
@@ -7612,11 +7627,25 @@ final class Workspace: Identifiable, ObservableObject {
     nonisolated static func resolvedChromeColors(
         from backgroundColor: NSColor,
         sharesWindowBackdrop: Bool = false,
-        renderingMode: GhosttyTerminalBackdropRenderingMode = .hostLayerSolidColor
+        renderingMode: GhosttyTerminalBackdropRenderingMode = .windowHostBackdrop
     ) -> BonsplitConfiguration.Appearance.ChromeColors {
         // Keep this signature aligned with bonsplitChromeHex for settings tests
         // and future background-image handling.
         let backgroundHex = backgroundColor.hexString()
+        let borderHex = WindowChromeSeparatorColor
+            .color(forChromeBackground: backgroundColor)
+            .hexString(includeAlpha: true)
+
+        if sharesWindowBackdrop {
+            return .init(
+                backgroundHex: backgroundHex,
+                tabBarBackgroundHex: "#00000000",
+                splitButtonBackdropHex: "#00000000",
+                paneBackgroundHex: "#00000000",
+                borderHex: borderHex
+            )
+        }
+
         let paneBackgroundHex = usesBonsplitPaneTerminalBackdrop(
             renderingMode: renderingMode,
             sharesWindowBackdrop: sharesWindowBackdrop
@@ -7628,9 +7657,7 @@ final class Workspace: Identifiable, ObservableObject {
             tabBarBackgroundHex: backgroundHex,
             splitButtonBackdropHex: backgroundHex,
             paneBackgroundHex: paneBackgroundHex,
-            borderHex: WindowChromeSeparatorColor
-                .color(forChromeBackground: backgroundColor)
-                .hexString(includeAlpha: true)
+            borderHex: borderHex
         )
     }
 
@@ -7660,7 +7687,7 @@ final class Workspace: Identifiable, ObservableObject {
         backgroundOpacity: Double,
         tabTitleFontSize: CGFloat = 11
     ) -> BonsplitConfiguration.Appearance {
-        let sharesWindowBackdrop = usesSharedSurfaceBackdrop()
+        let sharesWindowBackdrop = usesWindowRootTerminalBackdrop()
         let renderingMode = WindowAppearanceSnapshot.terminalRenderingMode(
             usesHostLayerBackground: GhosttyApp.shared.usesHostLayerBackground
         )
@@ -7675,12 +7702,13 @@ final class Workspace: Identifiable, ObservableObject {
             splitButtonBackdropEffect: Self.bonsplitSplitButtonBackdropEffect(),
             splitButtonTooltips: Self.currentSplitButtonTooltips(),
             enableAnimations: false,
-            chromeColors: chromeColors
+            chromeColors: chromeColors,
+            usesSharedBackdrop: sharesWindowBackdrop
         )
     }
 
     func applyGhosttyChrome(from config: GhosttyConfig, reason: String = "unspecified") {
-        let sharesWindowBackdrop = Self.usesSharedSurfaceBackdrop()
+        let sharesWindowBackdrop = Self.usesWindowRootTerminalBackdrop()
         let renderingMode = WindowAppearanceSnapshot.terminalRenderingMode(
             usesHostLayerBackground: GhosttyApp.shared.usesHostLayerBackground
         )
@@ -7697,8 +7725,9 @@ final class Workspace: Identifiable, ObservableObject {
             currentAppearance.chromeColors,
             nextChromeColors
         )
+        let sharedBackdropChanged = currentAppearance.usesSharedBackdrop != sharesWindowBackdrop
         let fontSizeChanged = abs(currentTabTitleFontSize - nextTabTitleFontSize) > 0.0001
-        let isNoOp = !colorsChanged && !fontSizeChanged
+        let isNoOp = !colorsChanged && !sharedBackdropChanged && !fontSizeChanged
 
         if GhosttyApp.shared.backgroundLogEnabled {
             GhosttyApp.shared.logBackground(
@@ -7708,6 +7737,7 @@ final class Workspace: Identifiable, ObservableObject {
                 "currentTabFont=\(String(format: "%.3f", currentTabTitleFontSize)) " +
                 "nextTabFont=\(String(format: "%.3f", nextTabTitleFontSize)) " +
                 "sharesWindowBackdrop=\(sharesWindowBackdrop ? 1 : 0) " +
+                "currentUsesSharedBackdrop=\(currentAppearance.usesSharedBackdrop ? 1 : 0) " +
                 "paneBackdrop=\(Self.usesBonsplitPaneTerminalBackdrop(renderingMode: renderingMode, sharesWindowBackdrop: sharesWindowBackdrop) ? 1 : 0) " +
                 "noop=\(isNoOp)"
             )
@@ -7718,6 +7748,9 @@ final class Workspace: Identifiable, ObservableObject {
         if colorsChanged {
             bonsplitController.configuration.appearance.chromeColors = nextChromeColors
         }
+        if sharedBackdropChanged {
+            bonsplitController.configuration.appearance.usesSharedBackdrop = sharesWindowBackdrop
+        }
         if fontSizeChanged {
             bonsplitController.configuration.appearance.tabTitleFontSize = nextTabTitleFontSize
         }
@@ -7726,13 +7759,14 @@ final class Workspace: Identifiable, ObservableObject {
             GhosttyApp.shared.logBackground(
                 "theme applied workspace=\(id.uuidString) reason=\(reason) " +
                 "resulting=[\(Self.bonsplitChromeColorsLogDescription(bonsplitController.configuration.appearance.chromeColors))] " +
+                "resultingUsesSharedBackdrop=\(bonsplitController.configuration.appearance.usesSharedBackdrop ? 1 : 0) " +
                 "resultingTabFont=\(String(format: "%.3f", bonsplitController.configuration.appearance.tabTitleFontSize))"
             )
         }
     }
 
     func applyGhosttyChrome(backgroundColor: NSColor, backgroundOpacity: Double, reason: String = "unspecified") {
-        let sharesWindowBackdrop = Self.usesSharedSurfaceBackdrop()
+        let sharesWindowBackdrop = Self.usesWindowRootTerminalBackdrop()
         let renderingMode = WindowAppearanceSnapshot.terminalRenderingMode(
             usesHostLayerBackground: GhosttyApp.shared.usesHostLayerBackground
         )
@@ -7743,7 +7777,10 @@ final class Workspace: Identifiable, ObservableObject {
             renderingMode: renderingMode
         )
         let currentChromeColors = bonsplitController.configuration.appearance.chromeColors
-        let isNoOp = Self.bonsplitChromeColorsEqual(currentChromeColors, nextChromeColors)
+        let currentUsesSharedBackdrop = bonsplitController.configuration.appearance.usesSharedBackdrop
+        let colorsChanged = !Self.bonsplitChromeColorsEqual(currentChromeColors, nextChromeColors)
+        let sharedBackdropChanged = currentUsesSharedBackdrop != sharesWindowBackdrop
+        let isNoOp = !colorsChanged && !sharedBackdropChanged
 
         if GhosttyApp.shared.backgroundLogEnabled {
             GhosttyApp.shared.logBackground(
@@ -7751,6 +7788,7 @@ final class Workspace: Identifiable, ObservableObject {
                 "current=[\(Self.bonsplitChromeColorsLogDescription(currentChromeColors))] " +
                 "next=[\(Self.bonsplitChromeColorsLogDescription(nextChromeColors))] " +
                 "sharesWindowBackdrop=\(sharesWindowBackdrop ? 1 : 0) " +
+                "currentUsesSharedBackdrop=\(currentUsesSharedBackdrop ? 1 : 0) " +
                 "paneBackdrop=\(Self.usesBonsplitPaneTerminalBackdrop(renderingMode: renderingMode, sharesWindowBackdrop: sharesWindowBackdrop) ? 1 : 0) " +
                 "noop=\(isNoOp)"
             )
@@ -7759,11 +7797,17 @@ final class Workspace: Identifiable, ObservableObject {
         if isNoOp {
             return
         }
-        bonsplitController.configuration.appearance.chromeColors = nextChromeColors
+        if colorsChanged {
+            bonsplitController.configuration.appearance.chromeColors = nextChromeColors
+        }
+        if sharedBackdropChanged {
+            bonsplitController.configuration.appearance.usesSharedBackdrop = sharesWindowBackdrop
+        }
         if GhosttyApp.shared.backgroundLogEnabled {
             GhosttyApp.shared.logBackground(
                 "theme applied workspace=\(id.uuidString) reason=\(reason) " +
-                "resulting=[\(Self.bonsplitChromeColorsLogDescription(bonsplitController.configuration.appearance.chromeColors))]"
+                "resulting=[\(Self.bonsplitChromeColorsLogDescription(bonsplitController.configuration.appearance.chromeColors))] " +
+                "resultingUsesSharedBackdrop=\(bonsplitController.configuration.appearance.usesSharedBackdrop ? 1 : 0)"
             )
         }
     }
