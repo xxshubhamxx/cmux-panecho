@@ -443,7 +443,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         panel.notePanelFocusChanged(true)
         panel.prepareFocusIntentForActivation(.browser(.webView))
         XCTAssertTrue(panel.requestMountedContentWebViewFocus(in: window, reason: "spaceProbe"))
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
 
         let activeElementId = try await panel.evaluateJavaScript("document.activeElement && document.activeElement.id") as? String
         XCTAssertEqual(activeElementId, "target")
@@ -544,7 +544,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
     }
 
     @MainActor
-    func testPaneRestorePromotesWrapperToWebContentWithoutNilResponderBounce() throws {
+    func testPaneRestoreKeepsWrapperFocusWithoutNilResponderBounce() throws {
         let panel = BrowserPanel(workspaceId: UUID())
         let window = BrowserPanelKeyStateTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
@@ -569,13 +569,13 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
 
         let nilRequestsBeforeRestore = window.nilFirstResponderRequestCount
         XCTAssertTrue(panel.requestMountedContentWebViewFocus(in: window, reason: "rapidPaneRestore"))
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
         XCTAssertEqual(window.nilFirstResponderRequestCount, nilRequestsBeforeRestore)
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
 
     @MainActor
-    func testMountedContentFocusPromotesContentResponder() throws {
+    func testMountedContentFocusUsesWebViewWrapperAsNativeFocusOwner() throws {
         let panel = BrowserPanel(workspaceId: UUID())
         let window = BrowserPanelKeyStateTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
@@ -604,13 +604,13 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         let intent = PanelFocusIntent.browser(.webView)
         panel.prepareFocusIntentForActivation(intent)
         XCTAssertTrue(panel.requestMountedContentWebViewFocus(in: window, reason: "testContentFocus"))
-        XCTAssertTrue(window.firstResponder === contentResponder)
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
+        XCTAssertTrue(window.firstResponder === panel.webView)
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
 
     @MainActor
-    func testMountedContentFocusPromotesDeepContentResponder() throws {
+    func testMountedContentFocusDoesNotPromoteDeepInternalResponder() throws {
         let panel = BrowserPanel(workspaceId: UUID())
         let window = BrowserPanelKeyStateTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
@@ -642,8 +642,8 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
 
         panel.prepareFocusIntentForActivation(.browser(.webView))
         XCTAssertTrue(panel.requestMountedContentWebViewFocus(in: window, reason: "deepContentFocus"))
-        XCTAssertTrue(window.firstResponder === contentResponder)
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
+        XCTAssertTrue(window.firstResponder === panel.webView)
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
     }
 
     @MainActor
@@ -670,7 +670,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         contentView.layoutSubtreeIfNeeded()
         panel.prepareFocusIntentForActivation(.browser(.webView))
         XCTAssertTrue(panel.requestMountedContentWebViewFocus(in: window, reason: "yieldPreserve"))
-        XCTAssertTrue(window.firstResponder === contentResponder)
+        XCTAssertTrue(window.firstResponder === panel.webView)
 
         XCTAssertTrue(window.makeFirstResponder(contentResponder))
         XCTAssertTrue(window.firstResponder === contentResponder)
@@ -903,7 +903,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
     }
 
     @MainActor
-    func testExplicitWebViewFocusKeepsExistingWebContentResponder() throws {
+    func testExplicitWebViewFocusReactivatesWrapperFromExistingInternalResponder() throws {
         let panel = BrowserPanel(workspaceId: UUID())
         let window = BrowserPanelKeyStateTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
@@ -932,13 +932,13 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         cmuxWebView.allowsFirstResponderAcquisition = false
 
         XCTAssertTrue(panel.requestExplicitWebViewFocus())
-        XCTAssertTrue(window.firstResponder === contentResponder)
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
+        XCTAssertTrue(window.firstResponder === panel.webView)
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
 
     @MainActor
-    func testExplicitWebViewFocusPromotesWrapperToWebContentResponder() throws {
+    func testExplicitWebViewFocusKeepsWrapperAsNativeFocusOwner() throws {
         let panel = BrowserPanel(workspaceId: UUID())
         let window = BrowserPanelKeyStateTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
@@ -966,8 +966,8 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
         cmuxWebView.allowsFirstResponderAcquisition = false
 
         XCTAssertTrue(panel.requestExplicitWebViewFocus())
-        XCTAssertTrue(window.firstResponder === contentResponder)
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
+        XCTAssertTrue(window.firstResponder === panel.webView)
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
 
@@ -1086,7 +1086,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
 
         let nilRequestsBeforeReassert = window.nilFirstResponderRequestCount
         XCTAssertTrue(panel.reassertWebContentFocusAfterWindowActivation(in: window, reason: "test"))
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
         XCTAssertEqual(window.nilFirstResponderRequestCount, nilRequestsBeforeReassert)
         XCTAssertTrue(cmuxWebView.allowsFirstResponderAcquisition)
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
@@ -1170,7 +1170,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
     }
 
     @MainActor
-    func testKeyboardInputRepairPromotesFocusedWrapperWithoutNilResponderBounce() throws {
+    func testKeyboardInputRepairLeavesFocusedWrapperAlone() throws {
         let panel = BrowserPanel(workspaceId: UUID())
         let window = BrowserPanelKeyStateTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
@@ -1198,7 +1198,7 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
 
         cmuxWebView.allowsFirstResponderAcquisition = false
         let nilRequestsBeforeDefaultRepair = window.nilFirstResponderRequestCount
-        XCTAssertTrue(
+        XCTAssertFalse(
             panel.repairWebContentFocusForKeyboardInput(
                 in: window,
                 reason: "test",
@@ -1206,18 +1206,18 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
             )
         )
         XCTAssertEqual(window.nilFirstResponderRequestCount, nilRequestsBeforeDefaultRepair)
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
 
         XCTAssertFalse(panel.repairWebContentFocusForKeyboardInput(in: window, reason: "test"))
 
-        XCTAssertTrue(cmuxWebView.allowsFirstResponderAcquisition)
+        XCTAssertFalse(cmuxWebView.allowsFirstResponderAcquisition)
         XCTAssertEqual(window.nilFirstResponderRequestCount, nilRequestsBeforeDefaultRepair)
         XCTAssertTrue(panel.hasWebViewFirstResponder(in: window))
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
 
     @MainActor
-    func testKeyboardInputRepairPromotesFocusedWrapperToWebContentWithoutWrapperReactivation() throws {
+    func testKeyboardInputRepairRehomesInternalResponderToWrapperWithoutNilBounce() throws {
         let panel = BrowserPanel(workspaceId: UUID())
         let window = BrowserPanelKeyStateTestWindow(
             contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
@@ -1244,16 +1244,16 @@ final class BrowserPanelFindFocusRequestTests: XCTestCase {
 
         let cmuxWebView = try XCTUnwrap(panel.webView as? CmuxWebView)
         cmuxWebView.allowsFirstResponderAcquisition = true
-        XCTAssertTrue(window.makeFirstResponder(panel.webView))
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
+        XCTAssertTrue(window.makeFirstResponder(contentResponder))
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
 
         cmuxWebView.allowsFirstResponderAcquisition = false
         let nilRequestsBeforeRepair = window.nilFirstResponderRequestCount
         XCTAssertTrue(panel.repairWebContentFocusForKeyboardInput(in: window, reason: "test"))
 
         XCTAssertEqual(window.nilFirstResponderRequestCount, nilRequestsBeforeRepair)
-        XCTAssertTrue(window.firstResponder === contentResponder)
-        XCTAssertEqual(panel.actualFocus(in: window), .browserWebContent(panel.id))
+        XCTAssertTrue(window.firstResponder === panel.webView)
+        XCTAssertEqual(panel.actualFocus(in: window), .browserWebViewWrapper(panel.id))
         XCTAssertEqual(panel.captureFocusIntent(in: window), .browser(.webView))
     }
 

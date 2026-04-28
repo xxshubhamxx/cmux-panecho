@@ -2746,6 +2746,101 @@ final class BrowserIMEKeyDownRoutingTests: XCTestCase {
     }
 
     @MainActor
+    func testWebViewKeyDownForwardsPlainSpaceToContentCandidateWhenWrapperIsFirstResponder() {
+        _ = NSApplication.shared
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 420),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        window.contentView = container
+
+        let webView = CmuxWebView(frame: container.bounds, configuration: WKWebViewConfiguration())
+        webView.autoresizingMask = [.width, .height]
+        webView.allowsFirstResponderAcquisition = true
+        container.addSubview(webView)
+
+        let responder = BrowserMarkedTextProbeTextView(frame: NSRect(x: 0, y: 0, width: 32, height: 20))
+        webView.addSubview(responder)
+
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+
+        XCTAssertTrue(window.makeFirstResponder(webView))
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: " ",
+            charactersIgnoringModifiers: " ",
+            isARepeat: false,
+            keyCode: 49
+        ) else {
+            XCTFail("Failed to construct Space event")
+            return
+        }
+
+        webView.keyDown(with: event)
+
+        XCTAssertTrue(window.firstResponder === webView)
+        XCTAssertEqual(responder.keyDownEvents.count, 1)
+        XCTAssertEqual(responder.keyDownEvents.first?.characters, " ")
+    }
+
+    @MainActor
+    func testWebViewKeyDownDoesNotForwardPlainLettersToContentCandidate() {
+        _ = NSApplication.shared
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 420),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: window.contentRect(forFrameRect: window.frame))
+        window.contentView = container
+
+        let webView = CmuxWebView(frame: container.bounds, configuration: WKWebViewConfiguration())
+        webView.autoresizingMask = [.width, .height]
+        webView.allowsFirstResponderAcquisition = true
+        container.addSubview(webView)
+
+        let responder = BrowserMarkedTextProbeTextView(frame: NSRect(x: 0, y: 0, width: 32, height: 20))
+        webView.addSubview(responder)
+
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+
+        XCTAssertTrue(window.makeFirstResponder(webView))
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "a",
+            charactersIgnoringModifiers: "a",
+            isARepeat: false,
+            keyCode: 0
+        ) else {
+            XCTFail("Failed to construct letter event")
+            return
+        }
+
+        webView.keyDown(with: event)
+
+        XCTAssertTrue(window.firstResponder === webView)
+        XCTAssertEqual(responder.keyDownEvents.count, 0)
+    }
+
+    @MainActor
     func testWindowPerformKeyEquivalentDoesNotForwardReturnDuringMarkedTextComposition() {
         _ = NSApplication.shared
         AppDelegate.installWindowResponderSwizzlesForTesting()
