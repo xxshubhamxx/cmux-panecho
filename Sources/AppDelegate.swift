@@ -929,6 +929,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         AppIconLaunchState.markDidFinishLaunching()
         syncActivationPolicy()
 
+        // Privacy fail-closed net: in PRIVACY_MODE, any URLSession traffic to a
+        // non-loopback host is rejected by URLProtocol before it reaches the
+        // network. Install before any feature that may issue a request.
+        PrivacyEgressGuard.installIfNeeded()
+
         claimAuthCallbackURLSchemes()
 
         // Install the Feed (workstream) store. Separate from the transport

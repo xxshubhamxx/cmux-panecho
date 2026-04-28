@@ -2,10 +2,14 @@ import Foundation
 
 /// Privacy-mode-only outbound egress guard.
 ///
-/// When `PRIVACY_MODE` is enabled (Panecho), block all `URLSession` traffic to
-/// non-loopback network destinations, regardless of feature flags or runtime
-/// settings. This provides a fail-closed safety net in addition to per-feature
-/// privacy checks.
+/// When `PRIVACY_MODE` is enabled (Panecho), block traffic to non-loopback
+/// network destinations on every `URLSession` that picks up the global
+/// `URLProtocol` registry — which means `URLSession.shared` and any session
+/// built from `URLSessionConfiguration.default`. Sessions built from
+/// `URLSessionConfiguration.ephemeral` or `.background` ignore the registry,
+/// so any caller that constructs an ephemeral session MUST include its own
+/// `guard !PrivacyMode.isEnabled` short-circuit. This guard is a fail-closed
+/// safety net in addition to per-feature privacy checks, not a substitute.
 enum PrivacyEgressGuard {
     private static let localhostNames: Set<String> = [
         "localhost",
