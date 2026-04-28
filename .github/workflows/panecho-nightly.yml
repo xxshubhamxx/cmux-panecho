@@ -86,8 +86,8 @@ jobs:
             -destination 'generic/platform=macOS' \
             -clonedSourcePackagesDirPath .spm-cache \
             -xcconfig Config/PrivacyOverrides.xcconfig \
-            ARCHS="arm64 x86_64" \
-            ONLY_ACTIVE_ARCH=NO \
+            ARCHS="arm64" \
+            ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
@@ -122,9 +122,9 @@ jobs:
           echo "Ghostty helper architectures: $HELPER_ARCHS"
           [[ "$APP_NAME" == "Panecho" ]]
           [[ "$APP_DISPLAY_NAME" == "Panecho" ]]
-          [[ "$APP_ARCHS" == *arm64* && "$APP_ARCHS" == *x86_64* ]]
-          [[ "$CLI_ARCHS" == *arm64* && "$CLI_ARCHS" == *x86_64* ]]
-          [[ "$HELPER_ARCHS" == *arm64* && "$HELPER_ARCHS" == *x86_64* ]]
+          [[ "$APP_ARCHS" == "arm64" ]]
+          [[ "$CLI_ARCHS" == "arm64" ]]
+          [[ "$HELPER_ARCHS" == "arm64" ]]
 
       - name: Build remote daemon assets
         run: |

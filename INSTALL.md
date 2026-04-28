@@ -33,7 +33,7 @@ If `xcode-select -p` points at Command Line Tools instead of full Xcode, use a f
 PANECHO_RELEASE_REPO=YOUR-ORG/YOUR-PANECHO-FORK ./scripts/install-panecho.sh
 ```
 
-That path avoids both local full Xcode and a local Go toolchain.
+That path avoids both local full Xcode and a local Go toolchain. The workflow is verified for Apple Silicon and publishes an arm64 `Panecho.app` package for this machine class.
 
 If you want the same experience without cloning the repo first, point the installer at your fork explicitly:
 

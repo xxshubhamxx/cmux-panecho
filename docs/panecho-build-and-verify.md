@@ -37,7 +37,7 @@ On a machine that only has Command Line Tools, the verified path is:
 PANECHO_RELEASE_REPO=YOUR-ORG/YOUR-PANECHO-FORK ./scripts/install-panecho.sh
 ```
 
-That keeps the build on GitHub-hosted macOS while the local machine only handles download + install.
+That keeps the build on GitHub-hosted macOS while the local machine only handles download + install. The current hosted prerelease path is verified for Apple Silicon (`arm64`).
 
 For a remote one-liner without cloning first:
 
