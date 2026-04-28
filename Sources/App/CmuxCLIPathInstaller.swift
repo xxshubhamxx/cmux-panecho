@@ -24,13 +24,19 @@ struct CmuxCLIPathInstaller {
         var errorDescription: String? {
             switch self {
             case .bundledCLIMissing(let expectedPath):
-                return "Bundled cmux CLI was not found at \(expectedPath)."
+				return privacyModeBranded(
+					"Bundled Panecho CLI was not found at \(expectedPath).",
+					stable: "Bundled cmux CLI was not found at \(expectedPath)."
+				)
             case .destinationParentNotDirectory(let path):
                 return "Expected \(path) to be a directory."
             case .destinationIsDirectory(let path):
                 return "\(path) is a directory. Remove or rename it and try again."
             case .installVerificationFailed(let path):
-                return "Installed symlink at \(path) did not point to the bundled cmux CLI."
+				return privacyModeBranded(
+					"Installed symlink at \(path) did not point to the bundled Panecho CLI.",
+					stable: "Installed symlink at \(path) did not point to the bundled cmux CLI."
+				)
             case .uninstallVerificationFailed(let path):
                 return "Failed to remove \(path)."
             case .privilegedCommandFailed(let message):

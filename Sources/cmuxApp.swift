@@ -1485,7 +1485,10 @@ private struct SettingsAboutTitlebarDebugView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Toggle("Enable Debug Overrides", isOn: overridesEnabled)
 
-                Text("When disabled, cmux uses normal default titlebar behavior for this window.")
+                Text(privacyModeBranded(
+                    "When disabled, Panecho uses normal default titlebar behavior for this window.",
+                    stable: "When disabled, cmux uses normal default titlebar behavior for this window."
+                ))
                     .font(.caption)
                     .foregroundColor(.secondary)
 

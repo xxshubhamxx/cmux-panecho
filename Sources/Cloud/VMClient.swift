@@ -10,16 +10,27 @@ enum VMClientError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .notSignedIn:
-            return "Not signed in. Run `cmux auth login` first."
+            return privacyModeBranded(
+                "Not signed in. Run `panecho auth login` first.",
+                stable: "Not signed in. Run `cmux auth login` first."
+            )
         case .privacyModeDisabled:
             return "Panecho privacy mode disables the cloud VM backend."
         case .backendUnreachable(let url, let detail):
-            return """
+            return privacyModeBranded(
+                """
+                Cannot reach Panecho backend at \(url). Is the dev server running?
+                  • In this shell: export CMUX_VM_API_BASE_URL=http://localhost:<port>
+                  • Then relaunch the Panecho app so it inherits the env.
+                (underlying: \(detail))
+                """,
+                stable: """
                 Cannot reach cmux backend at \(url). Is the dev server running?
                   • In this shell: export CMUX_VM_API_BASE_URL=http://localhost:<port>
                   • Then relaunch the cmux app so it inherits the env.
                 (underlying: \(detail))
                 """
+            )
         case .httpStatus(let code, let body):
             return "HTTP \(code): \(body)"
         case .malformedResponse(let message):
