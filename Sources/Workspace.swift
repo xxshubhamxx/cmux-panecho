@@ -5126,6 +5126,27 @@ final class WorkspaceRemoteSessionController {
         remoteDaemonManifest(from: Bundle.main.infoDictionary)
     }
 
+    private static func bundledRemoteDaemonBinaryURL(
+        version: String,
+        goOS: String,
+        goArch: String,
+        bundle: Bundle = .main,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard let resourceURL = bundle.resourceURL else { return nil }
+        let bundledURL = resourceURL
+            .appendingPathComponent("remote-daemons", isDirectory: true)
+            .appendingPathComponent(version, isDirectory: true)
+            .appendingPathComponent("\(goOS)-\(goArch)", isDirectory: true)
+            .appendingPathComponent("cmuxd-remote", isDirectory: false)
+
+        guard fileManager.fileExists(atPath: bundledURL.path),
+              fileManager.isExecutableFile(atPath: bundledURL.path) else {
+            return nil
+        }
+        return bundledURL
+    }
+
     private static func remoteDaemonCacheRoot(fileManager: FileManager = .default) throws -> URL {
         let appSupportRoot = try fileManager.url(
             for: .applicationSupportDirectory,
@@ -5159,7 +5180,7 @@ final class WorkspaceRemoteSessionController {
     }
 
     private static func allowLocalDaemonBuildFallback(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
-        environment["CMUX_REMOTE_DAEMON_ALLOW_LOCAL_BUILD"] == "1"
+        PrivacyMode.isEnabled || environment["CMUX_REMOTE_DAEMON_ALLOW_LOCAL_BUILD"] == "1"
     }
 
     private static func explicitRemoteDaemonBinaryURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
@@ -5181,6 +5202,7 @@ final class WorkspaceRemoteSessionController {
 
     /// Fetch the live manifest JSON from the release, returning nil on any failure.
     private static func fetchRemoteManifestLocked(releaseURL: String, version: String) -> WorkspaceRemoteDaemonManifest? {
+        guard !PrivacyMode.isEnabled else { return nil }
         guard let manifestURL = URL(string: "\(releaseURL)/cmuxd-remote-manifest.json") else { return nil }
         let request = NSMutableURLRequest(url: manifestURL)
         request.timeoutInterval = 15
@@ -5202,6 +5224,11 @@ final class WorkspaceRemoteSessionController {
     }
 
     private func downloadRemoteDaemonBinaryLocked(entry: WorkspaceRemoteDaemonManifest.Entry, version: String, releaseURL: String? = nil) throws -> URL {
+        guard !PrivacyMode.isEnabled else {
+            throw NSError(domain: "cmux.remote.daemon", code: 29, userInfo: [
+                NSLocalizedDescriptionKey: "Panecho privacy mode disables remote daemon downloads. Provide a local cmuxd-remote binary or build one from source.",
+            ])
+        }
         guard let url = URL(string: entry.downloadURL) else {
             throw NSError(domain: "cmux.remote.daemon", code: 25, userInfo: [
                 NSLocalizedDescriptionKey: "remote daemon manifest has an invalid download URL",
@@ -5285,6 +5312,19 @@ final class WorkspaceRemoteSessionController {
         if let manifest = Self.remoteDaemonManifest(),
            manifest.appVersion == version,
            let entry = manifest.entry(goOS: goOS, goArch: goArch) {
+            if let bundledURL = Self.bundledRemoteDaemonBinaryURL(
+                version: manifest.appVersion,
+                goOS: goOS,
+                goArch: goArch
+            ) {
+                let bundledSHA = try Self.sha256Hex(forFile: bundledURL)
+                if bundledSHA == entry.sha256.lowercased() {
+                    debugLog("remote.build.bundled path=\(bundledURL.path)")
+                    return bundledURL
+                }
+                debugLog("remote.build.bundled.invalid-sha path=\(bundledURL.path)")
+            }
+
             let cacheURL = try Self.remoteDaemonCachedBinaryURL(version: manifest.appVersion, goOS: goOS, goArch: goArch)
             if FileManager.default.fileExists(atPath: cacheURL.path) {
                 let cachedSHA = try Self.sha256Hex(forFile: cacheURL)
@@ -5295,9 +5335,13 @@ final class WorkspaceRemoteSessionController {
                 }
                 try? FileManager.default.removeItem(at: cacheURL)
             }
+            if PrivacyMode.isEnabled {
+                debugLog("remote.build.privacy-mode-local-fallback asset=\(entry.assetName)")
+            } else {
             let downloadedURL = try downloadRemoteDaemonBinaryLocked(entry: entry, version: manifest.appVersion, releaseURL: manifest.releaseURL)
             debugLog("remote.build.downloaded path=\(downloadedURL.path)")
             return downloadedURL
+            }
         }
 
         guard Self.allowLocalDaemonBuildFallback() else {
@@ -5331,6 +5375,12 @@ final class WorkspaceRemoteSessionController {
         env["GOOS"] = goOS
         env["GOARCH"] = goArch
         env["CGO_ENABLED"] = "0"
+        if PrivacyMode.isEnabled {
+            env["GOPROXY"] = "off"
+            env["GOSUMDB"] = "off"
+            let existingGoFlags = env["GOFLAGS"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            env["GOFLAGS"] = existingGoFlags.isEmpty ? "-mod=readonly" : "\(existingGoFlags) -mod=readonly"
+        }
         let ldflags = "-s -w -X main.version=\(version)"
         let result = try runProcess(
             executable: goBinary,
@@ -5342,8 +5392,14 @@ final class WorkspaceRemoteSessionController {
         )
         guard result.status == 0 else {
             let detail = Self.bestErrorLine(stderr: result.stderr, stdout: result.stdout) ?? "go build failed with status \(result.status)"
+            let description: String
+            if PrivacyMode.isEnabled {
+                description = "failed to build cmuxd-remote offline: \(detail). Pre-seed the Go module cache or set CMUX_REMOTE_DAEMON_BINARY to a trusted local helper."
+            } else {
+                description = "failed to build cmuxd-remote: \(detail)"
+            }
             throw NSError(domain: "cmux.remote.daemon", code: 23, userInfo: [
-                NSLocalizedDescriptionKey: "failed to build cmuxd-remote: \(detail)",
+                NSLocalizedDescriptionKey: description,
             ])
         }
         guard FileManager.default.isExecutableFile(atPath: output.path) else {

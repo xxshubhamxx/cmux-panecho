@@ -186,6 +186,11 @@ final class AuthManager: ObservableObject {
     private var webAuthSession: ASWebAuthenticationSession?
 
     func beginSignIn() {
+        guard !PrivacyMode.isEnabled else {
+            authLog("beginSignIn: blocked by privacy mode")
+            isLoading = false
+            return
+        }
         loginPollTask?.cancel()
         webAuthSession?.cancel()
         webAuthSession = nil
@@ -233,6 +238,7 @@ final class AuthManager: ObservableObject {
     /// dismissed/cancelled/error), or when the deadline elapses. No polling
     /// — the $isAuthenticated / $isLoading AsyncPublishers drive the wait.
     func beginSignInAndAwait(timeout: TimeInterval) async -> Bool {
+        if PrivacyMode.isEnabled { return false }
         if isAuthenticated { return true }
         beginSignIn()
         return await waitForSignInSettled(timeout: timeout)
@@ -374,6 +380,12 @@ final class AuthManager: ObservableObject {
         extraHeaders: [String: String] = [:],
         method: String = "POST"
     ) async throws -> [String: Any] {
+        guard !PrivacyMode.isEnabled else {
+            throw PrivacyMode.disabledNSError(
+                feature: "cloud authentication",
+                recoverySuggestion: "Use an internal identity provider integration approved for your Panecho deployment."
+            )
+        }
         var request = URLRequest(url: URL(string: url)!)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -573,7 +585,9 @@ final class AuthManager: ObservableObject {
     }
 
     func signOut() async {
-        try? await client.signOut()
+        if !PrivacyMode.isEnabled {
+            try? await client.signOut()
+        }
         await tokenStore.clear()
         clearSessionState(clearSelectedTeam: true)
     }
@@ -597,6 +611,12 @@ final class AuthManager: ObservableObject {
     /// on a refresh-token-only start and report "Not signed in" even though a valid session
     /// becomes available moments later (same class of race `auth.status` already guards).
     func currentTokens() async throws -> (accessToken: String, refreshToken: String) {
+        guard !PrivacyMode.isEnabled else {
+            throw PrivacyMode.disabledNSError(
+                feature: "cloud authentication",
+                recoverySuggestion: "This Panecho build does not issue external auth tokens."
+            )
+        }
         await awaitBootstrapped()
         let access = await tokenStore.currentAccessToken()
         let refresh = await tokenStore.currentRefreshToken()
@@ -610,6 +630,10 @@ final class AuthManager: ObservableObject {
     }
 
     private func restoreStoredSessionIfNeeded() async {
+        guard !PrivacyMode.isEnabled else {
+            clearSessionState(clearSelectedTeam: true)
+            return
+        }
         let accessToken = await tokenStore.currentAccessToken()
         let refreshToken = await tokenStore.currentRefreshToken()
         let hasAccessToken = accessToken != nil && !(accessToken?.isEmpty ?? true)
@@ -668,6 +692,13 @@ final class AuthManager: ObservableObject {
     }
 
     private func refreshSession() async throws {
+        guard !PrivacyMode.isEnabled else {
+            clearSessionState(clearSelectedTeam: true)
+            throw PrivacyMode.disabledNSError(
+                feature: "cloud authentication",
+                recoverySuggestion: "Panecho privacy builds do not restore external sessions."
+            )
+        }
         let user: CMUXAuthUser?
         do {
             user = try await client.currentUser()

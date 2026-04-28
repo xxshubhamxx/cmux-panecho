@@ -9207,7 +9207,11 @@ private struct SidebarTabItemSettingsSnapshot: Equatable {
         let showsLog = Self.bool(defaults: defaults, key: "sidebarShowLog", defaultValue: true)
         let showsProgress = Self.bool(defaults: defaults, key: "sidebarShowProgress", defaultValue: true)
         let showsBranchDirectory = Self.bool(defaults: defaults, key: "sidebarShowBranchDirectory", defaultValue: true)
-        let showsPullRequests = Self.bool(defaults: defaults, key: "sidebarShowPullRequest", defaultValue: true)
+        let showsPullRequests = Self.bool(
+            defaults: defaults,
+            key: "sidebarShowPullRequest",
+            defaultValue: PrivacyMode.defaultSidebarShowPullRequests
+        )
         let showsPorts = Self.bool(defaults: defaults, key: "sidebarShowPorts", defaultValue: true)
         visibleAuxiliaryDetails = SidebarWorkspaceAuxiliaryDetailVisibility.resolved(
             showMetadata: showsMetadata,
@@ -9982,6 +9986,12 @@ private enum FeedbackComposerClient {
         message: String,
         attachments: [FeedbackComposerAttachment]
     ) async throws {
+        guard !PrivacyMode.isEnabled else {
+            throw PrivacyMode.disabledNSError(
+                feature: "feedback uploads",
+                recoverySuggestion: "Use your internal support or issue-tracking channel instead."
+            )
+        }
         guard let endpointURL = FeedbackComposerSettings.endpointURL() else {
             throw FeedbackComposerSubmissionError.invalidEndpoint
         }

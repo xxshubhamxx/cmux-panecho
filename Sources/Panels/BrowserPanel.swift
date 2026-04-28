@@ -136,7 +136,7 @@ enum BrowserSearchSettings {
     static let searchEngineKey = "browserSearchEngine"
     static let searchSuggestionsEnabledKey = "browserSearchSuggestionsEnabled"
     static let defaultSearchEngine: BrowserSearchEngine = .google
-    static let defaultSearchSuggestionsEnabled: Bool = true
+    static let defaultSearchSuggestionsEnabled = PrivacyMode.defaultBrowserSearchSuggestionsEnabled
 
     static func currentSearchEngine(defaults: UserDefaults = .standard) -> BrowserSearchEngine {
         guard let raw = defaults.string(forKey: searchEngineKey),
@@ -147,6 +147,7 @@ enum BrowserSearchSettings {
     }
 
     static func currentSearchSuggestionsEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard !PrivacyMode.isEnabled else { return false }
         // Mirror @AppStorage behavior: bool(forKey:) returns false if key doesn't exist.
         // Default to enabled unless user explicitly set a value.
         if defaults.object(forKey: searchSuggestionsEnabledKey) == nil {
@@ -1628,6 +1629,7 @@ actor BrowserSearchSuggestionService {
     }
 
     private func fetchRemoteSuggestions(engine: BrowserSearchEngine, query: String) async -> [String] {
+        guard !PrivacyMode.isEnabled else { return [] }
         let url: URL?
         switch engine {
         case .google:
@@ -2773,7 +2775,9 @@ final class BrowserPanel: Panel, ObservableObject {
         bindWebView(webView)
         installDetachedDeveloperToolsWindowCloseObserver()
         applyBrowserThemeModeIfNeeded()
-        ReactGrabScriptLoader.prefetch()
+        if !PrivacyMode.isEnabled {
+            ReactGrabScriptLoader.prefetch()
+        }
         insecureHTTPAlertWindowProvider = { [weak self] in
             self?.webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow
         }

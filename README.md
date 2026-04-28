@@ -93,6 +93,8 @@ Sidebar shows git branch, linked PR status/number, working directory, listening 
 
 ## Install
 
+For the hardened `Panecho` fork built from this repository, see [`INSTALL.md`](INSTALL.md) for the one-command installer path. Once the fork publishes `panecho-nightly`, `./scripts/install-panecho.sh` installs the latest prebuilt `Panecho.app` without requiring local Xcode.
+
 ### DMG (recommended)
 
 <a href="https://github.com/manaflow-ai/cmux/releases/latest/download/cmux-macos.dmg">

@@ -1,0 +1,178 @@
+name: Panecho prerelease
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: panecho-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-panecho:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      ZIG_REQUIRED: 0.15.2
+      PANECHO_RELEASE_TAG: panecho-nightly
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          if [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
+            XCODE_DIR="/Applications/Xcode.app/Contents/Developer"
+          else
+            XCODE_APP="$(ls -d /Applications/Xcode*.app 2>/dev/null | head -n 1 || true)"
+            if [ -z "$XCODE_APP" ]; then
+              echo "No Xcode.app found under /Applications" >&2
+              exit 1
+            fi
+            XCODE_DIR="$XCODE_APP/Contents/Developer"
+          fi
+          echo "DEVELOPER_DIR=$XCODE_DIR" >> "$GITHUB_ENV"
+          export DEVELOPER_DIR="$XCODE_DIR"
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+
+      - name: Install Zig
+        run: |
+          set -euo pipefail
+          if command -v zig >/dev/null 2>&1 && zig version 2>/dev/null | grep -q "^${ZIG_REQUIRED}"; then
+            echo "zig ${ZIG_REQUIRED} already installed"
+            exit 0
+          fi
+          curl -fSL "https://ziglang.org/download/${ZIG_REQUIRED}/zig-aarch64-macos-${ZIG_REQUIRED}.tar.xz" -o /tmp/zig.tar.xz
+          tar xf /tmp/zig.tar.xz -C /tmp
+          sudo mkdir -p /usr/local/bin /usr/local/lib
+          sudo cp -f "/tmp/zig-aarch64-macos-${ZIG_REQUIRED}/zig" /usr/local/bin/zig
+          sudo cp -rf "/tmp/zig-aarch64-macos-${ZIG_REQUIRED}/lib" /usr/local/lib/zig
+          zig version
+
+      - name: Download pre-built GhosttyKit.xcframework
+        run: ./scripts/download-prebuilt-ghosttykit.sh
+
+      - name: Cache Swift packages
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: .spm-cache
+          key: panecho-spm-${{ hashFiles('GhosttyTabs.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            panecho-spm-
+
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: daemon/remote/go.mod
+
+      - name: Build Panecho.app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project GhosttyTabs.xcodeproj \
+            -scheme cmux \
+            -configuration Release \
+            -derivedDataPath build-panecho \
+            -destination 'generic/platform=macOS' \
+            -clonedSourcePackagesDirPath .spm-cache \
+            -xcconfig Config/PrivacyOverrides.xcconfig \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Verify Panecho app output
+        run: |
+          set -euo pipefail
+          APP_PATH="build-panecho/Build/Products/Release/Panecho.app"
+          APP_BINARY="$APP_PATH/Contents/MacOS/Panecho"
+          CLI_BINARY="$APP_PATH/Contents/Resources/bin/cmux"
+          HELPER_BINARY="$APP_PATH/Contents/Resources/bin/ghostty"
+          test -d "$APP_PATH"
+          test -x "$APP_BINARY"
+          test -x "$CLI_BINARY"
+          test -x "$HELPER_BINARY"
+          APP_ARCHS="$(lipo -archs "$APP_BINARY")"
+          CLI_ARCHS="$(lipo -archs "$CLI_BINARY")"
+          HELPER_ARCHS="$(lipo -archs "$HELPER_BINARY")"
+          echo "Panecho architectures: $APP_ARCHS"
+          echo "CLI architectures: $CLI_ARCHS"
+          echo "Ghostty helper architectures: $HELPER_ARCHS"
+          [[ "$APP_ARCHS" == *arm64* && "$APP_ARCHS" == *x86_64* ]]
+          [[ "$CLI_ARCHS" == *arm64* && "$CLI_ARCHS" == *x86_64* ]]
+          [[ "$HELPER_ARCHS" == *arm64* && "$HELPER_ARCHS" == *x86_64* ]]
+
+      - name: Build remote daemon assets
+        run: |
+          set -euo pipefail
+          APP_PATH="build-panecho/Build/Products/Release/Panecho.app"
+          APP_PLIST="$APP_PATH/Contents/Info.plist"
+          APP_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PLIST")
+          echo "PANECHO_APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          ./scripts/build_remote_daemon_release_assets.sh \
+            --version "$APP_VERSION" \
+            --release-tag "$PANECHO_RELEASE_TAG" \
+            --repo "${{ github.repository }}" \
+            --output-dir "panecho-remote-assets"
+          MANIFEST_JSON="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8")), separators=(",",":")))' panecho-remote-assets/cmuxd-remote-manifest.json)"
+          plutil -remove CMUXRemoteDaemonManifestJSON "$APP_PLIST" >/dev/null 2>&1 || true
+          plutil -insert CMUXRemoteDaemonManifestJSON -string "$MANIFEST_JSON" "$APP_PLIST"
+          for platform in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
+            target_dir="$APP_PATH/Contents/Resources/remote-daemons/$APP_VERSION/$platform"
+            mkdir -p "$target_dir"
+            cp "panecho-remote-assets/cmuxd-remote-$platform" "$target_dir/cmuxd-remote"
+            chmod 755 "$target_dir/cmuxd-remote"
+          done
+
+      - name: Package Panecho zip
+        run: |
+          set -euo pipefail
+          APP_PATH="build-panecho/Build/Products/Release/Panecho.app"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" panecho-macos.zip
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: panecho-${{ github.sha }}
+          path: |
+            panecho-macos.zip
+            panecho-remote-assets/cmuxd-remote-*
+          if-no-files-found: error
+
+      - name: Move panecho-nightly tag
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$PANECHO_RELEASE_TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$PANECHO_RELEASE_TAG" --force
+
+      - name: Publish panecho-nightly prerelease
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        with:
+          tag_name: panecho-nightly
+          target_commitish: ${{ github.sha }}
+          name: Panecho Nightly
+          prerelease: true
+          make_latest: false
+          body: |
+            Automated Panecho privacy-mode build for `${{ github.sha }}`.
+
+            Install with:
+
+            ```bash
+            ./scripts/install-panecho.sh
+            ```
+          files: |
+            panecho-macos.zip
+          overwrite_files: true

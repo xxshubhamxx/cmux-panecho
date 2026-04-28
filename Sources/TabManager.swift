@@ -1164,6 +1164,11 @@ class TabManager: ObservableObject {
     }
 
     private func updateWorkspacePullRequestPollTimer() {
+        guard !PrivacyMode.isEnabled else {
+            workspacePullRequestPollTimer?.cancel()
+            workspacePullRequestPollTimer = nil
+            return
+        }
         guard workspacePullRequestRefreshTask == nil else {
             workspacePullRequestPollTimer?.cancel()
             workspacePullRequestPollTimer = nil
@@ -1238,6 +1243,15 @@ class TabManager: ObservableObject {
         reason: String,
         allowCachedResultsOverride: Bool? = nil
     ) {
+        guard !PrivacyMode.isEnabled else {
+            for workspace in tabs {
+                for panelId in Array(workspace.panelPullRequests.keys) {
+                    workspace.clearPanelPullRequest(panelId: panelId)
+                }
+            }
+            resetWorkspacePullRequestRefreshState()
+            return
+        }
         let now = Date()
         var candidateSeeds: [WorkspacePullRequestCandidateSeed] = []
         var requestedKeys: [WorkspaceGitProbeKey] = []
@@ -1417,6 +1431,13 @@ class TabManager: ObservableObject {
         reason: String
     ) {
         let key = WorkspaceGitProbeKey(workspaceId: workspaceId, panelId: panelId)
+        guard !PrivacyMode.isEnabled else {
+            if let workspace = tabs.first(where: { $0.id == workspaceId }) {
+                workspace.clearPanelPullRequest(panelId: panelId)
+            }
+            clearWorkspacePullRequestTracking(for: key)
+            return
+        }
         let shouldBypassRepoCache = !Self.workspacePullRequestRefreshAllowsRepoCache(reason: reason)
         if shouldBypassRepoCache, workspacePullRequestRefreshTask != nil {
             workspacePullRequestFollowUpShouldBypassRepoCache = true

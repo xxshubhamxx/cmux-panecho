@@ -18,6 +18,10 @@ extension UpdateDriver: SPUUpdaterDelegate {
     }
 
     func feedURLString(for updater: SPUUpdater) -> String? {
+        guard !PrivacyMode.isEnabled else {
+            UpdateLogStore.shared.append("update feed disabled in privacy mode")
+            return nil
+        }
 #if DEBUG
         let env = ProcessInfo.processInfo.environment
         if let override = env["CMUX_UI_TEST_FEED_URL"], !override.isEmpty {

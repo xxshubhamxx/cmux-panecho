@@ -5014,11 +5014,41 @@ enum WelcomeSettings {
     static let shownKey = "cmuxWelcomeShown"
 }
 
+enum PrivacyMode {
+#if PRIVACY_MODE
+    static let isEnabled = true
+#else
+    static let isEnabled = false
+#endif
+
+    static let productName = isEnabled ? "Panecho" : "cmux"
+    static let defaultBrowserSearchSuggestionsEnabled = !isEnabled
+    static let defaultSidebarShowPullRequests = !isEnabled
+
+    static func disabledFeatureDescription(_ feature: String) -> String {
+        "\(productName) disables \(feature) in privacy mode."
+    }
+
+    static func disabledNSError(
+        feature: String,
+        recoverySuggestion: String? = nil
+    ) -> NSError {
+        var userInfo: [String: Any] = [
+            NSLocalizedDescriptionKey: disabledFeatureDescription(feature)
+        ]
+        if let recoverySuggestion, !recoverySuggestion.isEmpty {
+            userInfo[NSLocalizedRecoverySuggestionErrorKey] = recoverySuggestion
+        }
+        return NSError(domain: "panecho.privacy-mode", code: 1, userInfo: userInfo)
+    }
+}
+
 enum TelemetrySettings {
     static let sendAnonymousTelemetryKey = "sendAnonymousTelemetry"
-    static let defaultSendAnonymousTelemetry = true
+    static let defaultSendAnonymousTelemetry = !PrivacyMode.isEnabled
 
     static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+        guard !PrivacyMode.isEnabled else { return false }
         if defaults.object(forKey: sendAnonymousTelemetryKey) == nil {
             return defaultSendAnonymousTelemetry
         }
@@ -5193,6 +5223,7 @@ enum CmuxRuntimeDebugCapture {
     }
 
     private static let configuration: Configuration? = {
+        guard !PrivacyMode.isEnabled else { return nil }
         let env = ProcessInfo.processInfo.environment
         guard let baseURLString = env["CMUX_RUNTIME_DEBUG_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
               let baseURL = URL(string: baseURLString),
@@ -5216,6 +5247,7 @@ enum CmuxRuntimeDebugCapture {
         actual: String? = nil,
         data: [String: Any] = [:]
     ) {
+        guard !PrivacyMode.isEnabled else { return }
         guard let configuration else { return }
 
         var payload: [String: Any] = [
@@ -5346,7 +5378,8 @@ struct SettingsView: View {
     @AppStorage("sidebarSelectionColorHex") private var sidebarSelectionColorHex: String?
     @AppStorage("sidebarNotificationBadgeColorHex") private var sidebarNotificationBadgeColorHex: String?
     @AppStorage("sidebarShowBranchDirectory") private var sidebarShowBranchDirectory = true
-    @AppStorage("sidebarShowPullRequest") private var sidebarShowPullRequest = true
+    @AppStorage("sidebarShowPullRequest")
+    private var sidebarShowPullRequest = PrivacyMode.defaultSidebarShowPullRequests
     @AppStorage(BrowserLinkOpenSettings.openSidebarPullRequestLinksInCmuxBrowserKey)
     private var openSidebarPullRequestLinksInCmuxBrowser = BrowserLinkOpenSettings.defaultOpenSidebarPullRequestLinksInCmuxBrowser
     @AppStorage(BrowserLinkOpenSettings.openSidebarPortLinksInCmuxBrowserKey)
@@ -7511,7 +7544,7 @@ struct SettingsView: View {
         sidebarSelectionColorHex = nil
         sidebarNotificationBadgeColorHex = nil
         sidebarShowBranchDirectory = true
-        sidebarShowPullRequest = true
+        sidebarShowPullRequest = PrivacyMode.defaultSidebarShowPullRequests
         openSidebarPullRequestLinksInCmuxBrowser = BrowserLinkOpenSettings.defaultOpenSidebarPullRequestLinksInCmuxBrowser
         openSidebarPortLinksInCmuxBrowser = BrowserLinkOpenSettings.defaultOpenSidebarPortLinksInCmuxBrowser
         showShortcutHintsOnCommandHold = ShortcutHintDebugSettings.defaultShowHintsOnCommandHold

@@ -94,6 +94,7 @@ enum ReactGrabScriptLoader {
     private static var prefetchTask: Task<String?, Never>?
 
     static func prefetch() {
+        guard !PrivacyMode.isEnabled else { return }
         let version = ReactGrabSettings.configuredVersion
         // Invalidate cache if version changed.
         if cachedVersion != version {
@@ -110,6 +111,7 @@ enum ReactGrabScriptLoader {
     }
 
     static func fetch() async -> String? {
+        guard !PrivacyMode.isEnabled else { return nil }
         let version = ReactGrabSettings.configuredVersion
         if cachedVersion == version, let cached = cachedScript { return cached }
         prefetch()
@@ -117,6 +119,7 @@ enum ReactGrabScriptLoader {
     }
 
     private static func doFetch(version: String) async -> String? {
+        guard !PrivacyMode.isEnabled else { return nil }
         let url = ReactGrabSettings.scriptURL(for: version)
         do {
             let (data, _) = try await URLSession.shared.data(from: url)

@@ -451,6 +451,9 @@ struct BrowserPanelView: View {
     }
 
     private var remoteSuggestionsEnabled: Bool {
+        if PrivacyMode.isEnabled {
+            return false
+        }
         // Deterministic UI-test hook: force remote path on even if a persisted
         // setting disabled suggestions in previous sessions.
         if ProcessInfo.processInfo.environment["CMUX_UI_TEST_REMOTE_SUGGESTIONS_JSON"] != nil ||

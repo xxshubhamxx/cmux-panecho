@@ -2,6 +2,7 @@ import Foundation
 
 enum VMClientError: Error, CustomStringConvertible {
     case notSignedIn
+    case privacyModeDisabled
     case backendUnreachable(url: String, detail: String)
     case httpStatus(Int, String)
     case malformedResponse(String)
@@ -10,6 +11,8 @@ enum VMClientError: Error, CustomStringConvertible {
         switch self {
         case .notSignedIn:
             return "Not signed in. Run `cmux auth login` first."
+        case .privacyModeDisabled:
+            return "Panecho privacy mode disables the cloud VM backend."
         case .backendUnreachable(let url, let detail):
             return """
                 Cannot reach cmux backend at \(url). Is the dev server running?
@@ -231,6 +234,9 @@ actor VMClient {
         extraHeaders: [String: String] = [:],
         timeoutSeconds: TimeInterval? = nil
     ) async throws -> (Data, HTTPURLResponse) {
+        guard !PrivacyMode.isEnabled else {
+            throw VMClientError.privacyModeDisabled
+        }
         let tokens: (accessToken: String, refreshToken: String)
         do {
             tokens = try await AuthManager.shared.currentTokens()
