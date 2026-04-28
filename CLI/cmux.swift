@@ -15021,12 +15021,14 @@ struct CMUXCLI {
               signal.contains("rate limit") ||
               signal.contains("stream disconnected") ||
               signal.contains("connection") ||
-              signal.contains("unauthorized") ||
-              signal.contains("codex_error_info") else {
+              signal.contains("unauthorized") else {
             return nil
         }
         return CodexHookFailureCandidate(
-            message: message ?? additionalDetails ?? codexErrorInfo ?? "Codex reported an error",
+            message: message ?? additionalDetails ?? codexErrorInfo ?? String(
+                localized: "agent.codex.error.defaultMessage",
+                defaultValue: "Codex reported an error"
+            ),
             codexErrorInfo: codexErrorInfo,
             additionalDetails: additionalDetails,
             isStreamError: isStreamError
@@ -15051,15 +15053,15 @@ struct CMUXCLI {
             signal.contains("rate_limit") ||
             signal.contains("rate limit") ||
             signal.contains("credits") {
-            subtitle = "Rate limit"
-            statusValue = "Codex rate limit"
+            subtitle = String(localized: "agent.codex.error.subtitle.rateLimit", defaultValue: "Rate limit")
+            statusValue = String(localized: "agent.codex.error.status.rateLimit", defaultValue: "Codex rate limit")
         } else if signal.contains("unauthorized") ||
                     signal.contains("auth") ||
                     signal.contains("access token") ||
                     signal.contains("sign in") ||
                     signal.contains("login") {
-            subtitle = "Auth error"
-            statusValue = "Codex auth error"
+            subtitle = String(localized: "agent.codex.error.subtitle.auth", defaultValue: "Auth error")
+            statusValue = String(localized: "agent.codex.error.status.auth", defaultValue: "Codex auth error")
         } else if signal.contains("response_stream") ||
                     signal.contains("stream disconnected") ||
                     signal.contains("connection") ||
@@ -15067,11 +15069,11 @@ struct CMUXCLI {
                     signal.contains("offline") ||
                     signal.contains("timed out") ||
                     signal.contains("timeout") {
-            subtitle = "Network error"
-            statusValue = "Codex network error"
+            subtitle = String(localized: "agent.codex.error.subtitle.network", defaultValue: "Network error")
+            statusValue = String(localized: "agent.codex.error.status.network", defaultValue: "Codex network error")
         } else {
-            subtitle = "Error"
-            statusValue = "Codex error"
+            subtitle = String(localized: "agent.codex.error.subtitle.generic", defaultValue: "Error")
+            statusValue = String(localized: "agent.codex.error.status.generic", defaultValue: "Codex error")
         }
 
         let detail = candidate.additionalDetails ?? candidate.message
@@ -15127,7 +15129,7 @@ struct CMUXCLI {
             .appendingPathComponent("sessions", isDirectory: true)
         guard let enumerator = FileManager.default.enumerator(
             at: sessionsURL,
-            includingPropertiesForKeys: nil,
+            includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
             return nil
