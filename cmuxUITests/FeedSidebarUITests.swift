@@ -65,7 +65,7 @@ final class FeedSidebarUITests: XCTestCase {
             identifiers: ["FeedPermissionAllowOnceButton", "Allow Once", "Once"],
             timeout: 10
         ) else {
-            XCTFail("Allow Once button did not appear in Feed")
+            XCTFail("Allow Once button did not appear in Feed. socket outcome: \(replyPayload.immediateDescription())")
             return
         }
         allowButton.click()
@@ -135,6 +135,15 @@ final class FeedSidebarUITests: XCTestCase {
                               userInfo: [NSLocalizedDescriptionKey: "feed.push never returned"])
             }
             return try outcome!.get()
+        }
+
+        func immediateDescription() -> String {
+            do {
+                let result = try result(timeout: 0.5)
+                return "status=\(result.status) mode=\(result.mode)"
+            } catch {
+                return String(describing: error)
+            }
         }
     }
 
