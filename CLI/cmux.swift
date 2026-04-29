@@ -13430,6 +13430,12 @@ struct CMUXCLI {
                 client: client
             )
             _ = try sendV1Command("clear_notifications --tab=\(workspaceId)", client: client)
+            sendWorkspacePromptSubmit(
+                client: client,
+                workspaceId: workspaceId,
+                source: "claude",
+                parsedInput: parsedInput
+            )
             try setClaudeStatus(
                 client: client,
                 workspaceId: workspaceId,
@@ -15944,6 +15950,12 @@ export default CMUXSessionRestore;
                 _ = try? sendV1Command("set_agent_pid \(pidKey) \(pid) --tab=\(workspaceId)", client: client)
             }
             _ = try? sendV1Command("clear_notifications --tab=\(workspaceId)", client: client)
+            sendWorkspacePromptSubmit(
+                client: client,
+                workspaceId: workspaceId,
+                source: def.name,
+                parsedInput: input
+            )
             _ = try sendV1Command("set_status \(def.statusKey) Running --icon=bolt.fill --color=#4C8DFF --tab=\(workspaceId)", client: client)
 
         case .stop:
@@ -16209,6 +16221,26 @@ export default CMUXSessionRestore;
     }
 
     // MARK: - Feed telemetry helper
+
+    private func sendWorkspacePromptSubmit(
+        client: SocketClient,
+        workspaceId: String,
+        source: String,
+        parsedInput: ClaudeHookParsedInput
+    ) {
+        var params: [String: Any] = [
+            "workspace_id": workspaceId,
+            "source": source,
+        ]
+        if let prompt = feedPromptText(from: parsedInput.object) ?? parsedInput.rawFallback {
+            params["message"] = prompt
+        }
+        _ = try? client.sendV2(
+            method: "workspace.prompt_submit",
+            params: params,
+            responseTimeout: 1
+        )
+    }
 
     /// Non-blocking `feed.push` call used by the per-agent hook handlers
     /// so session-start / prompt-submit / stop events show up in Feed's

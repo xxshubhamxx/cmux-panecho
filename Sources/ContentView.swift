@@ -12296,6 +12296,7 @@ struct SidebarWorkspaceSnapshotBuilder {
         let remoteConnectionStatusText: String
         let remoteStateHelpText: String
         let copyableSidebarSSHError: String?
+        let latestSubmittedMessage: String?
         let metadataEntries: [SidebarStatusEntry]
         let metadataBlocks: [SidebarMetadataBlock]
         let latestLog: SidebarLogEntry?
@@ -12624,7 +12625,7 @@ private struct TabItemView: View, Equatable {
         let moveUpActionText = String(localized: "sidebar.workspace.moveUpAction", defaultValue: "Move Up")
         let moveDownActionText = String(localized: "sidebar.workspace.moveDownAction", defaultValue: "Move Down")
         let latestNotificationSubtitle = latestNotificationText
-        let effectiveSubtitle = latestNotificationSubtitle
+        let effectiveSubtitle = latestNotificationSubtitle ?? workspaceSnapshot.latestSubmittedMessage
         let detailVisibility = visibleAuxiliaryDetails
 
         VStack(alignment: .leading, spacing: 4) {
@@ -13613,6 +13614,7 @@ private struct TabItemView: View, Equatable {
             remoteConnectionStatusText: remoteConnectionStatusText,
             remoteStateHelpText: remoteStateHelpText,
             copyableSidebarSSHError: copyableSidebarSSHError,
+            latestSubmittedMessage: tab.latestSubmittedMessage,
             metadataEntries: detailVisibility.showsMetadata ? tab.sidebarStatusEntriesInDisplayOrder() : [],
             metadataBlocks: detailVisibility.showsMetadata ? tab.sidebarMetadataBlocksInDisplayOrder() : [],
             latestLog: detailVisibility.showsLog ? tab.logEntries.last : nil,

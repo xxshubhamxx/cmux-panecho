@@ -2238,6 +2238,8 @@ class TerminalController {
             return v2Result(id: id, self.v2WorkspaceMoveToWindow(params: params))
         case "workspace.reorder":
             return v2Result(id: id, self.v2WorkspaceReorder(params: params))
+        case "workspace.prompt_submit":
+            return v2Result(id: id, self.v2WorkspacePromptSubmit(params: params))
         case "workspace.rename":
             return v2Result(id: id, self.v2WorkspaceRename(params: params))
         case "workspace.action":
@@ -2648,6 +2650,7 @@ class TerminalController {
             "workspace.close",
             "workspace.move_to_window",
             "workspace.reorder",
+            "workspace.prompt_submit",
             "workspace.rename",
             "workspace.action",
             "workspace.next",
@@ -3919,6 +3922,54 @@ class TerminalController {
             "index": v2OrNull(newIndex)
         ])
     }
+
+    private func v2WorkspacePromptSubmit(params: [String: Any]) -> V2CallResult {
+        guard let tabManager = v2ResolveTabManager(params: params) else {
+            return .err(code: "unavailable", message: "TabManager not available", data: nil)
+        }
+        guard let workspaceId = v2UUID(params, "workspace_id") else {
+            return .err(code: "invalid_params", message: "Missing or invalid workspace_id", data: nil)
+        }
+
+        let message = v2RawString(params, "message")
+            ?? v2RawString(params, "prompt")
+            ?? v2RawString(params, "text")
+            ?? v2RawString(params, "body")
+        let iMessageModeEnabled = IMessageModeSettings.isEnabled()
+        var outcome: (messageRecorded: Bool, reordered: Bool, index: Int)?
+        var preview: String?
+
+        // Socket handlers run off the main thread; prompt submit mutates
+        // @Published workspace/sidebar state and workspace ordering.
+        v2MainSync {
+            outcome = tabManager.handlePromptSubmit(
+                workspaceId: workspaceId,
+                message: message,
+                iMessageModeEnabled: iMessageModeEnabled
+            )
+            if iMessageModeEnabled {
+                preview = tabManager.tabs.first(where: { $0.id == workspaceId })?.latestSubmittedMessage
+            }
+        }
+
+        guard let outcome else {
+            return .err(code: "not_found", message: "Workspace not found", data: ["workspace_id": workspaceId.uuidString])
+        }
+
+        let windowId = v2ResolveWindowId(tabManager: tabManager)
+        return .ok([
+            "workspace_id": workspaceId.uuidString,
+            "workspace_ref": v2Ref(kind: .workspace, uuid: workspaceId),
+            "window_id": v2OrNull(windowId?.uuidString),
+            "window_ref": v2Ref(kind: .window, uuid: windowId),
+            "i_message_mode_enabled": iMessageModeEnabled,
+            "message_recorded": outcome.messageRecorded,
+            "message_preview": v2OrNull(preview),
+            "reordered": outcome.reordered,
+            "index": outcome.index
+        ])
+    }
+
     private func v2WorkspaceRename(params: [String: Any]) -> V2CallResult {
         guard let tabManager = v2ResolveTabManager(params: params) else {
             return .err(code: "unavailable", message: "TabManager not available", data: nil)
