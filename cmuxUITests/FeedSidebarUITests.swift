@@ -9,13 +9,14 @@ import XCTest
 final class FeedSidebarUITests: XCTestCase {
     private var socketPath = ""
     private let modeKey = "socketControlMode"
-    private let launchTag = "ui-tests-feed-sidebar"
+    private var launchTag = ""
 
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
+        launchTag = "ui-feed-\(UUID().uuidString.prefix(8))"
         socketPath = "/tmp/cmux-debug-\(UUID().uuidString).sock"
-        removeSocketFile()
+        removeSocketFiles()
     }
 
     func testFeedReceivesAndResolvesPermissionRequest() throws {
@@ -33,10 +34,11 @@ final class FeedSidebarUITests: XCTestCase {
             "cmux failed to launch for Feed UI test"
         )
 
-        XCTAssertTrue(
-            waitForSocketPong(timeout: 12),
-            "Expected control socket at \(socketPath)"
-        )
+        guard let resolvedPath = resolveSocketPath(timeout: 15) else {
+            XCTFail("Expected control socket at \(candidateSocketPaths().joined(separator: ", "))")
+            return
+        }
+        socketPath = resolvedPath
 
         // Reveal the right sidebar and toggle to Feed.
         var feedButton = waitForButton(
@@ -172,12 +174,38 @@ final class FeedSidebarUITests: XCTestCase {
     private func waitForSocketPong(timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if (try? sendLine("ping\n", responseTimeout: 1)) == "PONG" {
+            if (try? sendLine("ping\n", path: socketPath, responseTimeout: 1)) == "PONG" {
                 return true
             }
             Thread.sleep(forTimeInterval: 0.1)
         }
         return false
+    }
+
+    private func resolveSocketPath(timeout: TimeInterval) -> String? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            for candidate in candidateSocketPaths() {
+                if (try? sendLine("ping\n", path: candidate, responseTimeout: 1)) == "PONG" {
+                    return candidate
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return nil
+    }
+
+    private func candidateSocketPaths() -> [String] {
+        var seen = Set<String>()
+        var candidates: [String] = []
+        for path in [socketPath, taggedSocketPath()] where seen.insert(path).inserted {
+            candidates.append(path)
+        }
+        return candidates
+    }
+
+    private func taggedSocketPath() -> String {
+        "/tmp/cmux-debug-\(launchTag).sock"
     }
 
     private func sendFrame(
@@ -192,7 +220,7 @@ final class FeedSidebarUITests: XCTestCase {
         ]
         let data = try JSONSerialization.data(withJSONObject: frame)
         let line = (String(data: data, encoding: .utf8) ?? "{}") + "\n"
-        let response = try sendLine(line, responseTimeout: responseTimeout)
+        let response = try sendLine(line, path: socketPath, responseTimeout: responseTimeout)
         guard let respData = response.data(using: .utf8),
               let respObj = try JSONSerialization.jsonObject(with: respData) as? [String: Any]
         else {
@@ -205,7 +233,7 @@ final class FeedSidebarUITests: XCTestCase {
         return respObj
     }
 
-    private func sendLine(_ line: String, responseTimeout: TimeInterval) throws -> String {
+    private func sendLine(_ line: String, path: String, responseTimeout: TimeInterval) throws -> String {
         let sockFd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard sockFd != -1 else {
             throw NSError(
@@ -234,12 +262,12 @@ final class FeedSidebarUITests: XCTestCase {
         addr.sun_family = sa_family_t(AF_UNIX)
 
         let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
-        let bytes = Array(socketPath.utf8CString)
+        let bytes = Array(path.utf8CString)
         guard bytes.count <= maxLen else {
             throw NSError(
                 domain: "FeedSidebarUITests",
                 code: 5,
-                userInfo: [NSLocalizedDescriptionKey: "socket path too long: \(socketPath)"]
+                userInfo: [NSLocalizedDescriptionKey: "socket path too long: \(path)"]
             )
         }
         withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
@@ -314,7 +342,8 @@ final class FeedSidebarUITests: XCTestCase {
         return accumulator.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func removeSocketFile() {
+    private func removeSocketFiles() {
         try? FileManager.default.removeItem(atPath: socketPath)
+        try? FileManager.default.removeItem(atPath: taggedSocketPath())
     }
 }
