@@ -1403,6 +1403,7 @@ class TerminalController {
         "feed.permission.reply",
         "feed.question.reply",
         "feed.exit_plan.reply",
+        "system.top",
     ]
 
     private nonisolated static func executionPolicy(forV2Method method: String) -> SocketCommandExecutionPolicy {
@@ -1483,21 +1484,12 @@ class TerminalController {
             return v2Result(id: request.id, v2FeedQuestionReply(params: request.params))
         case "feed.exit_plan.reply":
             return v2Result(id: request.id, v2FeedExitPlanReply(params: request.params))
+        case "system.top":
+            return v2Result(id: request.id, v2SystemTop(params: request.params))
         case let method where method.hasPrefix("vm."):
             return socketWorkerCloudVMResponse(method: method, id: request.id, params: request.params)
         default:
             return v2Error(id: request.id, code: "method_not_found", message: "Unknown method")
-        }
-    }
-
-    private nonisolated func socketWorkerSystemTopResponseIfNeeded(for command: String) -> String? {
-        guard let request = parseV2SocketRequest(command),
-              request.method == "system.top" else {
-            return nil
-        }
-
-        return withSocketCommandPolicy(commandKey: request.method, isV2: true) {
-            v2Result(id: request.id, v2SystemTop(params: request.params))
         }
     }
 
@@ -1862,9 +1854,6 @@ class TerminalController {
         }
 
         if let response = socketWorkerV2ResponseIfNeeded(for: command) {
-            return response
-        }
-        if let response = socketWorkerSystemTopResponseIfNeeded(for: command) {
             return response
         }
 
@@ -2292,8 +2281,6 @@ class TerminalController {
             return v2Ok(id: id, result: v2Identify(params: params))
         case "system.tree":
             return v2Result(id: id, self.v2SystemTree(params: params))
-        case "system.top":
-            return v2Result(id: id, self.v2SystemTop(params: params))
         case "auth.login":
             return v2Ok(
                 id: id,
