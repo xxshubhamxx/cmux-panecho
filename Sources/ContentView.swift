@@ -12773,8 +12773,7 @@ private struct TabItemView: View, Equatable {
         let accessibilityHintText = String(localized: "sidebar.workspace.accessibilityHint", defaultValue: "Activate to focus this workspace. Drag to reorder, or use Move Up and Move Down actions.")
         let moveUpActionText = String(localized: "sidebar.workspace.moveUpAction", defaultValue: "Move Up")
         let moveDownActionText = String(localized: "sidebar.workspace.moveDownAction", defaultValue: "Move Down")
-        let latestNotificationSubtitle = latestNotificationText
-        let effectiveSubtitle = latestNotificationSubtitle
+        let effectiveSubtitle = latestNotificationText
         let detailVisibility = visibleAuxiliaryDetails
 
         VStack(alignment: .leading, spacing: 4) {
@@ -12876,7 +12875,6 @@ private struct TabItemView: View, Equatable {
                 }
             }
 
-            // Latest log entry
             if detailVisibility.showsLog, let latestLog = workspaceSnapshot.latestLog {
                 HStack(spacing: 4) {
                     Image(systemName: logLevelIcon(latestLog.level))
@@ -12891,7 +12889,6 @@ private struct TabItemView: View, Equatable {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            // Progress bar
             if detailVisibility.showsProgress, let progress = workspaceSnapshot.progress {
                 VStack(alignment: .leading, spacing: 2) {
                     GeometryReader { geo in
@@ -12973,6 +12970,7 @@ private struct TabItemView: View, Equatable {
             if detailVisibility.showsPullRequests, !workspaceSnapshot.pullRequestRows.isEmpty {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(workspaceSnapshot.pullRequestRows) { pullRequest in
+                        let pullRequestNumber = String(pullRequest.number)
                         Button(action: {
                             openPullRequestLink(pullRequest.url)
                         }) {
@@ -12981,7 +12979,7 @@ private struct TabItemView: View, Equatable {
                                     status: pullRequest.status,
                                     color: pullRequestForegroundColor
                                 )
-                                Text("\(pullRequest.label) #\(pullRequest.number)")
+                                Text("\(pullRequest.label) #\(pullRequestNumber)")
                                     .underline()
                                     .lineLimit(1)
                                     .truncationMode(.tail)
@@ -12994,7 +12992,7 @@ private struct TabItemView: View, Equatable {
                             .opacity(pullRequest.isStale ? 0.5 : 1)
                         }
                         .buttonStyle(.plain)
-                        .safeHelp(String(localized: "sidebar.pullRequest.openTooltip", defaultValue: "Open \(pullRequest.label) #\(pullRequest.number)"))
+                        .safeHelp(String(localized: "sidebar.pullRequest.openTooltip", defaultValue: "Open \(pullRequest.label) #\(pullRequestNumber)"))
                     }
                 }
             }
@@ -13003,14 +13001,15 @@ private struct TabItemView: View, Equatable {
             if detailVisibility.showsPorts, !workspaceSnapshot.listeningPorts.isEmpty {
                 HStack(spacing: 4) {
                     ForEach(workspaceSnapshot.listeningPorts, id: \.self) { port in
+                        let portText = String(port)
                         Button(action: {
                             openPortLink(port)
                         }) {
-                            Text(String(localized: "sidebar.port.label", defaultValue: ":\(port)"))
+                            Text(String(localized: "sidebar.port.label", defaultValue: ":\(portText)"))
                                 .underline()
                         }
                         .buttonStyle(.plain)
-                        .safeHelp(String(localized: "sidebar.port.openTooltip", defaultValue: "Open localhost:\(port)"))
+                        .safeHelp(String(localized: "sidebar.port.openTooltip", defaultValue: "Open localhost:\(portText)"))
                     }
                     Spacer(minLength: 0)
                 }
@@ -13147,6 +13146,7 @@ private struct TabItemView: View, Equatable {
             guard !contextMenuState.isVisible else { return }
             isHovering = hovering
         }
+        .safeHelp(workspaceSnapshot.title)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(accessibilityTitle))
         .accessibilityHint(Text(accessibilityHintText))
