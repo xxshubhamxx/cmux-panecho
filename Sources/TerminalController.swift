@@ -913,6 +913,18 @@ class TerminalController {
         return nil
     }
 
+    private nonisolated static func shouldReportAcceptedClientConfigFailure(stage: String, errnoCode: Int32) -> Bool {
+        guard stage == "accept_client_configure_send_timeout" ||
+            stage == "accept_client_configure_no_sigpipe" else {
+            return true
+        }
+        return errnoCode != EINVAL &&
+            errnoCode != ENOTCONN &&
+            errnoCode != ECONNRESET &&
+            errnoCode != EPIPE &&
+            errnoCode != EBADF
+    }
+
     private nonisolated static func bindListenerSocket(_ socket: Int32, path: String) -> SocketBindAttemptResult {
         if let errnoCode = ensureSocketParentDirectoryExists(path: path) {
             return .failure(path: path, stage: "create_directory", errnoCode: errnoCode)
@@ -1632,15 +1644,17 @@ class TerminalController {
             }
 
             if let failure = Self.configureAcceptedClientSocket(clientSocket) {
-                sentryBreadcrumb(
-                    "socket.listener.client_config.failed",
-                    category: "socket",
-                    data: socketListenerEventData(
-                        stage: failure.stage,
-                        errnoCode: failure.errnoCode,
-                        extra: ["generation": generation]
+                if Self.shouldReportAcceptedClientConfigFailure(stage: failure.stage, errnoCode: failure.errnoCode) {
+                    sentryBreadcrumb(
+                        "socket.listener.client_config.failed",
+                        category: "socket",
+                        data: socketListenerEventData(
+                            stage: failure.stage,
+                            errnoCode: failure.errnoCode,
+                            extra: ["generation": generation]
+                        )
                     )
-                )
+                }
                 close(clientSocket)
                 continue
             }

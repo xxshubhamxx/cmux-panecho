@@ -153,7 +153,7 @@ private final class CLISocketSentryTelemetry {
 #endif
     }
 
-    func captureError(stage: String, error: Error) {
+    func captureError(stage: String, error: Error, data: [String: Any] = [:]) {
         guard shouldEmit else { return }
 #if canImport(Sentry)
         Self.ensureStarted()
@@ -162,6 +162,9 @@ private final class CLISocketSentryTelemetry {
         context["stage"] = stage
         context["error"] = String(describing: error)
         for (key, value) in socketDiagnostics() {
+            context[key] = value
+        }
+        for (key, value) in data {
             context[key] = value
         }
         let subcommand = self.subcommand
@@ -305,6 +308,11 @@ private final class CLISocketSentryTelemetry {
             options.sendDefaultPii = true
             options.attachStacktrace = true
             options.tracesSampleRate = 0.0
+            options.enableAppHangTracking = false
+            options.enableWatchdogTerminationTracking = false
+            options.enableAutoSessionTracking = false
+            options.enableCaptureFailedRequests = false
+            options.enableMetricKit = false
         }
         started = true
     }
@@ -900,6 +908,7 @@ final class SocketClient {
 
     private let path: String
     private var socketFD: Int32 = -1
+    private var lastOperationTelemetry: [String: Any] = [:]
     private static let defaultResponseTimeoutSeconds: TimeInterval = 15.0
     private static let multilineResponseIdleTimeoutSeconds: TimeInterval = 0.12
     private static let maxSocketTimeoutSeconds: TimeInterval = 9_007_199_254_740_991
@@ -946,6 +955,10 @@ final class SocketClient {
         path
     }
 
+    func operationTelemetryContext() -> [String: Any] {
+        lastOperationTelemetry
+    }
+
     private var relayEndpoint: RelayEndpoint? {
         Self.parseRelayEndpoint(path)
     }
@@ -972,6 +985,10 @@ final class SocketClient {
         )
     }
 
+    private func recordOperation(_ operation: CLISocketOperationTelemetry.State) {
+        lastOperationTelemetry = operation.context()
+    }
+
     func connect() throws {
         if socketFD >= 0 { return }
         try connectOnce()
@@ -996,6 +1013,15 @@ final class SocketClient {
             }
         }
 
+        let initialResponseTimeout = responseTimeout ?? Self.responseTimeoutSeconds
+        var operation = CLISocketOperationTelemetry.State(
+            name: CLISocketOperationTelemetry.operationName(for: command),
+            timeout: initialResponseTimeout,
+            startedAt: Date(),
+            phase: .writeRequest
+        )
+        recordOperation(operation)
+
         let payload = command + "\n"
         try writeAll(
             Data(payload.utf8),
@@ -1005,9 +1031,11 @@ final class SocketClient {
 
         var data = Data()
         var sawNewline = false
-        let initialResponseTimeout = responseTimeout ?? Self.responseTimeoutSeconds
 
         while true {
+            operation.phase = sawNewline ? .readMultilineResponse : .waitForResponse
+            operation.sawNewline = sawNewline
+            recordOperation(operation)
             try configureReceiveTimeout(
                 sawNewline ? Self.multilineResponseIdleTimeoutSeconds : initialResponseTimeout
             )
@@ -1030,6 +1058,7 @@ final class SocketClient {
                 break
             }
             data.append(buffer, count: count)
+            operation.bytesRead += count
             if data.contains(UInt8(0x0A)) {
                 sawNewline = true
                 if Self.isCompleteSingleLineResponse(data) {
@@ -1037,6 +1066,10 @@ final class SocketClient {
                 }
             }
         }
+
+        operation.phase = .completed
+        operation.sawNewline = sawNewline
+        recordOperation(operation)
 
         guard var response = String(data: data, encoding: .utf8) else {
             throw CLIError(message: "Invalid UTF-8 response")
@@ -2214,12 +2247,14 @@ struct CMUXCLI {
         )
 
         let idFormat = try resolvedIDFormat(jsonOutput: jsonOutput, raw: idFormatArg)
+        let capturesSocketErrorsInsideCommand = command == "claude-hook" || command == "hooks"
 
-        // If the user explicitly targets a window, focus it first so commands route correctly.
-        if let windowId {
-            let normalizedWindow = try normalizeWindowHandle(windowId, client: client) ?? windowId
-            _ = try client.sendV2(method: "window.focus", params: ["window_id": normalizedWindow])
-        }
+        do {
+            // If the user explicitly targets a window, focus it first so commands route correctly.
+            if let windowId {
+                let normalizedWindow = try normalizeWindowHandle(windowId, client: client) ?? windowId
+                _ = try client.sendV2(method: "window.focus", params: ["window_id": normalizedWindow])
+            }
 
         switch command {
         case "ping":
@@ -3264,7 +3299,11 @@ struct CMUXCLI {
                 cliTelemetry.breadcrumb("claude-hook.completed")
             } catch {
                 cliTelemetry.breadcrumb("claude-hook.failure")
-                cliTelemetry.captureError(stage: "claude_hook_dispatch", error: error)
+                cliTelemetry.captureError(
+                    stage: "claude_hook_dispatch",
+                    error: error,
+                    data: client.operationTelemetryContext()
+                )
                 throw error
             }
 
@@ -3367,6 +3406,16 @@ struct CMUXCLI {
         default:
             print(usage())
             throw CLIError(message: "Unknown command: \(command)")
+        }
+        } catch {
+            if !capturesSocketErrorsInsideCommand {
+                cliTelemetry.captureError(
+                    stage: "socket_command",
+                    error: error,
+                    data: client.operationTelemetryContext()
+                )
+            }
+            throw error
         }
     }
 
@@ -19812,7 +19861,11 @@ export default CMUXSessionRestore;
                 telemetry.breadcrumb("hooks.feed.completed")
             } catch {
                 telemetry.breadcrumb("hooks.feed.failure")
-                telemetry.captureError(stage: "hooks_feed_dispatch", error: error)
+                telemetry.captureError(
+                    stage: "hooks_feed_dispatch",
+                    error: error,
+                    data: client.operationTelemetryContext()
+                )
                 throw error
             }
 
@@ -19823,7 +19876,11 @@ export default CMUXSessionRestore;
                 telemetry.breadcrumb("hooks.claude.completed")
             } catch {
                 telemetry.breadcrumb("hooks.claude.failure")
-                telemetry.captureError(stage: "hooks_claude_dispatch", error: error)
+                telemetry.captureError(
+                    stage: "hooks_claude_dispatch",
+                    error: error,
+                    data: client.operationTelemetryContext()
+                )
                 throw error
             }
 
@@ -19837,7 +19894,11 @@ export default CMUXSessionRestore;
                 telemetry.breadcrumb("hooks.\(def.name).completed")
             } catch {
                 telemetry.breadcrumb("hooks.\(def.name).failure")
-                telemetry.captureError(stage: "hooks_\(def.name)_dispatch", error: error)
+                telemetry.captureError(
+                    stage: "hooks_\(def.name)_dispatch",
+                    error: error,
+                    data: client.operationTelemetryContext()
+                )
                 throw error
             }
         }
