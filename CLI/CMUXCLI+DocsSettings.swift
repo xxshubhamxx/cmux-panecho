@@ -90,8 +90,8 @@ extension CMUXCLI {
             ],
             commands: [
                 "cmux codex install-hooks",
-                "cmux opencode install-hooks",
-                "cmux setup-hooks",
+                "cmux hooks opencode install",
+                "cmux hooks setup",
             ]
         ),
     ]
@@ -301,6 +301,13 @@ extension CMUXCLI {
                 jsonOutput: wantsJSON
             )
         }
+    }
+
+    func settingsCommandDoesNotNeedSocket(_ commandArgs: [String]) -> Bool {
+        let parsedArgs = docsSettingsArguments(commandArgs)
+        let subcommand = parsedArgs.arguments.first?.lowercased() ?? "open"
+        return hasHelpRequest(beforeSeparator: parsedArgs.head) ||
+            ["path", "paths", "docs", "documentation"].contains(subcommand)
     }
 
     func settingsUsage() -> String {

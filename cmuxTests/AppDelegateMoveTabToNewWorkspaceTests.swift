@@ -1,4 +1,3 @@
-import AppKit
 import XCTest
 
 #if canImport(cmux_DEV)
@@ -9,34 +8,12 @@ import XCTest
 
 @MainActor
 final class AppDelegateMoveTabToNewWorkspaceTests: XCTestCase {
-    private func makeMainWindow(id: UUID) -> NSWindow {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 320),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        window.identifier = NSUserInterfaceItemIdentifier("cmux.main.\(id.uuidString)")
-        return window
-    }
-
     func testMoveSurfaceToNewWorkspaceCreatesSinglePanelWorkspaceFromPanelTitle() throws {
-        _ = NSApplication.shared
         let app = AppDelegate()
-
         let windowId = UUID()
-        let window = makeMainWindow(id: windowId)
-        defer { window.close() }
-
         let manager = TabManager()
-        app.registerMainWindow(
-            window,
-            windowId: windowId,
-            tabManager: manager,
-            sidebarState: SidebarState(),
-            sidebarSelectionState: SidebarSelectionState(),
-            fileExplorerState: FileExplorerState()
-        )
+        app.registerMainWindowContextForTesting(windowId: windowId, tabManager: manager)
+        defer { app.unregisterMainWindowContextForTesting(windowId: windowId) }
 
         let sourceWorkspace = try XCTUnwrap(manager.selectedWorkspace)
         let sourcePaneId = try XCTUnwrap(sourceWorkspace.bonsplitController.allPaneIds.first)
@@ -64,23 +41,46 @@ final class AppDelegateMoveTabToNewWorkspaceTests: XCTestCase {
         XCTAssertEqual(result.paneId, destinationWorkspace.paneId(forPanelId: movedPanel.id)?.id)
     }
 
-    func testMoveSurfaceToNewWorkspaceRejectsOnlyPanel() throws {
-        _ = NSApplication.shared
+    func testMoveBrowserBonsplitTabToNewWorkspaceRequestsAddressBarFocus() throws {
         let app = AppDelegate()
-
         let windowId = UUID()
-        let window = makeMainWindow(id: windowId)
-        defer { window.close() }
-
         let manager = TabManager()
-        app.registerMainWindow(
-            window,
-            windowId: windowId,
-            tabManager: manager,
-            sidebarState: SidebarState(),
-            sidebarSelectionState: SidebarSelectionState(),
-            fileExplorerState: FileExplorerState()
+        app.registerMainWindowContextForTesting(windowId: windowId, tabManager: manager)
+        defer { app.unregisterMainWindowContextForTesting(windowId: windowId) }
+
+        let sourceWorkspace = try XCTUnwrap(manager.selectedWorkspace)
+        let sourcePaneId = try XCTUnwrap(sourceWorkspace.bonsplitController.allPaneIds.first)
+        let browserPanel = try XCTUnwrap(
+            sourceWorkspace.newBrowserSurface(
+                inPane: sourcePaneId,
+                url: try XCTUnwrap(URL(string: "https://example.com")),
+                focus: false
+            )
         )
+        let browserTabId = try XCTUnwrap(sourceWorkspace.surfaceIdFromPanelId(browserPanel.id)?.uuid)
+        browserPanel.noteWebViewFocused()
+        XCTAssertEqual(browserPanel.preferredFocusIntentForActivation(), .browser(.webView))
+
+        let result = try XCTUnwrap(app.moveBonsplitTabToNewWorkspace(
+            tabId: browserTabId,
+            focus: true,
+            focusWindow: false
+        ))
+
+        let destinationWorkspace = try XCTUnwrap(manager.tabs.first { $0.id == result.destinationWorkspaceId })
+        let movedBrowserPanel = try XCTUnwrap(destinationWorkspace.panels[browserPanel.id] as? BrowserPanel)
+        XCTAssertEqual(destinationWorkspace.panels.count, 1)
+        XCTAssertFalse(destinationWorkspace.panels.values.contains { $0 is TerminalPanel })
+        XCTAssertEqual(destinationWorkspace.focusedPanelId, movedBrowserPanel.id)
+        XCTAssertEqual(movedBrowserPanel.preferredFocusIntentForActivation(), .browser(.addressBar))
+    }
+
+    func testMoveSurfaceToNewWorkspaceRejectsOnlyPanel() throws {
+        let app = AppDelegate()
+        let windowId = UUID()
+        let manager = TabManager()
+        app.registerMainWindowContextForTesting(windowId: windowId, tabManager: manager)
+        defer { app.unregisterMainWindowContextForTesting(windowId: windowId) }
 
         let sourceWorkspace = try XCTUnwrap(manager.selectedWorkspace)
         let onlyPanelId = try XCTUnwrap(sourceWorkspace.focusedTerminalPanel?.id)

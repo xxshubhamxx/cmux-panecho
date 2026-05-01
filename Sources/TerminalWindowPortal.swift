@@ -157,7 +157,7 @@ final class WindowTerminalHostView: NSView {
 
             let dragPasteboardTypes = NSPasteboard(name: .drag).types
             let eventType = currentEvent?.type
-            let shouldPassThrough = DragOverlayRoutingPolicy.shouldPassThroughPortalHitTesting(
+            let shouldPassThrough = DragOverlayRoutingPolicy.shouldPassThroughTerminalPortalHitTesting(
                 pasteboardTypes: dragPasteboardTypes,
                 eventType: eventType
             )
@@ -446,6 +446,7 @@ final class WindowTerminalHostView: NSView {
     ) {
         let hasRelevantTypes = DragOverlayRoutingPolicy.hasBonsplitTabTransfer(pasteboardTypes)
             || DragOverlayRoutingPolicy.hasSidebarTabReorder(pasteboardTypes)
+            || DragOverlayRoutingPolicy.hasFileURL(pasteboardTypes)
         guard passThrough || hasRelevantTypes else { return }
 
         let targetClass = hitView.map { NSStringFromClass(type(of: $0)) } ?? "nil"

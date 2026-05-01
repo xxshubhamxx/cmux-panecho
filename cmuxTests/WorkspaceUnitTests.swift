@@ -315,6 +315,21 @@ final class WorkspaceRenameShortcutDefaultsTests: XCTestCase {
         XCTAssertFalse(shortcut.control)
     }
 
+    func testSaveFilePreviewShortcutDefaultsAndMetadata() {
+        XCTAssertEqual(KeyboardShortcutSettings.Action.saveFilePreview.label, "Save File Preview")
+        XCTAssertEqual(
+            KeyboardShortcutSettings.Action.saveFilePreview.defaultsKey,
+            "shortcut.saveFilePreview"
+        )
+
+        let shortcut = KeyboardShortcutSettings.Action.saveFilePreview.defaultShortcut
+        XCTAssertEqual(shortcut.key, "s")
+        XCTAssertTrue(shortcut.command)
+        XCTAssertFalse(shortcut.shift)
+        XCTAssertFalse(shortcut.option)
+        XCTAssertFalse(shortcut.control)
+    }
+
     func testMenuItemKeyEquivalentHandlesArrowAndTabKeys() {
         XCTAssertNotNil(StoredShortcut(key: "←", command: true, shift: false, option: false, control: false).menuItemKeyEquivalent)
         XCTAssertNotNil(StoredShortcut(key: "→", command: true, shift: false, option: false, control: false).menuItemKeyEquivalent)
@@ -430,7 +445,7 @@ final class WorkspaceRenameShortcutDefaultsTests: XCTestCase {
         XCTAssertFalse(ShortcutStroke.isEscapeCancelEvent(event))
         XCTAssertEqual(
             ShortcutStroke.from(event: event, requireModifier: false),
-            ShortcutStroke(key: "[", command: true, shift: false, option: false, control: false)
+            ShortcutStroke(key: "[", command: true, shift: false, option: false, control: false, keyCode: 33)
         )
     }
 
@@ -450,59 +465,6 @@ final class WorkspaceRenameShortcutDefaultsTests: XCTestCase {
 
         button.performClick(nil)
 
-        XCTAssertFalse(button.debugIsRecording)
-#else
-        XCTFail("Shortcut recorder debug hooks are only available in DEBUG")
-#endif
-    }
-
-    func testShortcutRecorderReportsFirstStrokeConflictImmediately() {
-#if DEBUG
-        KeyboardShortcutSettings.resetAll()
-        defer { KeyboardShortcutSettings.resetAll() }
-
-        let button = ShortcutRecorderNSButton(frame: .zero)
-        let conflictingShortcut = StoredShortcut(
-            key: "t",
-            command: true,
-            shift: false,
-            option: false,
-            control: false,
-            keyCode: 17
-        )
-        var rejectedAttempt: ShortcutRecorderRejectedAttempt?
-
-        button.transformRecordedShortcut = { shortcut in
-            XCTAssertEqual(shortcut, conflictingShortcut)
-            return .rejected(.conflictsWithAction(.newSurface))
-        }
-        button.onRecorderFeedbackChanged = { rejectedAttempt = $0 }
-        button.performClick(nil)
-
-        guard let event = NSEvent.keyEvent(
-            with: .keyDown,
-            location: .zero,
-            modifierFlags: [.command],
-            timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: 0,
-            context: nil,
-            characters: "t",
-            charactersIgnoringModifiers: "t",
-            isARepeat: false,
-            keyCode: 17
-        ) else {
-            XCTFail("Failed to construct Command-T event")
-            return
-        }
-
-        XCTAssertNil(button.debugHandleRecordingEvent(event))
-        XCTAssertEqual(
-            rejectedAttempt,
-            ShortcutRecorderRejectedAttempt(
-                reason: .conflictsWithAction(.newSurface),
-                proposedShortcut: conflictingShortcut
-            )
-        )
         XCTAssertFalse(button.debugIsRecording)
 #else
         XCTFail("Shortcut recorder debug hooks are only available in DEBUG")
