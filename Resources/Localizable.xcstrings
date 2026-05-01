@@ -83903,6 +83903,176 @@
         }
       }
     },
+    "shortcut.resetWorkspaceColor.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset Workspace Color"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色をリセット"
+          }
+        }
+      }
+    },
+    "shortcut.setWorkspaceColorRed.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Color: Red"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色: 赤"
+          }
+        }
+      }
+    },
+    "shortcut.setWorkspaceColorCrimson.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Color: Crimson"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色: クリムゾン"
+          }
+        }
+      }
+    },
+    "shortcut.setWorkspaceColorOrange.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Color: Orange"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色: オレンジ"
+          }
+        }
+      }
+    },
+    "shortcut.setWorkspaceColorAmber.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Color: Amber"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色: アンバー"
+          }
+        }
+      }
+    },
+    "shortcut.setWorkspaceColorOlive.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Color: Olive"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色: オリーブ"
+          }
+        }
+      }
+    },
+    "shortcut.setWorkspaceColorGreen.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Color: Green"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色: 緑"
+          }
+        }
+      }
+    },
+    "shortcut.setWorkspaceColorTeal.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Color: Teal"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色: ティール"
+          }
+        }
+      }
+    },
+    "shortcut.setWorkspaceColorAqua.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Color: Aqua"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色: アクア"
+          }
+        }
+      }
+    },
+    "shortcut.setWorkspaceColorBlue.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Color: Blue"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ワークスペース色: 青"
+          }
+        }
+      }
+    },
     "shortcut.showBrowserJSConsole.label": {
       "extractionState": "manual",
       "localizations": {

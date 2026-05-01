@@ -3862,6 +3862,17 @@ class TabManager: ObservableObject {
         tab.setCustomColor(color)
     }
 
+    func applyWorkspaceColor(_ color: String?, toWorkspaceIds workspaceIds: [UUID]) {
+        for workspaceId in workspaceIds {
+            setTabColor(tabId: workspaceId, color: color)
+        }
+    }
+
+    func applyWorkspacePaletteColor(named name: String, toWorkspaceIds workspaceIds: [UUID]) {
+        guard let color = WorkspaceTabColorSettings.currentColorHex(named: name) else { return }
+        applyWorkspaceColor(color, toWorkspaceIds: workspaceIds)
+    }
+
     func setWorkspaceTerminalScrollBarHidden(tabId: UUID, hidden: Bool) {
         guard let tab = tabs.first(where: { $0.id == tabId }) else { return }
         tab.setTerminalScrollBarHidden(hidden)

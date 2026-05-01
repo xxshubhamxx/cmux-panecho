@@ -1275,7 +1275,7 @@ final class CmuxSettingsFileStore {
                     "notificationBadgeColor": NSNull(),
                     "colors": Dictionary(
                         uniqueKeysWithValues: WorkspaceTabColorSettings.defaultPalette.map { ($0.name, $0.hex) }
-                    ),
+                    )
                 ],
             ],
             [
