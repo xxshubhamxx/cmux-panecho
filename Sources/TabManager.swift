@@ -2534,9 +2534,13 @@ class TabManager: ObservableObject {
         now: Date,
         allowCachedResults: Bool
     ) async -> [String: WorkspacePullRequestRepoFetchResult] {
+#if PRIVACY_MODE
+        return [:]
+#else
         guard !repoDirectoriesBySlug.isEmpty else { return [:] }
 
         let configuration = URLSessionConfiguration.ephemeral
+
         configuration.timeoutIntervalForRequest = max(Self.workspacePullRequestProbeTimeout, 8)
         configuration.timeoutIntervalForResource = max(Self.workspacePullRequestProbeTimeout, 8)
         let session = URLSession(configuration: configuration)
@@ -2575,6 +2579,7 @@ class TabManager: ObservableObject {
             results[repoSlug] = result
         }
         return results
+#endif
     }
 
     private nonisolated static func resolveWorkspacePullRequestRefreshResults(

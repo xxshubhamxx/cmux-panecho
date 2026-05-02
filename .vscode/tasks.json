@@ -1,0 +1,31 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Poll CI",
+			"type": "shell",
+			"command": "github_run_poller",
+			"isBackground": true,
+			"group": "test"
+		},
+		{
+			"label": "Run tests",
+			"type": "shell",
+			"command": "bash -c \"sh scripts/run-tests-v1.sh > /tmp/tests.log 2>&1\"",
+			"isBackground": true,
+			"group": "test"
+		},
+		{
+			"label": "Run scan",
+			"type": "shell",
+			"command": "python3 /tmp/scan.py > /Users/shubhamgarg/Desktop/cmux_clone/cmux-panecho/scan_output.txt",
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Run Python",
+			"type": "shell",
+			"command": "python3 fetch_ci.py"
+		}
+	]
+}
