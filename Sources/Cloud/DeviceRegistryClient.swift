@@ -42,6 +42,7 @@ final class DeviceRegistryClient {
     /// Inject the auth dependency and begin observing host-route changes. Call
     /// once at the composition root (after `auth` is constructed).
     func configure(auth: AuthCoordinator) {
+        guard !PrivacyMode.isEnabled else { return }
         self.auth = auth
         startObserving()
     }
@@ -87,6 +88,7 @@ final class DeviceRegistryClient {
     }
 
     private func registerIfRoutesChanged(routes: [CmxAttachRoute]) async {
+        guard !PrivacyMode.isEnabled else { return }
         guard let auth else { return }
         // Await tokens FIRST: this both gates on "signed in" and waits for launch
         // auth bootstrap. `resolvedTeamID` is derived from `availableTeams`, which

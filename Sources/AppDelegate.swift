@@ -1926,6 +1926,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         settingsRuntime: SettingsRuntime,
         auth: MacAuthComposition
     ) {
+        // Panecho: install the egress guard BEFORE any auth/network client starts.
+        // configure() runs synchronously from App.init (cmuxApp) ahead of
+        // applicationDidFinishLaunching, and the calls below (auth.start(), VMClient,
+        // PhonePushClient, PresenceHeartbeatClient, ...) can open connections to
+        // manaflow/cmux hosts. installIfNeeded() is idempotent (guarded by a once-flag),
+        // so the later call in applicationDidFinishLaunching remains a safe no-op.
+        PrivacyEgressGuard.installIfNeeded()
         self.tabManager = tabManager
         self.settingsRuntime = settingsRuntime
         self.notificationStore = notificationStore
@@ -8436,11 +8443,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc func applyUpdateIfAvailable(_ sender: Any?) {
+        // Panecho: never contact any update server in privacy mode (see checkForUpdates).
+        guard !PrivacyMode.isEnabled else { return }
         updateController.model.setOverrideState(nil)
         updateController.installUpdate()
     }
 
     @objc func attemptUpdate(_ sender: Any?) {
+        // Panecho: never contact any update server in privacy mode (see checkForUpdates).
+        guard !PrivacyMode.isEnabled else { return }
         updateController.model.setOverrideState(nil)
         updateController.attemptUpdate()
     }

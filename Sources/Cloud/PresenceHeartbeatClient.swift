@@ -43,6 +43,7 @@ final class PresenceHeartbeatClient {
     /// Inject the auth dependency and start (or arm) the heartbeat loop. Call
     /// once at the composition root, alongside ``DeviceRegistryClient``.
     func configure(auth: AuthCoordinator) {
+        guard !PrivacyMode.isEnabled else { return }
         self.auth = auth
         startObservingRoutes()
         if defaultsObserver == nil {
@@ -68,6 +69,7 @@ final class PresenceHeartbeatClient {
     /// every unclean path, the goodbye only makes clean quits flip offline
     /// immediately instead of within 45s.
     func appWillTerminate() {
+        guard !PrivacyMode.isEnabled else { return }
         guard loopTask != nil else { return }
         stopLoop()
         Task { await self.sendHeartbeat(stopping: true) }
@@ -127,6 +129,7 @@ final class PresenceHeartbeatClient {
     }
 
     private func evaluate() {
+        guard !PrivacyMode.isEnabled else { return }
         let shouldRun = auth != nil && isEnabled && Self.resolvedServiceURL() != nil
         if shouldRun && loopTask == nil {
             startLoop()
@@ -161,6 +164,7 @@ final class PresenceHeartbeatClient {
     // MARK: - Heartbeat
 
     private func sendHeartbeat(stopping: Bool) async {
+        guard !PrivacyMode.isEnabled else { return }
         guard let auth, let baseURL = Self.resolvedServiceURL() else { return }
         // Await tokens first, mirroring DeviceRegistryClient: gates on "signed
         // in" and on launch auth bootstrap so the team header resolves from a

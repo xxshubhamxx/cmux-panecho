@@ -280,6 +280,8 @@ actor VMClient {
     /// the composition root.
     @MainActor
     static func bootstrap(auth: AuthCoordinator, session: URLSession = .shared) {
+        // Construct the client even in privacy mode so VMClient.shared is never
+        // nil; every network method below hard-throws .privacyModeDisabled.
         shared = VMClient(session: session, auth: auth)
     }
 
@@ -295,6 +297,7 @@ actor VMClient {
     }
 
     func list() async throws -> [VMSummary] {
+        guard !PrivacyMode.isEnabled else { throw VMClientError.privacyModeDisabled }
         let (data, http) = try await request("GET", path: "/api/vm")
         try ensureOK(http, data: data)
         let obj = try decodeJSONObject(data)
@@ -318,6 +321,7 @@ actor VMClient {
     }
 
     func create(image: String? = nil, provider: String? = nil, idempotencyKey: String) async throws -> VMSummary {
+        guard !PrivacyMode.isEnabled else { throw VMClientError.privacyModeDisabled }
         var body: [String: Any] = [:]
         if let image { body["image"] = image }
         if let provider { body["provider"] = provider }
@@ -351,12 +355,14 @@ actor VMClient {
     }
 
     func destroy(id: String) async throws {
+        guard !PrivacyMode.isEnabled else { throw VMClientError.privacyModeDisabled }
         let encodedID = try pathSegment(id, fieldName: "vm id")
         let (data, http) = try await request("DELETE", path: "/api/vm/\(encodedID)")
         try ensureOK(http, data: data)
     }
 
     func openSSH(id: String) async throws -> VMSSHEndpoint {
+        guard !PrivacyMode.isEnabled else { throw VMClientError.privacyModeDisabled }
         let encodedID = try pathSegment(id, fieldName: "vm id")
         let (data, http) = try await request("POST", path: "/api/vm/\(encodedID)/ssh-endpoint", jsonBody: [:])
         try ensureOK(http, data: data)
@@ -365,6 +371,7 @@ actor VMClient {
     }
 
     func openAttach(id: String, requireDaemon: Bool = false) async throws -> VMAttachEndpoint {
+        guard !PrivacyMode.isEnabled else { throw VMClientError.privacyModeDisabled }
         let encodedID = try pathSegment(id, fieldName: "vm id")
         let (data, http) = try await request(
             "POST",
@@ -408,6 +415,7 @@ actor VMClient {
     }
 
     func exec(id: String, command: String, timeoutMs: Int = 30_000) async throws -> VMExecResult {
+        guard !PrivacyMode.isEnabled else { throw VMClientError.privacyModeDisabled }
         let body: [String: Any] = ["command": command, "timeoutMs": timeoutMs]
         let encodedID = try pathSegment(id, fieldName: "vm id")
         let (data, http) = try await request(

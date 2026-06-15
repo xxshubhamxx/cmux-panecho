@@ -59,6 +59,7 @@ final class PhonePushClient {
 
     /// Inject the auth dependency. Call once at the composition root.
     func configure(auth: AuthCoordinator) {
+        guard !PrivacyMode.isEnabled else { return }
         self.auth = auth
     }
 
@@ -115,6 +116,7 @@ final class PhonePushClient {
     ///   still-unread notification.
     @discardableResult
     func forward(_ notification: TerminalNotification, badgeCount: Int) -> Bool {
+        guard !PrivacyMode.isEnabled else { return false }
         guard Self.isForwardingEnabled else { return false }
 
         // Read-only burst-throttle check FIRST: a dictionary lookup that
@@ -178,6 +180,7 @@ final class PhonePushClient {
     /// grants the (strictly budgeted) background wake, and the app-foreground
     /// reconcile sweep heals anything iOS deferred. Carries only opaque UUIDs.
     func forwardDismissed(ids: [String], badgeCount: Int) {
+        guard !PrivacyMode.isEnabled else { return }
         guard Self.isForwardingEnabled, !ids.isEmpty else { return }
         pendingDismissedIDs.append(contentsOf: ids)
         pendingDismissBadgeCount = badgeCount
@@ -210,6 +213,7 @@ final class PhonePushClient {
     }
 
     private func send(_ payload: PhonePushPayload) async {
+        guard !PrivacyMode.isEnabled else { return }
         guard let auth else { return }
         let tokens: (accessToken: String, refreshToken: String)
         do {
