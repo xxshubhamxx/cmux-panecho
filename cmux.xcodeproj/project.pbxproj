@@ -4858,8 +4858,6 @@
 				minimumVersion = 2.5.1;
 			};
 		};
-		};
-		};
 		A5001292 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
