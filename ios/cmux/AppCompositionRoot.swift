@@ -1,16 +1,22 @@
 import CMUXMobileCore
 import CmuxMobileAnalytics
+import CmuxMobileShellModel
+import CmuxMobileSupport
 import CmuxMobileTransport
 import Foundation
 import SwiftUI
 import cmuxFeature
 
+#if DEBUG
+import CmuxMobileDiagnostics
+#endif
+
 /// Holds the de-singletonized graph the `cmuxApp` builds once at launch.
 ///
 /// Owns the mobile runtime, the auth composition (coordinator + push
-/// registration), the process-wide reachability monitor, and the shared push
-/// coordinator. Everything below the app shell receives these by injection
-/// instead of reaching for a singleton.
+/// registration), the process-wide reachability monitor, the shared push
+/// coordinator, and the mobile display settings. Everything below the app shell
+/// receives these by injection instead of reaching for a singleton.
 @MainActor
 final class AppCompositionRoot {
     let runtime: CMUXMobileRuntime
@@ -18,6 +24,25 @@ final class AppCompositionRoot {
     let reachability: any ReachabilityProviding
     let pushCoordinator: MobilePushCoordinator
     let analytics: MobileAnalyticsComposition
+    let displaySettings: MobileDisplaySettings
+    /// First-run onboarding "seen" flag, persisted to `UserDefaults.standard`.
+    /// Built with `forceSeen` set when a UI-test mock harness or a dogfood
+    /// auto-pair attach URL is active, so neither path is wedged behind the
+    /// one-time onboarding screen.
+    let onboardingStore: MobileOnboardingStore
+    /// The process-wide tailnet detector behind the shell UI's read-only
+    /// observing port, injected down so pairing and disconnected surfaces can
+    /// explain a Tailscale-off phone.
+    let tailscaleStatusMonitor: TailscaleStatusMonitorAdapter
+
+    #if DEBUG
+    /// The structured diagnostic log, built once here and injected into the
+    /// shell store. DEBUG-only: it backs the DEV dogfood feedback round-trip and
+    /// is not present in release builds. Its export header is stamped with the
+    /// same build identity as the string debug log so a submitted bundle proves
+    /// which reload it came from.
+    let diagnosticLog: DiagnosticLog
+    #endif
 
     init(
         runtime: CMUXMobileRuntime,
@@ -35,6 +60,23 @@ final class AppCompositionRoot {
             registration: auth.pushRegistration,
             analytics: analytics.emitter
         )
+        self.displaySettings = MobileDisplaySettings()
+        // Skip the one-time onboarding when a UI-test mock harness
+        // (`CMUX_UITEST_MOCK_DATA`/XCUITest) or a dogfood auto-pair attach URL is
+        // active: those launches expect to land on sign-in / add-device / a live
+        // workspace, not behind a manual tap-through. `forceSeen` never writes the
+        // real install's persisted flag.
+        let bypassOnboarding = UITestConfig.mockDataEnabled
+            || UITestConfig.dogfoodAttachURL != nil
+            || UITestConfig.attachURL != nil
+        self.onboardingStore = MobileOnboardingStore(
+            defaults: .standard,
+            forceSeen: bypassOnboarding
+        )
+        self.tailscaleStatusMonitor = TailscaleStatusMonitorAdapter(monitor: TailscaleStatusMonitor())
+        #if DEBUG
+        self.diagnosticLog = DiagnosticLog(buildStamp: MobileDebugLog.buildStamp)
+        #endif
     }
 
     /// The most recent scene phase, so a `.active` transition is classified as a

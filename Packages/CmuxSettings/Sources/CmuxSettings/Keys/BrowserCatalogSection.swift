@@ -4,26 +4,30 @@ import Foundation
 public struct BrowserCatalogSection: SettingCatalogSection {
     public let defaultSearchEngine = DefaultsKey<BrowserSearchEngine>(
         id: "browser.defaultSearchEngine",
-        defaultValue: .google,
-        userDefaultsKey: "browserSearchEngine"
+        defaultValue: BrowserSearchSettingsStore.defaultSearchEngine,
+        userDefaultsKey: BrowserSearchSettingsStore.searchEngineKey
     )
 
     public let customSearchEngineName = DefaultsKey<String>(
         id: "browser.customSearchEngineName",
-        defaultValue: "",
-        userDefaultsKey: "browserCustomSearchEngineName"
+        defaultValue: BrowserSearchSettingsStore.defaultCustomSearchEngineName,
+        userDefaultsKey: BrowserSearchSettingsStore.customSearchEngineNameKey
     )
 
     public let customSearchEngineURLTemplate = DefaultsKey<String>(
         id: "browser.customSearchEngineURLTemplate",
-        defaultValue: "",
-        userDefaultsKey: "browserCustomSearchEngineURLTemplate"
+        defaultValue: BrowserSearchSettingsStore.defaultCustomSearchEngineURLTemplate,
+        userDefaultsKey: BrowserSearchSettingsStore.customSearchEngineURLTemplateKey
     )
 
     public let showSearchSuggestions = DefaultsKey<Bool>(
         id: "browser.showSearchSuggestions",
+        // Panecho privacy: search suggestions OFF by default (no query egress
+        // to search-engine suggestion endpoints). Upstream's
+        // BrowserSearchSettingsStore.defaultSearchSuggestionsEnabled is true, so
+        // we override the catalog default to false here.
         defaultValue: false,
-        userDefaultsKey: "browserSearchSuggestionsEnabled"
+        userDefaultsKey: BrowserSearchSettingsStore.searchSuggestionsEnabledKey
     )
 
     public let theme = DefaultsKey<BrowserThemeMode>(

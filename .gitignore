@@ -76,3 +76,6 @@ artifacts/
 *.keychain-db
 AuthKey*.p8
 build_assets/
+
+# tmux verbose debug logs (tmux -v) that land in the cwd
+tmux-*.log
