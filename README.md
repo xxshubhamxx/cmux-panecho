@@ -1,28 +1,23 @@
-<h1 align="center">cmux</h1>
+<h1 align="center">panecho</h1>
 <p align="center">A Ghostty-based macOS terminal with vertical tabs and notifications for AI coding agents</p>
 
 <p align="center">
-  <a href="https://github.com/manaflow-ai/cmux/releases/latest/download/cmux-macos.dmg">
-    <img src="./docs/assets/macos-badge.png" alt="Download cmux for macOS" width="180" />
+  <a href="https://github.com/xxshubhamxx/cmux-panecho/releases/latest/download/Panecho.dmg">
+    <img src="./docs/assets/macos-badge.png" alt="Download panecho for macOS" width="180" />
   </a>
 </p>
 
+
 <p align="center">
-  English | <a href="README.ja.md">日本語</a> | <a href="README.vi.md">Tiếng Việt</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a> | <a href="README.ko.md">한국어</a> | <a href="README.de.md">Deutsch</a> | <a href="README.es.md">Español</a> | <a href="README.fr.md">Français</a> | <a href="README.it.md">Italiano</a> | <a href="README.da.md">Dansk</a> | <a href="README.pl.md">Polski</a> | <a href="README.ru.md">Русский</a> | <a href="README.bs.md">Bosanski</a> | <a href="README.ar.md">العربية</a> | <a href="README.no.md">Norsk</a> | <a href="README.pt-BR.md">Português (Brasil)</a> | <a href="README.th.md">ไทย</a> | <a href="README.tr.md">Türkçe</a> | <a href="README.km.md">ភាសាខ្មែរ</a> | <a href="README.uk.md">Українська</a>
+  <a href="https://github.com/xxshubhamxx/cmux-panecho"><img src="https://img.shields.io/github/stars/xxshubhamxx/cmux-panecho?style=flat&logo=github&label=stars&color=4c71f2" alt="GitHub stars" /></a>
 </p>
 
 <p align="center">
-  <a href="https://x.com/manaflowai"><img src="https://img.shields.io/badge/@manaflow-555?logo=x" alt="X / Twitter" /></a>
-  <a href="https://discord.gg/xsgFEVrWCZ"><img src="https://img.shields.io/badge/Discord-555?logo=discord" alt="Discord" /></a>
-  <a href="https://github.com/manaflow-ai/cmux"><img src="https://img.shields.io/github/stars/manaflow-ai/cmux?style=flat&logo=github&label=stars&color=4c71f2" alt="GitHub stars" /></a>
+  <img src="./docs/assets/main-first-image.png" alt="panecho screenshot" width="900" />
 </p>
 
 <p align="center">
-  <img src="./docs/assets/main-first-image.png" alt="cmux screenshot" width="900" />
-</p>
-
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=i-WxO5YUTOs">▶ Demo video</a> · <a href="https://cmux.com/blog/zen-of-cmux">The Zen of cmux</a>
+  Inspired by <a href="https://github.com/manaflow-ai/cmux">cmux</a>
 </p>
 
 ## Features
@@ -70,7 +65,7 @@ Sidebar shows git branch, linked PR status/number, working directory, listening 
 <code>cmux ssh user@remote</code> creates a workspace for a remote machine. Browser panes route through the remote network so localhost just works. Drag an image into a remote session to upload via scp.
 </td>
 <td width="60%">
-<img src="./docs/assets/ssh.png" alt="cmux SSH" width="100%" />
+<img src="./docs/assets/ssh.png" alt="panecho SSH" width="100%" />
 </td>
 </tr>
 <tr>
@@ -90,49 +85,49 @@ Sidebar shows git branch, linked PR status/number, working directory, listening 
 - **Native macOS app** — Built with Swift and AppKit, not Electron. Fast startup, low memory.
 - **Ghostty compatible** — Reads your existing `~/.config/ghostty/config` for themes, fonts, and colors
 - **GPU-accelerated** — Powered by libghostty for smooth rendering
+- **cmux command compatibility** — All existing `cmux` commands are supported so tools built on top of cmux remain compatible with panecho
 
 ## Install
 
 ### DMG (recommended)
 
-<a href="https://github.com/manaflow-ai/cmux/releases/latest/download/cmux-macos.dmg">
-  <img src="./docs/assets/macos-badge.png" alt="Download cmux for macOS" width="180" />
+<a href="https://github.com/xxshubhamxx/cmux-panecho/releases/latest/download/Panecho.dmg">
+  <img src="./docs/assets/macos-badge.png" alt="Download panecho for macOS" width="180" />
 </a>
 
-Open the `.dmg` and drag cmux to your Applications folder. cmux auto-updates via Sparkle, so you only need to download once.
+Download [Panecho.dmg](https://github.com/xxshubhamxx/cmux-panecho/releases/latest/download/Panecho.dmg), open the `.dmg`, and drag panecho to your Applications folder.
 
-### Homebrew
-
-```bash
-brew tap manaflow-ai/cmux
-brew install --cask cmux
-```
-
-To update later:
-
-```bash
-brew upgrade --cask cmux
-```
+This is the recommended and only supported way to install panecho.
 
 On first launch, macOS may ask you to confirm opening an app from an identified developer. Click **Open** to proceed.
 
-## Why cmux?
+## Why panecho?
+
+panecho is inspired by [cmux](https://github.com/manaflow-ai/cmux) and keeps the same spirit of a fast, native, scriptable terminal workspace for AI coding agents.
 
 I run a lot of Claude Code and Codex sessions in parallel. I was using Ghostty with a bunch of split panes, and relying on native macOS notifications to know when an agent needed me. But Claude Code's notification body is always just "Claude is waiting for your input" with no context, and with enough tabs open I couldn't even read the titles anymore.
 
-I tried a few coding orchestrators but most of them were Electron/Tauri apps and the performance bugged me. I also just prefer the terminal since GUI orchestrators lock you into their workflow. So I built cmux as a native macOS app in Swift/AppKit. It uses libghostty for terminal rendering and reads your existing Ghostty config for themes, fonts, and colors.
+I tried a few coding orchestrators but most of them were Electron/Tauri apps and the performance bugged me. I also just prefer the terminal since GUI orchestrators lock you into their workflow. panecho is a native macOS app in Swift/AppKit. It uses libghostty for terminal rendering and reads your existing Ghostty config for themes, fonts, and colors.
 
-The main additions are the sidebar and notification system. The sidebar has vertical tabs that show git branch, linked PR status/number, working directory, listening ports, and the latest notification text for each workspace. The notification system picks up terminal sequences (OSC 9/99/777) and has a CLI (`cmux notify`) you can wire into agent hooks for Claude Code, OpenCode, etc. When an agent is waiting, its pane gets a blue ring and the tab lights up in the sidebar, so I can tell which one needs me across splits and tabs. Cmd+Shift+U jumps to the most recent unread.
+The main additions are the sidebar and notification system. The sidebar has vertical tabs that show git branch, linked PR status/number, working directory, listening ports, and the latest notification text for each workspace. The notification system picks up terminal sequences (OSC 9/99/777) and has a CLI (`cmux notify`) you can wire into agent hooks for Claude Code, OpenCode, etc. When an agent is waiting, its pane gets a blue ring and the tab lights up in the sidebar, so you can tell which one needs attention across splits and tabs. Cmd+Shift+U jumps to the most recent unread.
 
 The in-app browser has a scriptable API ported from [agent-browser](https://github.com/vercel-labs/agent-browser). Agents can snapshot the accessibility tree, get element refs, click, fill forms, and evaluate JS. You can split a browser pane next to your terminal and have Claude Code interact with your dev server directly.
 
 Everything is scriptable through the CLI and socket API — create workspaces/tabs, split panes, send keystrokes, open URLs in the browser.
 
-## The Zen of cmux
+## Compatibility
 
-cmux is not prescriptive about how developers hold their tools. It's a terminal and browser with a CLI, and the rest is up to you.
+panecho is inspired by [cmux](https://github.com/manaflow-ai/cmux) and is designed to remain compatible with tools, scripts, hooks, and workflows built on top of cmux.
 
-cmux is a primitive, not a solution. It gives you a terminal, a browser, notifications, workspaces, splits, tabs, and a CLI to control all of it. cmux doesn't force you into an opinionated way to use coding agents. What you build with the primitives is yours.
+All existing `cmux` commands are supported in panecho so current automation, wrappers, helper scripts, and agent tooling can continue to work without forcing a migration of command names.
+
+That means commands such as `cmux ssh`, `cmux claude-teams`, `cmux notify`, `cmux hooks setup`, `cmux restore-session`, and `cmux surface resume ...` are intentionally preserved for compatibility.
+
+## The Zen of panecho
+
+panecho is not prescriptive about how developers hold their tools. It's a terminal and browser with a CLI, and the rest is up to you.
+
+panecho is a primitive, not a solution. It gives you a terminal, a browser, notifications, workspaces, splits, tabs, and a CLI to control all of it. panecho doesn't force you into an opinionated way to use coding agents. What you build with the primitives is yours.
 
 The best developers have always built their own tools. Nobody has figured out the best way to work with agents yet, and the teams building closed products definitely haven't either. The developers closest to their own codebases will figure it out first.
 
@@ -140,7 +135,7 @@ Give a million developers composable primitives and they'll collectively find th
 
 ## Documentation
 
-For more info on how to configure cmux, [head over to our docs](https://cmux.com/docs/getting-started?utm_source=readme).
+For more info on how to configure panecho, head over to the [cmux docs](https://cmux.com/docs/getting-started?utm_source=readme). panecho stays compatible with the existing `cmux` command surface so the documentation remains useful.
 
 ## Keyboard Shortcuts
 
@@ -238,22 +233,22 @@ Command palette navigation shortcuts, including ⌃ P, are also customizable and
 
 ## Nightly Builds
 
-[Download cmux NIGHTLY](https://github.com/manaflow-ai/cmux/releases/download/nightly/cmux-nightly-macos.dmg)
+[Download panecho NIGHTLY](https://github.com/xxshubhamxx/cmux-panecho/releases/latest/download/Panecho.dmg)
 
-cmux NIGHTLY is a separate app with its own bundle ID, so it runs alongside the stable version. Built automatically from the latest `main` commit and auto-updates via its own Sparkle feed.
+panecho NIGHTLY is a separate app with its own bundle ID, so it can run alongside the stable version if you choose to ship separate nightlies. Built automatically from the latest `main` commit and can auto-update via its own Sparkle feed.
 
-Report nightly bugs on [GitHub Issues](https://github.com/manaflow-ai/cmux/issues) or in [#nightly-bugs on Discord](https://discord.gg/xsgFEVrWCZ).
+Report nightly bugs on [GitHub Issues](https://github.com/xxshubhamxx/cmux-panecho/issues).
 
 ## Session restore
 
-Quitting cmux saves the current session. On relaunch, cmux restores app-owned
+Quitting panecho saves the current session. On relaunch, panecho restores app-owned
 state:
 - Window/workspace/pane layout
 - Working directories
 - Terminal scrollback (best effort)
 - Browser URL and navigation history
 
-cmux does not checkpoint arbitrary live process state. tmux, vim, shells, and
+panecho does not checkpoint arbitrary live process state. tmux, vim, shells, and
 unsupported terminal apps reopen as normal terminals.
 
 Supported agent sessions can resume when hooks have saved a native session ID.
@@ -281,11 +276,11 @@ cmux surface resume show --json
 cmux surface resume clear --checkpoint work
 ```
 
-The binding stays attached to the cmux surface. Public CLI or socket-created
+The binding stays attached to the panecho surface. Public CLI or socket-created
 bindings are stored for inspection and manual restore unless you approve a
 signed command prefix for automatic restore. Approved prefixes are also bound to
 the working directory and exact environment values, when present. Review or edit
-approvals in **Settings > Terminal > Resume Commands**. cmux only auto-runs
+approvals in **Settings > Terminal > Resume Commands**. panecho only auto-runs
 resume bindings it marks trusted, such as live process-detected tmux bindings or
 user-approved prefixes. Sensitive environment keys such as tokens, passwords,
 secrets, and API keys are dropped before a resume binding is stored.
@@ -302,7 +297,7 @@ turn off **Settings > Terminal > Resume Agent Sessions on Reopen** or set this i
 }
 ```
 
-This only disables automatic agent resume commands. cmux still restores the saved layout,
+This only disables automatic agent resume commands. panecho still restores the saved layout,
 working directories, scrollback, and browser history.
 
 If you need to reapply the last saved snapshot manually, use:
@@ -310,20 +305,20 @@ If you need to reapply the last saved snapshot manually, use:
 - `⌘ ⇧ O`
 - `cmux restore-session`
 
-Under the hood, cmux writes a versioned snapshot under
+Under the hood, panecho writes a versioned snapshot under
 `~/Library/Application Support/cmux/` and agent hooks write session mappings
-under `~/.cmuxterm/`. On restore, cmux rebuilds the layout first, then runs the
+under `~/.cmuxterm/`. On restore, panecho rebuilds the layout first, then runs the
 supported agent's native resume command when automatic agent resume is enabled.
 
 Read the full guide at <https://cmux.com/docs/session-restore>.
 
 ## Star History
 
-<a href="https://star-history.com/#manaflow-ai/cmux&Date">
+<a href="https://star-history.com/#xxshubhamxx/cmux-panecho&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=manaflow-ai/cmux&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=manaflow-ai/cmux&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=manaflow-ai/cmux&type=Date" width="600" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xxshubhamxx/cmux-panecho&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xxshubhamxx/cmux-panecho&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xxshubhamxx/cmux-panecho&type=Date" width="600" />
  </picture>
 </a>
 
@@ -331,35 +326,27 @@ Read the full guide at <https://cmux.com/docs/session-restore>.
 
 Ways to get involved:
 
-- Follow us on X for updates [@manaflowai](https://x.com/manaflowai), [@lawrencecchen](https://x.com/lawrencecchen), and [@austinywang](https://x.com/austinywang)
-- Join the conversation on [Discord](https://discord.gg/xsgFEVrWCZ)
-- Create and participate in [GitHub issues](https://github.com/manaflow-ai/cmux/issues) and [discussions](https://github.com/manaflow-ai/cmux/discussions)
-- Let us know what you're building with cmux
+- Follow the project on GitHub for updates and releases
+- Create and participate in [GitHub issues](https://github.com/xxshubhamxx/cmux-panecho/issues)
+- Let us know what you're building with panecho
+- Share compatibility issues if any workflow built on top of cmux needs extra support in panecho
 
 ## Community
 
-- [Discord](https://discord.gg/xsgFEVrWCZ)
-- [GitHub](https://github.com/manaflow-ai/cmux)
-- [X / Twitter](https://twitter.com/manaflowai)
-- [YouTube](https://www.youtube.com/channel/UCAa89_j-TWkrXfk9A3CbASw)
-- [LinkedIn](https://www.linkedin.com/company/manaflow-ai/)
-- [Reddit](https://www.reddit.com/r/cmux/)
+- [GitHub](https://github.com/xxshubhamxx/cmux-panecho)
+- [Issues](https://github.com/xxshubhamxx/cmux-panecho/issues)
+- [Releases](https://github.com/xxshubhamxx/cmux-panecho/releases)
 
 ## Founder's Edition
 
-cmux is free, open source, and always will be. If you'd like to support development and get early access to what's coming next:
+panecho is free, open source, and always will be.
 
-**[Get Founder's Edition](https://buy.stripe.com/3cI00j2Ld0it5OU33r5EY0q)**
+If you'd like to support development and get early access to what's coming next:
 
-- **Prioritized feature requests/bug fixes**
-- **Early access: cmux AI that gives you context on every workspace, tab and panel**
-- **Early access: iOS app with terminals synced between desktop and phone**
-- **Early access: Cloud VMs**
-- **Early access: Voice mode**
-- **My personal iMessage/WhatsApp**
+- Prioritized feature requests and bug fixes
+- Early access features and experiments
+- Faster iteration on workflows for AI coding agents
 
 ## License
 
-cmux is open source under [GPL-3.0-or-later](LICENSE).
-
-If your organization cannot comply with GPL, a commercial license is available. Contact [founders@manaflow.com](mailto:founders@manaflow.com) for details.
+panecho is open source under [GPL-3.0-or-later](LICENSE).
