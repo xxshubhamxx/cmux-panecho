@@ -2,7 +2,7 @@ import Foundation
 
 extension CMUXCLI {
     static let settingsDocsURL = "https://cmux.com/docs/configuration#cmux-json"
-    static let settingsSchemaURL = "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux.schema.json"
+    static let settingsSchemaURL = "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/web/data/cmux.schema.json"
     static let primarySettingsDisplayPath = "~/.config/cmux/cmux.json"
     static let legacySettingsDisplayPath = "~/.config/cmux/settings.json"
     static let fallbackSettingsDisplayPath = "~/Library/Application Support/com.cmuxterm.app/settings.json"
@@ -30,7 +30,7 @@ extension CMUXCLI {
             webURL: settingsDocsURL,
             rawResources: [
                 DocsResource(label: "settings schema", url: settingsSchemaURL),
-                DocsResource(label: "cmux skill", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/skills/cmux/SKILL.md"),
+                DocsResource(label: "cmux skill", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/skills/cmux/SKILL.md"),
             ],
             commands: [
                 "cmux settings path",
@@ -45,7 +45,7 @@ extension CMUXCLI {
             summary: "cmux-owned keyboard shortcuts and two-step chord syntax.",
             webURL: "https://cmux.com/docs/keyboard-shortcuts",
             rawResources: [
-                DocsResource(label: "shortcut data", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux-shortcuts.ts"),
+                DocsResource(label: "shortcut data", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/web/data/cmux-shortcuts.ts"),
                 DocsResource(label: "settings schema", url: settingsSchemaURL),
             ],
             commands: [
@@ -60,8 +60,8 @@ extension CMUXCLI {
             summary: "CLI/socket API, handle model, windows, workspaces, panes, and surfaces.",
             webURL: "https://cmux.com/docs/api",
             rawResources: [
-                DocsResource(label: "CLI contract", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/docs/cli-contract.md"),
-                DocsResource(label: "cmux skill", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/skills/cmux/SKILL.md"),
+                DocsResource(label: "CLI contract", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/docs/cli-contract.md"),
+                DocsResource(label: "cmux skill", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/skills/cmux/SKILL.md"),
             ],
             commands: [
                 "cmux identify --json",
@@ -74,8 +74,8 @@ extension CMUXCLI {
             summary: "Browser panel automation commands and snapshot-driven web interaction.",
             webURL: "https://cmux.com/docs/browser-automation",
             rawResources: [
-                DocsResource(label: "browser skill", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/skills/cmux-browser/SKILL.md"),
-                DocsResource(label: "browser commands", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/skills/cmux-browser/references/commands.md"),
+                DocsResource(label: "browser skill", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/skills/cmux-browser/SKILL.md"),
+                DocsResource(label: "browser commands", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/skills/cmux-browser/references/commands.md"),
             ],
             commands: [
                 "cmux browser --help",
@@ -88,9 +88,9 @@ extension CMUXCLI {
             summary: "Agent hook integrations, Feed approvals, notifications, and session restore.",
             webURL: "https://cmux.com/docs/agent-integrations/oh-my-codex",
             rawResources: [
-                DocsResource(label: "agent hook docs", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/docs/agent-hooks.md"),
-                DocsResource(label: "feed docs", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/docs/feed.md"),
-                DocsResource(label: "notifications docs", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/docs/notifications.md"),
+                DocsResource(label: "agent hook docs", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/docs/agent-hooks.md"),
+                DocsResource(label: "feed docs", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/docs/feed.md"),
+                DocsResource(label: "notifications docs", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/docs/notifications.md"),
             ],
             commands: [
                 "cmux hooks setup",
@@ -106,8 +106,8 @@ extension CMUXCLI {
             summary: "Custom right-sidebar terminal controls from .cmux/dock.json or ~/.config/cmux/dock.json.",
             webURL: "https://cmux.com/docs/dock",
             rawResources: [
-                DocsResource(label: "dock docs", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/docs/dock.md"),
-                DocsResource(label: "dock web copy", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/messages/en.json"),
+                DocsResource(label: "dock docs", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/docs/dock.md"),
+                DocsResource(label: "dock web copy", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/web/messages/en.json"),
             ],
             commands: [
                 "cmux docs dock",
@@ -121,7 +121,7 @@ extension CMUXCLI {
             summary: "Vibe-code a custom sidebar: a runtime-interpreted SwiftUI-style file in ~/.config/cmux/sidebars/ (beta).",
             webURL: "https://cmux.com/docs/custom-sidebars",
             rawResources: [
-                DocsResource(label: "custom sidebar authoring guide", url: "https://raw.githubusercontent.com/manaflow-ai/cmux/main/docs/custom-sidebars.md"),
+                DocsResource(label: "custom sidebar authoring guide", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/main/docs/custom-sidebars.md"),
             ],
             commands: [
                 "mkdir -p ~/.config/cmux/sidebars",

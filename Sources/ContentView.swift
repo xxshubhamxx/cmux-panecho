@@ -10314,7 +10314,7 @@ struct VerticalTabsSidebar: View {
         // per-row "laid-out row ids" PreferenceKey whose sidebar-wide reduce
         // fed `@State` writes from inside the layout/preference update cycle,
         // the cmux-owned edge in the sidebar layout livelock
-        // (https://github.com/manaflow-ai/cmux/issues/2586). No anchor means
+        // (https://github.com/xxshubhamxx/cmux-panecho/issues/2586). No anchor means
         // SwiftUI scrolls the minimum needed to reveal the row.
         let group = renderContext.workspaceById[selectedWorkspaceId]?.groupId
             .flatMap { renderContext.workspaceGroupById[$0] }
@@ -11903,7 +11903,7 @@ struct VerticalTabsSidebar: View {
         // LazyVStack is safe here because `dragState` is @Observable:
         // drag mutations at 60fps invalidate only the rows/overlays that
         // read them, never this sidebar body. See SidebarDragState and
-        // https://github.com/manaflow-ai/cmux/issues/2586.
+        // https://github.com/xxshubhamxx/cmux-panecho/issues/2586.
         let rows = LazyVStack(spacing: tabRowSpacing) {
             ForEach(renderItems, id: \.id) { item in
                 switch item {
@@ -12451,8 +12451,8 @@ private enum SidebarHelpMenuAction {
 private struct SidebarHelpMenuButton: View {
     private let docsURL = URL(string: "https://cmux.com/docs")
     private let changelogURL = URL(string: "https://cmux.com/docs/changelog")
-    private let githubURL = URL(string: "https://github.com/manaflow-ai/cmux")
-    private let githubIssuesURL = URL(string: "https://github.com/manaflow-ai/cmux/issues")
+    private let githubURL = URL(string: "https://github.com/xxshubhamxx/cmux-panecho")
+    private let githubIssuesURL = URL(string: "https://github.com/xxshubhamxx/cmux-panecho/issues")
     private let discordURL = URL(string: "https://discord.gg/xsgFEVrWCZ")
     private let helpTitle = String(localized: "sidebar.help.button", defaultValue: "Help")
     private let buttonSize: CGFloat = 22

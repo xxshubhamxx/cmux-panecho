@@ -96,7 +96,7 @@ enum CmuxHelpResource {
         case .changelog:
             return URL(string: "https://cmux.com/docs/changelog")!
         case .githubIssues:
-            return URL(string: "https://github.com/manaflow-ai/cmux/issues")!
+            return URL(string: "https://github.com/xxshubhamxx/cmux-panecho/issues")!
         case .discord:
             return URL(string: "https://discord.gg/xsgFEVrWCZ")!
         }
