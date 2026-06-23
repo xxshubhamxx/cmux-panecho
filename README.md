@@ -1,4 +1,4 @@
-<h1 align="center">panecho</h1>
+<h1 align="center">PanEcho (pane + echo)</h1>
 <p align="center">A Ghostty-based macOS terminal with vertical tabs and notifications for AI coding agents</p>
 
 <p align="center">
