@@ -91,7 +91,7 @@ public final class RemoteSessionCoordinator: @unchecked Sendable {
     var remotePortScanCoalesceTask: Task<Void, Never>?
     var remotePortScanCoalesceToken: UUID?
     var remotePortScanBurstTask: Task<Void, Never>?
-    var remotePortPollTimer: DispatchSourceTimer?
+    var remotePortPollTimer: (any DispatchSourceTimer)?
     var remotePortPollMode: RemotePortPollingMode?
     var polledRemotePorts: [Int] = []
     var remotePortPollBaselinePorts: Set<Int>?
@@ -428,6 +428,10 @@ public final class RemoteSessionCoordinator: @unchecked Sendable {
             reconnectSuspended = false
             reachabilityProbeGeneration &+= 1
             guard proxyEndpoint != endpoint else {
+                publishState(
+                    .connected,
+                    detail: "Connected to \(configuration.displayTarget) via shared local proxy \(endpoint.host):\(endpoint.port)"
+                )
                 recordHeartbeatActivityLocked()
                 fulfillPendingPTYBridgeStartsLocked()
                 return
@@ -537,7 +541,9 @@ public final class RemoteSessionCoordinator: @unchecked Sendable {
         requiredDaemonCapabilities.filter {
             $0 != RemoteDaemonRPCClient.requiredPTYSessionCapability &&
                 $0 != RemoteDaemonRPCClient.requiredPTYSessionTokenCapability &&
-                $0 != RemoteDaemonRPCClient.requiredPTYWriteNotificationCapability && $0 != RemoteDaemonRPCClient.requiredPTYResizeNotificationCapability
+                $0 != RemoteDaemonRPCClient.requiredPTYPersistentDaemonCapability &&
+                $0 != RemoteDaemonRPCClient.requiredPTYWriteNotificationCapability &&
+                $0 != RemoteDaemonRPCClient.requiredPTYResizeNotificationCapability
         }
     }
 

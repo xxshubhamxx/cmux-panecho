@@ -20,9 +20,9 @@ enum SessionPersistencePolicy {
     // minimum width. The titlebar title tracks the sidebar's actual width only
     // when it is wider than the minimum, so a default above the minimum would make
     // the folder/title shift when toggling the sidebar at the default width.
-    static let defaultSidebarWidth: Double = 216
-    static let defaultMinimumSidebarWidth: Double = 216
-    static let minimumSidebarWidth: Double = 216
+    static let defaultSidebarWidth: Double = 240
+    static let defaultMinimumSidebarWidth: Double = 240
+    static let minimumSidebarWidth: Double = 240
     static let sidebarMinimumWidthRange: ClosedRange<Double> = 120...260
     static let maximumSidebarWidth: Double = 600
     static let minimumWindowWidth: Double = 300
@@ -199,12 +199,6 @@ struct SessionRectSnapshot: Codable, Equatable, Sendable {
     }
 }
 
-struct SessionDisplaySnapshot: Codable, Sendable {
-    var displayID: UInt32?
-    var frame: SessionRectSnapshot?
-    var visibleFrame: SessionRectSnapshot?
-}
-
 enum SessionSidebarSelection: String, Codable, Sendable, Equatable {
     case tabs
     case notifications
@@ -306,9 +300,10 @@ nonisolated struct SurfaceResumeBindingSnapshot: Codable, Equatable, Sendable {
         updatedAt: TimeInterval = Date().timeIntervalSince1970
     ) {
         let normalizedCwd = Self.normalized(cwd)
+        let normalizedKind = Self.normalized(kind)
         let normalizedSource = Self.normalized(source)
         self.name = Self.normalized(name)
-        self.kind = Self.normalized(kind)
+        self.kind = normalizedKind
         self.command = Self.sanitizedStartupCommand(
             command,
             cwd: normalizedCwd,
@@ -392,34 +387,7 @@ nonisolated struct SurfaceResumeBindingSnapshot: Codable, Equatable, Sendable {
     }
 
     var inlineStartupInput: String? {
-        let trimmed = startupCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard let environment, !environment.isEmpty else {
-            return trimmed + "\n"
-        }
-        let assignments = environment.keys.sorted().compactMap { key -> String? in
-            guard let value = environment[key] else { return nil }
-            return "\(key)=\(value)"
-        }
-        let argv = ["/usr/bin/env"] + assignments + ["/bin/zsh", "-lc", trimmed]
-        return argv.map(Self.shellSingleQuoted).joined(separator: " ") + "\n"
-    }
-
-    private var startupCommand: String {
-        Self.sanitizedStartupCommand(command, cwd: cwd, source: source)
-    }
-
-    private static func sanitizedStartupCommand(
-        _ command: String,
-        cwd: String?,
-        source: String?
-    ) -> String {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard source == "agent-hook" else { return trimmed }
-        return TerminalStartupWorkingDirectoryPrefix.replacingRequiredChangeDirectoryPrefix(
-            in: trimmed,
-            workingDirectory: cwd
-        )
+        inlineStartupInput(repairPortableAgentExecutable: true)
     }
 
     func startupInputWithLauncherScript(
@@ -503,7 +471,7 @@ nonisolated struct SurfaceResumeBindingSnapshot: Codable, Equatable, Sendable {
         return sensitiveFragments.contains { uppercasedKey.contains($0) }
     }
 
-    private static func shellSingleQuoted(_ value: String) -> String {
+    static func shellSingleQuoted(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
@@ -718,6 +686,7 @@ enum SurfaceResumeCommandCanonicalizer {
         }
         return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
+
 }
 
 enum SurfaceResumeApprovalSignature {
@@ -1305,20 +1274,19 @@ enum SurfaceResumeApprovalStore {
 nonisolated enum TerminalStartupReturnShellScript {
     private static let shellLine = #"_cmux_resume_shell="${SHELL:-/bin/zsh}""#
     private static let zshIntegrationReentryLines = [
-        #"if [[ "${_cmux_resume_shell:t}" == "zsh" && -n "${CMUX_SHELL_INTEGRATION_DIR:-}" && -r "${CMUX_SHELL_INTEGRATION_DIR}/.zshenv" ]]; then"#,
-        #"  if [[ -n "${ZDOTDIR+X}" ]]; then"#,
-        #"    export CMUX_ZSH_ZDOTDIR="$ZDOTDIR""#,
+        #"if [[ "${_cmux_resume_shell:t}" == "zsh" ]]; then"#,
+        #"  _cmux_resume_zdotdir_is_integration() { [[ -n "${1:-}" && ( "$1" == "${CMUX_SHELL_INTEGRATION_DIR:-}" || "$1" == */Contents/Resources/shell-integration ) ]]; }"#,
+        #"  if [[ -n "${CMUX_SHELL_INTEGRATION_DIR:-}" && -r "${CMUX_SHELL_INTEGRATION_DIR}/.zshenv" ]]; then"#,
+        #"    if [[ -n "${ZDOTDIR+X}" ]] && ! _cmux_resume_zdotdir_is_integration "$ZDOTDIR"; then export CMUX_ZSH_ZDOTDIR="$ZDOTDIR"; elif [[ -n "${CMUX_ZSH_ZDOTDIR+X}" ]] && _cmux_resume_zdotdir_is_integration "$CMUX_ZSH_ZDOTDIR"; then unset CMUX_ZSH_ZDOTDIR; fi; export ZDOTDIR="$CMUX_SHELL_INTEGRATION_DIR""#,
         #"  else"#,
-        #"    unset CMUX_ZSH_ZDOTDIR"#,
-        #"  fi"#,
-        #"  export ZDOTDIR="$CMUX_SHELL_INTEGRATION_DIR""#,
+        #"    if [[ -n "${GHOSTTY_ZSH_ZDOTDIR+X}" ]]; then export ZDOTDIR="$GHOSTTY_ZSH_ZDOTDIR"; unset GHOSTTY_ZSH_ZDOTDIR; elif [[ -n "${CMUX_ZSH_ZDOTDIR+X}" ]] && ! _cmux_resume_zdotdir_is_integration "$CMUX_ZSH_ZDOTDIR"; then export ZDOTDIR="$CMUX_ZSH_ZDOTDIR"; unset CMUX_ZSH_ZDOTDIR; elif [[ -n "${ZDOTDIR+X}" ]] && _cmux_resume_zdotdir_is_integration "$ZDOTDIR"; then unset ZDOTDIR; unset CMUX_ZSH_ZDOTDIR; fi"#,
+        #"  fi; unfunction _cmux_resume_zdotdir_is_integration 2>/dev/null || true"#,
         #"fi"#,
     ]
 
     static func commandThenReturnLines(command: String, workingDirectory: String? = nil) -> [String] {
         let quotedCommand = TerminalStartupShellQuoting.singleQuoted(command)
-        var lines = [
-            shellLine,
+        var lines = [shellLine] + zshIntegrationReentryLines + [
             #"case "${_cmux_resume_shell:t}" in"#,
             #"  zsh|bash) "$_cmux_resume_shell" -lic \#(quotedCommand) ;;"#,
             #"  csh|tcsh) "$_cmux_resume_shell" -c \#(quotedCommand) ;;"#,
@@ -1338,7 +1306,7 @@ nonisolated enum TerminalStartupReturnShellScript {
     }
 }
 
-private enum SurfaceResumeBindingScriptStore {
+enum SurfaceResumeBindingScriptStore {
     private static let directoryName = "cmux-surface-resume"
     private static let scriptTTL: TimeInterval = 24 * 60 * 60
 
@@ -1666,76 +1634,17 @@ struct SessionProjectPanelSnapshot: Codable, Sendable {
     }
 }
 
-struct SessionNotificationSnapshot: Codable, Sendable {
-    var id: UUID
-    var title: String
-    var subtitle: String
-    var body: String
-    var createdAt: TimeInterval
-    var isRead: Bool
-    var paneFlash: Bool?
-    var clickAction: TerminalNotificationClickAction?
-
-    init(
-        id: UUID,
-        title: String,
-        subtitle: String,
-        body: String,
-        createdAt: TimeInterval,
-        isRead: Bool,
-        paneFlash: Bool? = nil,
-        clickAction: TerminalNotificationClickAction? = nil
-    ) {
-        self.id = id
-        self.title = title
-        self.subtitle = subtitle
-        self.body = body
-        self.createdAt = createdAt
-        self.isRead = isRead
-        self.paneFlash = paneFlash
-        self.clickAction = clickAction
-    }
-
-    init(notification: TerminalNotification) {
-        self.init(
-            id: notification.id,
-            title: notification.title,
-            subtitle: notification.subtitle,
-            body: notification.body,
-            createdAt: notification.createdAt.timeIntervalSince1970,
-            isRead: notification.isRead,
-            paneFlash: notification.paneFlash,
-            clickAction: notification.clickAction
-        )
-    }
-
-    func terminalNotification(tabId: UUID, surfaceId: UUID?, panelId: UUID?) -> TerminalNotification {
-        TerminalNotification(
-            id: id,
-            tabId: tabId,
-            surfaceId: surfaceId,
-            panelId: panelId,
-            title: title,
-            subtitle: subtitle,
-            body: body,
-            createdAt: Date(timeIntervalSince1970: createdAt),
-            isRead: isRead,
-            paneFlash: paneFlash ?? true,
-            clickAction: clickAction
-        )
-    }
-}
-
 struct SessionPanelSnapshot: Codable, Sendable {
     var id: UUID
+    var stableSurfaceId: UUID? = nil
     var type: PanelType
     var title: String?
     var customTitle: String?
-    /// Provenance of `customTitle`. Optional with a `nil` default so snapshots
-    /// persisted before provenance existed decode unchanged; restore treats
-    /// absent provenance as user-set (the conservative choice for auto-naming).
+    /// Provenance of `customTitle`; absent provenance restores as user-set for compatibility.
     var customTitleSource: Workspace.CustomTitleSource? = nil
     var directory: String?
+    var directoryIsTrustedRemoteReport: Bool? = nil
+    var directoryRequiresRemoteTrust: Bool? = nil
     var isPinned: Bool
     var isManuallyUnread: Bool
     var hasUnreadIndicator: Bool? = nil
@@ -1782,6 +1691,7 @@ enum SessionSplitOrientation: String, Codable, Sendable {
 struct SessionPaneLayoutSnapshot: Codable, Sendable {
     var panelIds: [UUID]
     var selectedPanelId: UUID?
+    var isFullWidthTabMode: Bool? = nil
 }
 
 struct SessionSplitLayoutSnapshot: Codable, Sendable {
@@ -1848,11 +1758,10 @@ struct SessionWorkspaceSnapshot: Codable, Sendable {
     /// Restore uses this to remap closed-panel history onto the new workspace IDs;
     /// legacy or externally-created snapshots can leave it nil.
     var workspaceId: UUID? = nil
+    var stableId: UUID? = nil
     var processTitle: String
     var customTitle: String?
-    /// Provenance of `customTitle`. Optional with a `nil` default so snapshots
-    /// persisted before provenance existed decode unchanged; restore treats
-    /// absent provenance as user-set (the conservative choice for auto-naming).
+    /// Provenance of `customTitle`; absent provenance restores as user-set for compatibility.
     var customTitleSource: Workspace.CustomTitleSource? = nil
     var customDescription: String?
     var customColor: String?
@@ -1928,6 +1837,9 @@ struct SessionWindowSnapshot: Codable, Sendable {
     var display: SessionDisplaySnapshot?
     var tabManager: SessionTabManagerSnapshot
     var sidebar: SessionSidebarSnapshot
+    /// Per-display-configuration remembered frames (LRU ring). Optional and
+    /// additive so older persisted snapshots decode unchanged.
+    var configFrames: [SessionConfigFrameEntry]? = nil
 }
 
 struct AppSessionSnapshot: Codable, Sendable {

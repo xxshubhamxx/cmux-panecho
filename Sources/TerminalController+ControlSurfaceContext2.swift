@@ -156,6 +156,7 @@ extension TerminalController {
         let orientation = direction.orientation
         let insertFirst = direction.insertFirst
         let dividerPosition = inputs.initialDividerPosition.map { CGFloat($0) }
+        let useLocalContext = surfaceRemoteContextWantsLocal(inputs.remoteContextRaw)
         let newId: UUID?
         if panelType == .browser {
             newId = ws.newBrowserSplit(
@@ -165,6 +166,7 @@ extension TerminalController {
                 url: url,
                 focus: focus,
                 creationPolicy: .automationPreload,
+                bypassRemoteProxy: useLocalContext,
                 initialDividerPosition: dividerPosition
             )?.id
         } else {
@@ -178,7 +180,9 @@ extension TerminalController {
                 tmuxStartCommand: inputs.tmuxStartCommand,
                 startupEnvironment: inputs.startupEnvironment,
                 initialDividerPosition: dividerPosition,
-                remotePTYSessionID: inputs.remotePTYSessionID
+                remotePTYSessionID: inputs.remotePTYSessionID,
+                suppressWorkspaceRemoteStartupCommand: useLocalContext,
+                allowTextBoxFocusDefault: false
             ) {
             case .created(let panel):
                 newId = panel.id
@@ -259,7 +263,8 @@ extension TerminalController {
             command: inputs.command,
             workingDirectory: inputs.workingDirectory,
             tmuxStartCommand: inputs.tmuxStartCommand,
-            focus: focus
+            focus: focus,
+            allowTextBoxFocusDefault: focus == true
         ) else {
             return .respawnFailed(surfaceId)
         }
@@ -302,7 +307,19 @@ extension TerminalController {
             }
         }
 
+        let placement = resolveControlPlacement(inputs.placementRaw)
+        if case .invalid(let raw) = placement {
+            return .invalidPlacement(rawValue: raw)
+        }
+        if case .dock = placement, !RightSidebarMode.dock.isAvailable() {
+            return .dockUnavailable(message: dockUnavailableMessage())
+        }
+
         let url = inputs.urlRaw.flatMap { URL(string: $0) }
+        if case .dock = placement,
+           let invalid = validateDockSurfaceCreateRouting(routing: routing, tabManager: tabManager, panelType: panelType) {
+            return invalid
+        }
         if panelType == .browser, BrowserAvailabilitySettings.isDisabled() {
             return .browserDisabled(surfaceBrowserDisabledOutcome(
                 rawURL: inputs.urlRaw,
@@ -311,7 +328,20 @@ extension TerminalController {
             ))
         }
 
-        guard let ws = resolveSurfaceWorkspace(routing: routing, tabManager: tabManager) else {
+        if case .dock = placement {
+            return dockSurfaceCreate(
+                routing: routing,
+                tabManager: tabManager,
+                panelType: panelType,
+                url: url,
+                inputs: inputs
+            )
+        }
+
+        guard let ws = resolveSurfaceCreateWorkspace(
+            routing: routing,
+            tabManager: tabManager
+        ) else {
             return .workspaceNotFound
         }
         v2MaybeFocusWindow(for: tabManager)
@@ -341,13 +371,15 @@ extension TerminalController {
         }
 
         let focus = v2FocusAllowed(requested: inputs.requestedFocus)
+        let useLocalContext = surfaceRemoteContextWantsLocal(inputs.remoteContextRaw)
         let newPanelId: UUID?
         if panelType == .browser {
             newPanelId = ws.newBrowserSurface(
                 inPane: paneId,
                 url: url,
                 focus: focus,
-                creationPolicy: .automationPreload
+                creationPolicy: .automationPreload,
+                bypassRemoteProxy: useLocalContext
             )?.id
         } else if panelType == .agentSession {
             newPanelId = ws.newAgentSessionSurface(
@@ -366,7 +398,9 @@ extension TerminalController {
                 tmuxStartCommand: inputs.tmuxStartCommand,
                 startupEnvironment: inputs.startupEnvironment,
                 remotePTYSessionID: inputs.remotePTYSessionID,
-                inheritWorkingDirectoryFallback: true
+                suppressWorkspaceRemoteStartupCommand: useLocalContext,
+                inheritWorkingDirectoryFallback: true,
+                allowTextBoxFocusDefault: false
             ) {
             case .created(let panel):
                 newPanelId = panel.id
@@ -402,11 +436,44 @@ extension TerminalController {
         guard let tabManager = resolveTabManager(routing: routing) else {
             return .tabManagerUnavailable
         }
+        if let resolution = controlWindowDockSurfaceClose(routing: routing, surfaceID: surfaceID, tabManager: tabManager) {
+            return resolution
+        }
         guard let ws = resolveSurfaceWorkspace(routing: routing, tabManager: tabManager) else {
             return .workspaceNotFound
         }
-        guard let surfaceId = surfaceID ?? ws.focusedPanelId else {
+        guard let surfaceId = resolvedSurfaceIdForClose(
+            explicitSurfaceID: surfaceID,
+            routing: routing,
+            fallbackWorkspace: ws
+        ) else {
             return .noFocusedSurface
+        }
+        if let windowDock = windowDockContainingPanel(surfaceId) {
+            if windowDockMismatchesExplicitWindow(routing, dock: windowDock) {
+                return .surfaceNotFound(surfaceId)
+            }
+            guard windowDock.closePanel(surfaceId, force: true) else {
+                return .closeFailed(surfaceId)
+            }
+            AppDelegate.shared?.notificationStore?.clearNotifications(
+                forTabId: windowDock.workspaceId,
+                surfaceId: surfaceId
+            )
+            return .closed(
+                windowID: dockResultWindowId(for: windowDock, tabManager: tabManager),
+                workspaceID: windowDock.workspaceId,
+                surfaceID: surfaceId
+            )
+        } else if ws.containsDockPanel(surfaceId) {
+            guard ws.closeDockPanelAndClearNotifications(surfaceId, force: true) else {
+                return .closeFailed(surfaceId)
+            }
+            return .closed(
+                windowID: v2ResolveWindowId(tabManager: tabManager),
+                workspaceID: ws.id,
+                surfaceID: surfaceId
+            )
         }
         guard ws.panels[surfaceId] != nil else {
             return .surfaceNotFound(surfaceId)
@@ -456,6 +523,16 @@ extension TerminalController {
         case "rightsidebartool": return .rightSidebarTool
         case "agentsession": return .agentSession
         default: return nil
+        }
+    }
+
+    private func surfaceRemoteContextWantsLocal(_ raw: String?) -> Bool {
+        guard let raw else { return false }
+        switch v2NormalizedToken(raw) {
+        case "local", "host", "mac", "macos":
+            return true
+        default:
+            return false
         }
     }
 }

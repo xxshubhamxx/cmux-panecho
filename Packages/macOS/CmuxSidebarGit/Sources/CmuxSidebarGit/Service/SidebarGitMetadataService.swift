@@ -60,13 +60,20 @@ public final class SidebarGitMetadataService: SidebarGitMetadataServing {
     var workspaceGitCleanIndexSignatureByKey: [WorkspaceGitProbeKey: String] = [:]
     var workspaceGitCleanIndexContentSignatureByKey: [WorkspaceGitProbeKey: String] = [:]
     var workspaceGitHeadSignatureByKey: [WorkspaceGitProbeKey: String] = [:]
-    var workspaceGitMetadataWatchersByKey: [WorkspaceGitProbeKey: RecursivePathWatcher] = [:]
-    var workspaceGitMetadataWatcherRefreshTasksByKey: [WorkspaceGitProbeKey: Task<Void, Never>] = [:]
     var workspaceGitMetadataWatcherSourceDirectoryByKey: [WorkspaceGitProbeKey: String] = [:]
+    var workspaceGitMetadataWatcherKeysBySourceDirectory: [String: Set<WorkspaceGitProbeKey>] = [:]
+    var workspaceGitMetadataWatchersByWatchedPathsKey: [WorkspaceGitMetadataWatchedPathsKey: RecursivePathWatcher] = [:]
+    var workspaceGitMetadataWatcherRefreshTasksByWatchedPathsKey: [WorkspaceGitMetadataWatchedPathsKey: Task<Void, Never>] = [:]
+    var workspaceGitMetadataWatcherWatchedPathsKeyByProbeKey: [WorkspaceGitProbeKey: WorkspaceGitMetadataWatchedPathsKey] = [:]
+    var workspaceGitMetadataWatcherProbeKeysByWatchedPathsKey: [WorkspaceGitMetadataWatchedPathsKey: Set<WorkspaceGitProbeKey>] = [:]
     var workspaceGitMetadataWatcherDescriptorRequestsByKey: [WorkspaceGitProbeKey: WorkspaceGitMetadataWatcherDescriptorRequest] = [:]
     var workspaceGitMetadataWatcherDescriptorGeneration: UInt64 = 0
-    var workspaceGitSnapshotRequestsByDirectory: [String: [WorkspaceGitSnapshotProbeRequest]] = [:]
+    var workspaceGitMetadataFilesystemEventGeneration: UInt64 = 0
+    let workspaceGitSnapshotCacheNamespace = UUID()
+    var workspaceGitSnapshotCacheGenerationByDirectory: [String: UInt64] = [:]
+    var workspaceGitSnapshotRequestsByDirectory: [String: [WorkspaceGitProbeKey: WorkspaceGitSnapshotProbeRequest]] = [:]
     var workspaceGitSnapshotTasksByDirectory: [String: Task<Void, Never>] = [:]
+    var workspaceGitSnapshotTaskContextByDirectory: [String: WorkspaceGitSnapshotTaskContext] = [:]
     var workspaceGitSnapshotDirectoryByProbeKey: [WorkspaceGitProbeKey: String] = [:]
     var workspaceGitMetadataFallbackTask: Task<Void, Never>?
     private var lastSidebarGitMetadataWatchEnabled = false
@@ -210,8 +217,9 @@ public final class SidebarGitMetadataService: SidebarGitMetadataServing {
 
     private func restartWorkspaceGitMetadataWatching(reason: String) {
         guard let host else { return }
-        for workspaceId in host.orderedWorkspaceIds() where host.isRemoteWorkspace(workspaceId) == false {
+        for workspaceId in host.orderedWorkspaceIds() {
             for panelId in host.panelIds(in: workspaceId) {
+                guard !host.shouldSkipLocalGitMetadata(workspaceId: workspaceId, panelId: panelId) else { continue }
                 guard host.hasTerminalPanel(workspaceId: workspaceId, panelId: panelId) else {
                     continue
                 }
@@ -286,7 +294,8 @@ public final class SidebarGitMetadataService: SidebarGitMetadataServing {
 
         return Set(candidatePanelIds.filter { panelId in
             let probeKey = WorkspaceGitProbeKey(workspaceId: workspaceId, panelId: panelId)
-            return !activeProbeKeys.contains(probeKey)
+            return !host.shouldSkipLocalGitMetadata(workspaceId: workspaceId, panelId: panelId) &&
+                !activeProbeKeys.contains(probeKey)
         })
     }
 
@@ -309,6 +318,15 @@ public final class SidebarGitMetadataService: SidebarGitMetadataServing {
     }
 
     func clearWorkspaceGitMetadata(for key: WorkspaceGitProbeKey) {
+        clearWorkspaceGitProbeTracking(for: key)
+        guard let host, host.workspaceExists(key.workspaceId) else {
+            return
+        }
+        host.clearPanelGitBranch(workspaceId: key.workspaceId, panelId: key.panelId)
+        host.clearPanelPullRequest(workspaceId: key.workspaceId, panelId: key.panelId)
+    }
+
+    func clearWorkspaceGitProbeTracking(for key: WorkspaceGitProbeKey) {
         clearWorkspaceGitProbe(key)
         workspaceGitTrackedDirectoryByKey.removeValue(forKey: key)
         updateWorkspaceGitMetadataFallbackTimer()
@@ -316,11 +334,6 @@ public final class SidebarGitMetadataService: SidebarGitMetadataServing {
             workspaceId: key.workspaceId,
             panelId: key.panelId
         )
-        guard let host, host.workspaceExists(key.workspaceId) else {
-            return
-        }
-        host.clearPanelGitBranch(workspaceId: key.workspaceId, panelId: key.panelId)
-        host.clearPanelPullRequest(workspaceId: key.workspaceId, panelId: key.panelId)
     }
 
     public func clearWorkspaceGitProbes(workspaceId: UUID) {
