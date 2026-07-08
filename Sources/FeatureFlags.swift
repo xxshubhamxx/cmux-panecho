@@ -1,6 +1,8 @@
 import Foundation
 import Observation
+#if !PRIVACY_MODE && canImport(PostHog)
 import PostHog
+#endif
 
 struct CmuxFeatureFlagDefinition: Identifiable, Equatable {
     var id: String { key }
@@ -39,6 +41,14 @@ final class CmuxFeatureFlags {
 
     private static let mobileConnectButtonDefault = true
     private static let overrideKeyPrefix = "cmux.flags.override."
+
+    // Panecho: PostHog is not linked in privacy builds. The default remote-flag
+    // provider is a no-op there, so every flag falls back to its safe default.
+    #if !PRIVACY_MODE && canImport(PostHog)
+    static let defaultRemoteFlagValueProvider: (String) -> Any? = { PostHogSDK.shared.getFeatureFlag($0) }
+    #else
+    static let defaultRemoteFlagValueProvider: (String) -> Any? = { _ in nil }
+    #endif
 
     // Order is load-bearing for the typed accessors below. A keyed lookup would
     // repeat flag-key literals and violate the feature-flag lint's single
@@ -98,7 +108,7 @@ final class CmuxFeatureFlags {
 
     init(
         defaults: UserDefaults = .standard,
-        remoteFlagValueProvider: @escaping (String) -> Any? = { PostHogSDK.shared.getFeatureFlag($0) }
+        remoteFlagValueProvider: @escaping (String) -> Any? = CmuxFeatureFlags.defaultRemoteFlagValueProvider
     ) {
         self.defaults = defaults
         self.remoteFlagValueProvider = remoteFlagValueProvider
@@ -113,6 +123,7 @@ final class CmuxFeatureFlags {
     /// Called once from AppDelegate after PostHog analytics starts. Safe when
     /// the SDK never sets up — flags then keep their defaults.
     func start() {
+        #if !PRIVACY_MODE && canImport(PostHog)
         guard flagsObserver == nil else { return }
         flagsObserver = NotificationCenter.default.addObserver(
             forName: PostHogSDK.didReceiveFeatureFlags,
@@ -124,6 +135,7 @@ final class CmuxFeatureFlags {
             }
         }
         PostHogSDK.shared.reloadFeatureFlags()
+        #endif
     }
 
     func effectiveValue(for definition: CmuxFeatureFlagDefinition) -> Bool {

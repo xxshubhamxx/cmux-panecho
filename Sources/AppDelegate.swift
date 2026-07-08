@@ -1427,7 +1427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             PostHogAnalytics.shared.startIfNeeded()
             StartupBreadcrumbLog.append("appDelegate.didFinish.posthog.complete")
         }
-        if !isRunningUnderXCTest {
+        if !isRunningUnderXCTest && !PrivacyMode.isEnabled {
             CmuxFeatureFlags.shared.start()
         }
 

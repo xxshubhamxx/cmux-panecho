@@ -33,7 +33,7 @@ enum CmuxConfigActionSaver {
 
     static let emptyConfigTemplate = """
     {
-      "$schema": "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux.schema.json"
+      "$schema": "\(CmuxSettingsFileStore.schemaURLString)"
     }
 
     """
