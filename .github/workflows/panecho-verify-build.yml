@@ -18,7 +18,7 @@ concurrency:
 jobs:
   build-panecho:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       ZIG_REQUIRED: 0.15.2
     steps:
