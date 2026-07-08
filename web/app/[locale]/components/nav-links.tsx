@@ -31,6 +31,17 @@ export function NavLinks() {
       >
         {t("community")}
       </Link>
+      <ProUpgradeVisibility>
+        <Link
+          href="/pricing"
+          onClick={() =>
+            posthog.capture("cmuxterm_pricing_nav_clicked", { location: "nav" })
+          }
+          className="hover:text-foreground transition-colors"
+        >
+          {t("pricing")}
+        </Link>
+      </ProUpgradeVisibility>
       <a
         href="https://github.com/manaflow-ai/cmux"
         target="_blank"
