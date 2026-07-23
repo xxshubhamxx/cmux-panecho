@@ -150,6 +150,14 @@ extension TabManager: SidebarGitHosting {
         tabs.first(where: { $0.id == workspaceId })?.clearPanelPullRequest(panelId: panelId)
     }
 
+    func schedulePanelGitMetadataProbe(workspaceId: UUID, panelId: UUID, reason: String) {
+        sidebarGitMetadataService.scheduleInitialWorkspaceGitMetadataRefreshIfPossible(
+            workspaceId: workspaceId,
+            panelId: panelId,
+            reason: reason
+        )
+    }
+
     func clearAllSidebarGitMetadata() {
         for workspace in tabs {
             workspace.clearSidebarGitMetadata()
@@ -164,13 +172,14 @@ extension TabManager: SidebarGitHosting {
 
     // MARK: Environment
 
-    var isGitMetadataWatchEnabled: Bool {
-        SidebarWorkspaceDetailDefaults.watchGitStatusValue(defaults: .standard)
+    var gitMetadataActivity: SidebarGitMetadataActivity {
+        SidebarWorkspaceDetailDefaults.gitMetadataActivity(defaults: .standard)
     }
 
-    var isPullRequestPollingEnabled: Bool {
+    var pullRequestActivity: SidebarGitMetadataActivity {
         // Panecho: never poll GitHub for PRs in privacy mode.
-        !PrivacyMode.isEnabled && SidebarWorkspaceDetailDefaults.pullRequestPollingEnabled(defaults: .standard)
+        if PrivacyMode.isEnabled { return .disabled }
+        return SidebarWorkspaceDetailDefaults.pullRequestActivity(defaults: .standard)
     }
 
     func mobileHostHasRecentActivity(within interval: TimeInterval) -> Bool {

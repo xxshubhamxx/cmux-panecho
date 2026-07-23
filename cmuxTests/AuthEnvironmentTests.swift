@@ -9,6 +9,80 @@ import Testing
 
 @Suite("Auth environment")
 struct AuthEnvironmentTests {
+    @Test("macOS production auth override selects the production Stack project")
+    func macOSProductionAuthOverrideSelectsProductionStackProject() {
+        #expect(AuthEnvironment.resolvedStackAuthEnvironment(
+            environment: ["CMUX_AUTH_ENVIRONMENT": " production "],
+            isDebugBuild: true
+        ) == .production)
+        #expect(AuthEnvironment.resolvedStackProjectID(
+            environment: ["CMUX_AUTH_ENVIRONMENT": "production"],
+            isDebugBuild: true
+        ) == "9790718f-14cd-4f7e-824d-eaf527a82b82")
+        #expect(AuthEnvironment.resolvedStackPublishableClientKey(
+            environment: ["CMUX_AUTH_ENVIRONMENT": "production"],
+            isDebugBuild: true
+        ) == "pck_kzj80gx4mh2jrzn1cx6y5e8jk0kwa01vkevh2p9zd4twr")
+    }
+
+    @Test("invalid macOS auth override fails toward the build channel")
+    func invalidMacOSAuthOverrideFailsTowardBuildChannel() {
+        #expect(AuthEnvironment.resolvedStackAuthEnvironment(
+            environment: ["CMUX_AUTH_ENVIRONMENT": "staging"],
+            isDebugBuild: true
+        ) == .development)
+        #expect(AuthEnvironment.resolvedStackAuthEnvironment(
+            environment: ["CMUX_AUTH_ENVIRONMENT": "staging"],
+            isDebugBuild: false
+        ) == .production)
+    }
+
+    @Test("explicit Stack values override the selected auth channel")
+    func explicitStackValuesOverrideSelectedAuthChannel() {
+        let environment = [
+            "CMUX_AUTH_ENVIRONMENT": "production",
+            "CMUX_STACK_PROJECT_ID": "test-project",
+            "CMUX_STACK_PUBLISHABLE_CLIENT_KEY": "test-key",
+        ]
+        #expect(AuthEnvironment.resolvedStackProjectID(
+            environment: environment,
+            isDebugBuild: true
+        ) == "test-project")
+        #expect(AuthEnvironment.resolvedStackPublishableClientKey(
+            environment: environment,
+            isDebugBuild: true
+        ) == "test-key")
+    }
+
+    @Test("Iroh broker uses shared staging in debug without moving other APIs")
+    func irohBrokerUsesSharedStagingInDebugWithoutMovingOtherAPIs() {
+        let defaultURL = AuthEnvironment.resolvedIrohBrokerBaseURL(
+            environment: ["CMUX_VM_API_BASE_URL": "http://localhost:9450"],
+            isDebugBuild: true
+        )
+        #expect(defaultURL?.absoluteString == "https://cmux-staging.vercel.app")
+
+        let overrideURL = AuthEnvironment.resolvedIrohBrokerBaseURL(
+            environment: [
+                "CMUX_IROH_BROKER_BASE_URL": "https://broker.example.test/root/",
+                "CMUX_VM_API_BASE_URL": "http://localhost:9450",
+            ],
+            isDebugBuild: true
+        )
+        #expect(overrideURL?.absoluteString == "https://broker.example.test/root/")
+
+        let releaseURL = AuthEnvironment.resolvedIrohBrokerBaseURL(
+            environment: [:],
+            isDebugBuild: false
+        )
+        #expect(releaseURL?.absoluteString == "https://cmux.com")
+
+        #expect(AuthEnvironment.resolvedIrohBrokerBaseURL(
+            environment: ["CMUX_IROH_BROKER_BASE_URL": ":// malformed"],
+            isDebugBuild: true
+        ) == nil)
+    }
+
     @Test("debug callback scheme uses sanitized tag")
     func debugCallbackSchemeUsesSanitizedTag() {
         #expect(
@@ -228,6 +302,12 @@ struct AuthEnvironmentTests {
         #expect(appPricingURL.host == "localhost")
         #expect(appPricingURL.port == 9210)
         #expect(appPricingURL.path == "/app-pricing")
+
+        let appProWelcomeURL = AuthEnvironment.resolvedAppProWelcomeURL(environment: environment)
+        #expect(appProWelcomeURL.scheme == "http")
+        #expect(appProWelcomeURL.host == "localhost")
+        #expect(appProWelcomeURL.port == 9210)
+        #expect(appProWelcomeURL.path == "/app-pro-welcome")
     }
 
     @Test("Pro upgrade workspace reuse keeps a live tracked workspace")
@@ -250,6 +330,59 @@ struct AuthEnvironmentTests {
 
         #expect(state.reusableWorkspaceID { _ in false } == nil)
         #expect(state.workspaceId == nil)
+    }
+
+    @Test("Pro welcome checklist automatic presentation requires Pro plan, feature flag, and unseen defaults")
+    func proWelcomeChecklistAutomaticPresentationRequiresAllGates() {
+        #expect(ProWelcomeChecklistPresenter.shouldPresentAutomatically(isPro: true, seen: false, flagEnabled: true))
+        #expect(!ProWelcomeChecklistPresenter.shouldPresentAutomatically(isPro: false, seen: false, flagEnabled: true))
+        #expect(!ProWelcomeChecklistPresenter.shouldPresentAutomatically(isPro: true, seen: true, flagEnabled: true))
+        #expect(!ProWelcomeChecklistPresenter.shouldPresentAutomatically(isPro: true, seen: false, flagEnabled: false))
+    }
+
+    @Test("Pro welcome checklist consume gate persists once only")
+    func proWelcomeChecklistConsumeGatePersistsOnceOnly() throws {
+        let suiteName = "cmuxTests.proWelcomeChecklist.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        #expect(defaults.bool(forKey: ProWelcomeChecklistPresenter.seenDefaultsKey) == false)
+        #expect(ProWelcomeChecklistPresenter.consumeAutomaticPresentation(
+            isPro: true,
+            flagEnabled: true,
+            defaults: defaults
+        ))
+        #expect(defaults.bool(forKey: ProWelcomeChecklistPresenter.seenDefaultsKey))
+        #expect(!ProWelcomeChecklistPresenter.consumeAutomaticPresentation(
+            isPro: true,
+            flagEnabled: true,
+            defaults: defaults
+        ))
+    }
+
+    @Test("Pro welcome checklist consume gate does not persist when blocked")
+    func proWelcomeChecklistConsumeGateDoesNotPersistWhenBlocked() throws {
+        let suiteName = "cmuxTests.proWelcomeChecklist.blocked.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        #expect(!ProWelcomeChecklistPresenter.consumeAutomaticPresentation(
+            isPro: false,
+            flagEnabled: true,
+            defaults: defaults
+        ))
+        #expect(!defaults.bool(forKey: ProWelcomeChecklistPresenter.seenDefaultsKey))
+
+        #expect(!ProWelcomeChecklistPresenter.consumeAutomaticPresentation(
+            isPro: true,
+            flagEnabled: false,
+            defaults: defaults
+        ))
+        #expect(!defaults.bool(forKey: ProWelcomeChecklistPresenter.seenDefaultsKey))
     }
 
     @MainActor

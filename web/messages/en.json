@@ -101,9 +101,6 @@
         "pendingBody": "{team} is scheduled to end on {date}.",
         "price": "$35/seat/month"
       },
-      "legacy": {
-        "body": "Your subscription is managed by our previous billing system. Contact support to make changes."
-      },
       "details": {
         "renewsOn": "Renews on",
         "endsOn": "Ends on",
@@ -124,6 +121,12 @@
         "cancelSummary": "Cancel plan",
         "confirmCancel": "Confirm cancellation",
         "resume": "Resume plan"
+      },
+      "plan": {
+        "heading": "Your personal plan",
+        "free": "Free",
+        "pro": "Pro",
+        "loading": "Loading…"
       }
     },
     "testflight": {
@@ -338,7 +341,9 @@
   "pricing": {
     "metaTitle": "Pricing — cmux",
     "metaDescription": "cmux is a free, open source macOS terminal for AI coding agents. Upgrade to Pro for Cloud VMs, cmux Vault session backup, and a model gateway. Enterprise adds SSO and self-hosting.",
+    "metaDescriptionShort": "cmux is a free, open source macOS terminal. Pro adds Cloud VMs, Vault session backup, and a model gateway; Enterprise adds SSO and self-hosting.",
     "metaDescriptionNoVault": "cmux is a free, open source macOS terminal for AI coding agents. Upgrade to Pro for Cloud VMs and a model gateway. Enterprise adds SSO and self-hosting.",
+    "metaDescriptionNoVaultShort": "cmux is a free, open source macOS terminal. Pro adds Cloud VMs and a model gateway; Enterprise adds SSO and self-hosting.",
     "title": "Pricing",
     "perMonth": "/month",
     "perUserMonth": "/user/month",
@@ -617,7 +622,6 @@
     "welcomePendingAction": "Check again",
     "billingError": "Something went wrong starting checkout. Please try again in a moment.",
     "billingUnavailable": "Billing is not available right now. Please try again later.",
-    "billingExternal": "Your subscription is managed by our previous billing system. Contact support to make changes.",
     "billingCancelled": "Checkout cancelled. You have not been charged.",
     "billingInvalidPlan": "That plan is not available. Pick a plan below.",
     "welcomeTeam": "Your cmux Team purchase is complete."
@@ -692,7 +696,7 @@
   },
   "community": {
     "title": "Community",
-    "description": "Browse projects built by the cmux community, from agent hooks to multi-agent orchestration and remote access.",
+    "description": "Browse projects built by the cmux community, from agent hooks to multi-agent orchestration and remote access tools.",
     "metaTitle": "Community — cmux",
     "metaDescription": "Browse every project from awesome-cmux on the cmux community page",
     "sourceAction": "View awesome-cmux",
@@ -971,6 +975,10 @@
       "metaTitle": "The Zen of cmux",
       "metaDescription": "cmux is a primitive, not a solution. It gives you composable pieces and your workflow is up to you."
     },
+    "cmuxFork": {
+      "metaTitle": "Introducing cmux Fork",
+      "metaDescription": "Fork a Codex, Claude Code, OpenCode, Pi, Hermes, or other supported agent conversation into a new split, tab, or workspace without losing its context."
+    },
     "claudeCodeBestWorktreeManager": {
       "metaTitle": "Claude Code Is The Best Worktree Manager",
       "metaDescription": "Why agents, super repos, cmux custom commands, and programmable terminal primitives beat built-in worktree managers for real codebases.",
@@ -992,7 +1000,7 @@
     },
     "cmuxOmo": {
       "metaTitle": "oh-my-openagent subagents as native cmux panes",
-      "metaDescription": "oh-my-openagent (formerly oh-my-opencode) orchestrates parallel specialist agents across Claude, GPT, and Gemini. cmux omo turns their tmux panes into native splits."
+      "metaDescription": "oh-my-openagent orchestrates specialist Claude, GPT, and Gemini agents in parallel. cmux omo turns each tmux pane into a native split."
     },
     "gpl": {
       "metaTitle": "cmux is now GPL",
@@ -1088,7 +1096,7 @@
       },
       "cmuxOmo": {
         "title": "oh-my-openagent subagents as native cmux panes",
-        "summary": "oh-my-openagent (formerly oh-my-opencode) orchestrates parallel specialist agents across Claude, GPT, and Gemini. cmux omo turns their tmux panes into native splits.",
+        "summary": "oh-my-openagent orchestrates specialist Claude, GPT, and Gemini agents in parallel. cmux omo turns each tmux pane into a native split.",
         "date": "March 30, 2026",
         "p1": "<code>cmux omo</code> integrates oh-my-openagent (formerly oh-my-opencode), a plugin for OpenCode that orchestrates specialist agents across Claude, GPT, and Gemini in parallel. Each agent gets its own tmux pane. <code>cmux omo</code> uses the same tmux shim as <claudeTeamsLink><code>cmux claude-teams</code></claudeTeamsLink>: fake <code>TMUX</code> env var, every tmux command translated to cmux splits. It auto-installs the plugin into a shadow config so <code>~/.config/opencode</code> stays untouched.",
         "p2": "The shim also intercepts <code>terminal-notifier</code> calls and routes them through <code>cmux notify</code>. Works over SSH via the Go relay daemon."
@@ -1131,6 +1139,19 @@
         "p2": "cmux is a primitive, not a solution. It gives you a terminal, a browser, notifications, workspaces, splits, tabs, and a CLI to control all of it. cmux doesn't force you into an opinionated way to use coding agents. What you build with the primitives is yours.",
         "p3": "The best developers have always built their own tools. Nobody has figured out the best way to work with agents yet, and the teams building closed products definitely haven't either. The developers closest to their own codebases will figure it out first.",
         "p4": "Give a million developers composable primitives and they'll collectively find the most efficient workflows faster than any product team could design top-down."
+      },
+      "cmuxFork": {
+        "title": "Introducing cmux Fork",
+        "summary": "Branch an agent conversation into a new split, tab, or workspace without losing its context.",
+        "date": "July 14, 2026",
+        "p1": "Coding-agent threads reach useful fork points. You may want to keep one approach intact while another agent tries a different implementation, investigates a tangent, or reviews the same problem from a fresh angle.",
+        "p2": "Fork Conversation creates a new agent session from the current thread, preserving its conversation history and working directory. It supports Codex, Claude Code, OpenCode, Pi, Hermes, and other agents with forkable sessions.",
+        "destinationsTitle": "Fork wherever you want to work",
+        "destinationsP": "Right-click a terminal or tab and choose Fork Conversation, or press <code>Cmd+Shift+P</code> and search for Fork Conversation. Send the fork to a split on any side, a new tab, or a new workspace.",
+        "parallelTitle": "Explore several directions at once",
+        "parallelP1": "Fork the same conversation more than once to compare implementations or let several agents divide a problem with the same starting context. Each fork continues independently, while the original thread stays available.",
+        "parallelP2": "Forks can work in the same directory. Give them separate tasks or files when concurrent edits could overlap.",
+        "release": "cmux Fork is available in v0.64.19."
       },
       "claudeCodeBestWorktreeManager": {
         "title": "Claude Code Is The Best Worktree Manager",
@@ -1388,6 +1409,7 @@
       "metaDescription": "Drive a remote tmux session from cmux over SSH using tmux control mode. Sessions become workspaces, windows become tabs, and a window's panes become a native cmux split.",
       "intro": "Remote tmux mirrors a tmux session running on a remote machine into cmux over SSH, using tmux control mode (tmux -CC). Instead of a plain SSH terminal, the remote session is reprojected into cmux's native UI — workspaces, tabs, splits, scrollback, and copy — and cmux drives the real tmux server behind it. It is a Beta Features flag and does not change local terminals.",
       "betaNote": "Beta. This feature is opt-in and still stabilizing — see the limitations below.",
+      "moshContrast": "For network roaming, use cmux mosh-tmux. It opens a first-class Mosh terminal attached to a named tmux session; it does not replace the native workspace/tab/split mirror provided by SSH tmux control mode.",
       "mappingTitle": "How tmux maps to cmux",
       "mappingIntro": "cmux and tmux nest their layouts in opposite directions. In cmux, a pane holds a row of tabs (each tab is one terminal). In tmux, a window holds a split of panes. Remote tmux bridges the two by projecting tmux's structure onto cmux's:",
       "mapTmux": "tmux",
@@ -1401,9 +1423,10 @@
       "enableTitle": "Enable it",
       "enableDesc": "Open Settings → Beta Features and turn on Remote tmux. The toggle is off by default, so nothing changes for local terminals until you opt in.",
       "attachTitle": "Attaching",
-      "attachIntro": "Run cmux ssh-tmux <destination> in a terminal — an ~/.ssh/config alias or user@host. cmux opens a new window that mirrors that host's tmux sessions: each session becomes a workspace, each window a tab, and multi-pane windows become in-tab splits.",
-      "attachSockets": "The remote.tmux.* socket commands (below) give finer control — for example, remote.tmux.mirror mirrors a host's sessions into the current window's sidebar instead of opening a dedicated window.",
-      "attachCli": "Hosts that authenticate non-interactively (ssh-agent, or a key in ~/.ssh/config) attach with no prompt. If the host needs interactive authentication (a password, host-key confirmation, or MFA), cmux runs ssh inline in your terminal so you can authenticate, then opens the mirror window. Accepts --port and --identity.",
+      "attachIntro": "Run cmux ssh-tmux <destination> in a terminal — an ~/.ssh/config alias or user@host. cmux mirrors that host's tmux sessions into the current window's sidebar: each session becomes a workspace, each window a tab, and multi-pane windows become in-tab splits.",
+      "attachNewWindow": "Pass --new-window to open the mirror in a dedicated new window instead of the current window.",
+      "attachSockets": "The remote.tmux.* socket commands (below) give finer control. remote.tmux.mirror is the mirror entry point; it accepts window/caller routing and can optionally select the mirrored workspace.",
+      "attachCli": "Hosts that authenticate non-interactively (ssh-agent, or a key in ~/.ssh/config) attach with no prompt. If the host needs interactive authentication (a password, host-key confirmation, or MFA), cmux runs ssh inline in your terminal so you can authenticate, then mirrors into the current window. Accepts --port, --identity, and --no-focus.",
       "troubleshootTitle": "If you get \"Permission denied\"",
       "troubleshootDesc": "The destination is handed to ssh as-is, so an alias must carry everything ssh needs to log in — most commonly User (without it, ssh tries your local username) and IdentityFile:",
       "troubleshootFallback": "Or pass the user explicitly: cmux ssh-tmux dev@my-ssh-alias. If plain ssh <destination> doesn't log you in, cmux ssh-tmux <destination> won't either.",
@@ -1418,14 +1441,13 @@
       "behaviorMouse": "Mouse: clicks, scroll, and drag reach the remote app when it has mouse mode on. Hold Shift while dragging for a native cmux text selection/copy (the same as any terminal running a mouse-mode app).",
       "behaviorUnicode": "Unicode-correct output: multi-byte characters are preserved even when tmux splits them across updates, so box-drawing and other wide content render cleanly.",
       "socketTitle": "Socket commands",
-      "socketDesc": "The feature is also driven by socket commands (gated on the Beta Features flag). host is an SSH destination or ~/.ssh/config alias; session is a tmux session name.",
+      "socketDesc": "The feature is also driven by socket commands (gated on the Beta Features flag). host is an SSH destination or ~/.ssh/config alias; session is a tmux session name; mirror also accepts standard window/workspace/surface/pane routing.",
       "socketMethod": "Method",
       "socketParams": "Params",
       "socketMeaning": "Description",
       "methodSessions": "List the tmux sessions on a host.",
       "methodAttach": "Attach a control client to a session (create attaches-or-creates).",
-      "methodMirror": "Mirror every session on a host, each as its own workspace (windows become tabs).",
-      "methodWindow": "Open a dedicated window mirroring every session on a host (the cmux ssh-tmux entry point); returns the ssh command to run for interactive auth when the host needs it.",
+      "methodMirror": "Mirror every session on a host into the resolved window, each as its own workspace (windows become tabs); returns the ssh command to run for interactive auth when the host needs it.",
       "methodDetach": "Detach the control client; the remote session keeps running.",
       "methodState": "Report the control client's observed state (diagnostics).",
       "socketSafetyDesc": "A dash-prefixed host or identity file is rejected at the trust boundary as a defense against SSH option injection.",
@@ -1611,10 +1633,10 @@
       "cliTitle": "CLI",
       "cliDesc": "All group operations are scriptable with the cmux workspace-group subcommands. The hyphenated form ships first; once the broader cmux workspace command namespace lands, cmux workspace group becomes the canonical form, with the hyphenated form kept as an alias forever.",
       "cliSubcommandsTitle": "Subcommands",
-      "cliCreateNote": "create returns a group handle (workspace_group:N by default). Pass --json for the full structured payload.",
-      "cliFlagsNote": "Pass set-color or set-icon an empty value to clear the group's color or icon. delete is irreversible: it closes every member workspace.",
+      "cliCreateNote": "create returns a group handle (workspace_group:N by default). Omitting --from creates an anchor-only group; existing workspaces are never inferred from selection or caller context. Pass --json for the full structured payload.",
+      "cliFlagsNote": "delete dissolves the group and keeps its workspaces by default. Pass --close-workspaces only to close every member workspace and terminate its processes. The response reports the operation and affected count. Pass set-color or set-icon an empty value to clear the group's color or icon.",
       "cliExamplesTitle": "Examples",
-      "cliExampleGroup": "Group the currently selected workspaces under a name:",
+      "cliExampleGroup": "Group two explicitly chosen workspaces under a name:",
       "cliExampleNew": "Spin up a new workspace inside an existing group, for example wired to a worktree script:",
       "cliExampleList": "List groups in the focused window:",
       "configTitle": "Configuration",
@@ -1660,6 +1682,28 @@
       "settingsFileChords": "Use a string for a single shortcut or a two-item array for a chord. Example: [\"ctrl+b\", \"c\"] means press Ctrl+B, then C.",
       "exampleConfig": "Example config",
       "schemaDescriptions": {
+        "agentChat": {
+          "description": "Agent Chat GUI server settings. The built-in New agent chat action opens this URL in a browser workspace, probes /healthz first, and can run a configured start command when the server is down.",
+          "url": "Base URL for the machine-local Agent Chat GUI server. cmux probes <url>/healthz before opening the workspace.",
+          "startCommand": "Optional shell command to start the Agent Chat server when <url>/healthz is unreachable. cmux runs it detached with the user's SHELL, polls healthz for a short bounded window, then opens the workspace either way.",
+          "keys": {
+            "description": "Keyboard behavior overrides for the Agent Chat web UI.",
+            "ctrlJ": "Behavior for Ctrl+J in Agent Chat text fields. Use newline to insert a line break, or menu to move to the next popup item while a menu is open."
+          },
+          "fonts": {
+            "description": "Font overrides for the Agent Chat web UI. Omitted values fall back to Ghostty and built-in defaults.",
+            "sansFamily": "CSS font family used for Agent Chat body and UI text.",
+            "bodyFamily": "Alias for sansFamily.",
+            "family": "Alias for sansFamily.",
+            "baseSize": "Base Agent Chat font size in CSS pixels.",
+            "bodySize": "Alias for baseSize.",
+            "monoFamily": "CSS font family used for Agent Chat code and monospace text.",
+            "codeFamily": "Alias for monoFamily.",
+            "codeSize": "Agent Chat code font size in CSS pixels.",
+            "monoSize": "Alias for codeSize.",
+            "codeLineHeight": "Line-height multiplier used for Agent Chat code blocks."
+          }
+        },
         "automation": {
           "ampIntegration": "Enable cmux integration hooks for Amp. When disabled, the bundled plugin stays inactive without needing to be removed.",
           "suppressSubagentNotifications": "Suppress visible completion notifications and status mutations from nested Codex or Claude child agents while keeping their events in Feed telemetry.",
@@ -1678,6 +1722,8 @@
         "terminal": {
           "copyOnSelect": "When true, copy selected terminal text to the system clipboard when the selection is committed. When false, cmux does not emit a Ghostty copy-on-select override; Ghostty config and defaults control selection-clipboard behavior.",
           "scrollSpeed": "Multiplier applied to terminal scroll wheel and trackpad deltas. Higher values scroll faster; lower values scroll slower.",
+          "sessionContentMaxWidth": "Optional maximum width, in points, for terminal and built-in agent chat content. Set false to use the full pane width.",
+          "sessionContentAlignment": "Horizontal placement for terminal and built-in agent chat content when sessionContentMaxWidth is enabled.",
           "showTextBoxOnNewTerminals": "Show the beta TextBox input by default for newly created workspaces, terminal tabs, and terminal splits.",
           "focusTextBoxOnNewTerminals": "Focus the beta TextBox input by default for newly created workspaces, terminal tabs, and terminal splits. Focusing also shows the TextBox.",
           "textBoxDefaultSubmitAction": "Default TextBox submit action ID for new terminal sessions. Use text-entry for plain input or one of the configured action IDs.",
@@ -1717,6 +1763,7 @@
           "wordWrap": "Wrap long lines at the editor's right edge instead of scrolling horizontally."
         },
         "sidebar": {
+          "notificationMessageLineLimit": "Maximum lines shown for the latest notification below each workspace title.",
           "rightMaxWidth": "Maximum width in points for the right sidebar. When omitted, the built-in dynamic cap applies."
         },
         "fileExplorer": {
@@ -2246,10 +2293,16 @@
       "flagName": "Flag",
       "flagDesc": "Description",
       "flagNameVal": "Set the workspace title",
+      "flagCommand": "Run command text once in the initial remote terminal after shell startup",
       "flagPort": "SSH port (default 22)",
       "flagIdentity": "Path to identity file",
       "flagSshOption": "Pass arbitrary SSH options (e.g. -o StrictHostKeyChecking=no)",
+      "flagTransport": "Interactive terminal transport: ssh (default) or mosh",
       "flagNoFocus": "Create the workspace without switching to it",
+      "moshTitle": "Mosh terminal transport",
+      "moshDesc": "Use cmux ssh user@remote --transport mosh when the interactive terminal should survive Wi-Fi, VPN, hotspot, and sleep/wake network changes. Mosh carries only the terminal PTY; SSH remains the management lane for remote metadata, daemon bootstrap and control, browser proxying, uploads, and reconnect actions.",
+      "moshFallback": "cmux requires Mosh 1.4 or later locally and checks for remote mosh-server before launch. If the client is missing or incompatible, the server is missing, or the remote probe fails, cmux explains the reason and continues over SSH.",
+      "moshTmux": "Create a Mosh workspace that creates or attaches to a named tmux session (default: main). The tmux profile persists across reconnect and app session restore. This is a roaming tmux terminal, not the native mirror from cmux ssh-tmux. --session <name> selects the session; all other flags match cmux mosh. Without Mosh, the same profile runs over SSH.",
       "deepLinksTitle": "SSH deep links",
       "deepLinksDesc": "Use cmux SSH deep links when a website or tool wants to offer an Open in cmux button. The link opens cmux, shows a confirmation prompt, then runs the equivalent cmux ssh command after the user confirms.",
       "deepLinksWebFallbackDesc": "Use the cmux.com fallback URL for website buttons. It opens the native link and shows the download if cmux is not installed.",
@@ -2425,7 +2478,7 @@
       "whatYouGetDesc": "The hooks extension lets omp report lifecycle and session information back to cmux:",
       "whatYouGet1": "Workspace busy and idle status from omp turn boundaries",
       "whatYouGet2": "Turn-end notifications in cmux",
-      "whatYouGet3": "Session tracking so closed panes can be resumed or forked from the session index with omp --session SESSION_ID, adding --fork for forks",
+      "whatYouGet3": "Session tracking so closed panes can be resumed from the session index with omp --session SESSION_ID or forked with omp --fork SESSION_ID",
       "whatYouGet4": "Workspace auto-naming, with omp available as the summarizer model",
       "whatYouGet5": "Task Manager process attribution for omp processes",
       "directories": "Directories",
@@ -2786,6 +2839,29 @@
       }
     }
   },
+  "cloudBillingReturn": {
+    "eyebrow": "cmux Cloud",
+    "returnTitle": "Continue in your terminal",
+    "returnBody": "Return to the terminal where you ran ssh cmux.cloud to continue.",
+    "statuses": {
+      "checkoutSuccess": {
+        "title": "Checkout complete",
+        "body": "Your subscription is confirmed. New limits may take a moment to appear."
+      },
+      "checkoutCanceled": {
+        "title": "Checkout canceled",
+        "body": "Checkout closed without changing your plan."
+      },
+      "portalReturn": {
+        "title": "Back from the billing portal",
+        "body": "Changes made in the billing portal may take a moment to appear."
+      },
+      "default": {
+        "title": "Billing complete",
+        "body": "Your billing flow is complete."
+      }
+    }
+  },
   "landing": {
     "bestTerminal": {
       "metaTitle": "The best terminal for Mac in 2026 — cmux",
@@ -2924,6 +3000,10 @@
       "metaDescription": "Guides comparing cmux with other macOS terminals, how it is built on Ghostty, and how to run Claude Code, Codex, and OpenCode in cmux.",
       "title": "Guides",
       "intro": "Comparisons, background, and use-case guides for cmux. For product documentation, see the docs."
+    },
+    "remoteTmux": {
+      "title": "Remote tmux",
+      "metaDescription": "Use cmux as a native macOS front end for tmux running on another machine."
     },
     "compare": {
       "metaTitle": "Compare cmux with AI coding terminals and agent workspaces",
@@ -4442,6 +4522,7 @@
       "cursorCli": "A terminal for Cursor CLI",
       "keyboardShortcuts": "Keyboard shortcuts",
       "browserAutomation": "Browser automation",
+      "remoteTmux": "Remote tmux",
       "compare": "Compare cmux"
     },
     "agents": {
@@ -4643,6 +4724,34 @@
       "submitting": "Submitting...",
       "success": "Thanks. We received your request and will reply from founders@manaflow.com.",
       "error": "Something went wrong. Please try again or email founders@manaflow.com."
+    }
+  },
+  "appProWelcome": {
+    "eyebrow": "cmux Pro is active",
+    "title": "Welcome to cmux Pro",
+    "body": "Your plan includes cloud agents on Cloud VMs, 20 monthly compute-hours, the model gateway, and the cmux iOS app. Start here.",
+    "done": "Go to dashboard",
+    "steps": {
+      "modelGateway": {
+        "title": "Model gateway",
+        "body": "Route across providers with usage and cost analytics.",
+        "action": "Open model gateway"
+      },
+      "aiAccounts": {
+        "title": "Connect your AI accounts",
+        "body": "Add provider accounts so cmux can route work through them.",
+        "action": "Connect providers"
+      },
+      "iosApp": {
+        "title": "cmux iOS app",
+        "body": "Use cmux on your phone.",
+        "action": "Join the iOS beta"
+      },
+      "billing": {
+        "title": "Manage your plan",
+        "body": "See your plan, invoices, and cancellation.",
+        "action": "Manage plan"
+      }
     }
   }
 }

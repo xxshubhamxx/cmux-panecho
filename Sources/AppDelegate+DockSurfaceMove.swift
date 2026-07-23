@@ -115,30 +115,28 @@ extension AppDelegate {
 
         guard let detached = detachSurfaceFromContainer(source) else { return false }
 
-        guard destinationDock.attachDetachedSurface(
-            detached,
-            inPane: target.pane,
-            atIndex: target.index,
-            focus: true
-        ) != nil else {
+        let attachedPanelId: UUID?
+        if let split = target.split {
+            attachedPanelId = destinationDock.attachDetachedSurface(
+                detached,
+                bySplitting: target.pane,
+                orientation: split.orientation,
+                insertFirst: split.insertFirst,
+                focus: true
+            )
+        } else {
+            attachedPanelId = destinationDock.attachDetachedSurface(
+                detached,
+                inPane: target.pane,
+                atIndex: target.index,
+                focus: true
+            )
+        }
+        guard attachedPanelId != nil else {
             reattachSurfaceToContainer(detached, source)
             return false
         }
-
-        if let split = target.split,
-           let movedTabId = destinationDock.surfaceId(forPanelId: detached.panelId) {
-            // Not wrapped in `withProgrammaticDockSplit`: this moves the just-attached
-            // tab out of `target.pane` to form the split, which can leave `target.pane`
-            // holding only Bonsplit's placeholder "Empty" tab (when it was empty before
-            // the drop). Letting `didSplitPane` run repairs that placeholder-only pane
-            // into a real terminal (and is a no-op when the pane still has a surface).
-            _ = destinationDock.bonsplitController.splitPane(
-                target.pane,
-                orientation: split.orientation,
-                movingTab: movedTabId,
-                insertFirst: split.insertFirst
-            )
-        }
+        destinationDock.scheduleDockPortalReconcile(reason: "dock.moveSurfaceIntoDock")
 
         // The surface was attached into the Dock with focus, so record Dock focus
         // ownership. Without this, `rightSidebarOwnsInputFocus` stays false and the
@@ -212,6 +210,11 @@ extension AppDelegate {
                 insertFirst: splitTarget.insertFirst
             )
         }
+        destinationWorkspace.scheduleTerminalGeometryReconcile()
+        destinationWorkspace.reconcileBrowserPortalVisibilityForCurrentRenderedLayout(
+            reason: "dock.moveSurfaceToWorkspace"
+        )
+        sourceDock.scheduleDockPortalReconcile(reason: "dock.moveSurfaceToWorkspace.source")
 
         if focus {
             if focusWindow, let destinationWindowId = windowId(for: destinationManager) {
@@ -239,7 +242,7 @@ extension AppDelegate {
         guard let detached = sourceDock.detachSurface(panelId: panelId) else { return false }
         (detached.panel as? TerminalPanel)?.surface.setFocusPlacement(.workspace)
 
-        guard manager.addWorkspace(fromDetachedSurface: detached, select: focus) != nil else {
+        guard let destinationWorkspace = manager.addWorkspace(fromDetachedSurface: detached, select: focus) else {
             // Creation failed — roll the panel back into the Dock unchanged.
             (detached.panel as? TerminalPanel)?.surface.setFocusPlacement(.rightSidebarDock)
             if let rollbackPane = sourcePane ?? sourceDock.bonsplitController.allPaneIds.first {
@@ -247,6 +250,11 @@ extension AppDelegate {
             }
             return false
         }
+        destinationWorkspace.scheduleTerminalGeometryReconcile()
+        destinationWorkspace.reconcileBrowserPortalVisibilityForCurrentRenderedLayout(
+            reason: "dock.moveSurfaceToNewWorkspace"
+        )
+        sourceDock.scheduleDockPortalReconcile(reason: "dock.moveSurfaceToNewWorkspace.source")
 
         if focus, focusWindow, let destinationWindowId = windowId(for: manager) {
             _ = focusMainWindow(windowId: destinationWindowId)

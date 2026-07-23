@@ -336,7 +336,7 @@ extension BrowserPanel {
         }
     }
 
-    func injectReactGrab() async {
+    private func injectReactGrab() async {
         #if DEBUG
         cmuxDebugLog("reactGrab.inject.start")
         #endif
@@ -430,7 +430,7 @@ extension BrowserPanel {
         #endif
     }
 
-    func toggleReactGrab() {
+    private func toggleReactGrab() {
         #if DEBUG
         cmuxDebugLog("reactGrab.toggle.start")
         #endif
@@ -445,11 +445,13 @@ extension BrowserPanel {
         if isReactGrabActive {
             toggleReactGrab()
         } else {
+            guard await prepareForReactGrabActivation(reason: "reactGrab.toggle") else { return }
             await injectReactGrab()
         }
     }
 
     func ensureReactGrabActive() async {
+        guard await prepareForReactGrabActivation(reason: "reactGrab.ensureActive") else { return }
         if isReactGrabActive {
             guard pendingReactGrabRoundTripToken != nil else { return }
             if await refreshReactGrabBridgeSessionToken() {

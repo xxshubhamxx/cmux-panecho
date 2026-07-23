@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "**": false
+    }
+  },
   "regions": [
     "pdx1"
   ],
@@ -11,6 +17,14 @@
     {
       "path": "/api/cron/vm-alerts",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/internal/vm/leases/revoke-expired",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/internal/iroh/retention",
+      "schedule": "43 * * * *"
     }
   ]
 }

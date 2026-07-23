@@ -1,10 +1,11 @@
 import Darwin
 import Foundation
 import CMUXAgentLaunch
+import CmuxWorkspaces
 import Darwin
 import os
 
-nonisolated enum TerminalStartupShellQuoting {
+enum TerminalStartupShellQuoting {
     static func singleQuoted(_ value: String) -> String {
         if value.utf8.contains(where: { $0 >= 0x80 }) {
             return asciiPrintfCommandSubstitution(for: value)
@@ -35,7 +36,7 @@ fileprivate func shellSingleQuoted(_ value: String) -> String {
     TerminalStartupShellQuoting.singleQuoted(value)
 }
 
-nonisolated enum TerminalStartupWorkingDirectoryPrefix {
+enum TerminalStartupWorkingDirectoryPrefix {
     static func optionalChangeDirectoryPrefix(for workingDirectory: String?) -> String? {
         guard let workingDirectory = normalized(workingDirectory) else { return nil }
         let quoted = TerminalStartupShellQuoting.singleQuoted(workingDirectory)
@@ -317,7 +318,8 @@ enum AgentResumeCommandBuilder {
         launchCommand: AgentLaunchCommandSnapshot?,
         workingDirectory: String?,
         registrationOverride: CmuxVaultAgentRegistration? = nil,
-        includeWorkingDirectoryPrefix: Bool = true
+        includeWorkingDirectoryPrefix: Bool = true,
+        observedPermissionMode: String? = nil
     ) -> String? {
         let customRegistration = registrationOverride
         guard !sessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -326,7 +328,8 @@ enum AgentResumeCommandBuilder {
                   sessionId: sessionId,
                   launchCommand: launchCommand,
                   workingDirectory: workingDirectory,
-                  customRegistration: customRegistration
+                  customRegistration: customRegistration,
+                  observedPermissionMode: observedPermissionMode
               ),
               !argv.isEmpty else {
             return nil
@@ -348,7 +351,8 @@ enum AgentResumeCommandBuilder {
         launchCommand: AgentLaunchCommandSnapshot?,
         workingDirectory: String?,
         registrationOverride: CmuxVaultAgentRegistration? = nil,
-        includeWorkingDirectoryPrefix: Bool = true
+        includeWorkingDirectoryPrefix: Bool = true,
+        observedPermissionMode: String? = nil
     ) -> String? {
         let customRegistration = registrationOverride
         guard !sessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -357,7 +361,8 @@ enum AgentResumeCommandBuilder {
                   sessionId: sessionId,
                   launchCommand: launchCommand,
                   workingDirectory: workingDirectory,
-                  customRegistration: customRegistration
+                  customRegistration: customRegistration,
+                  observedPermissionMode: observedPermissionMode
               ),
               !argv.isEmpty else {
             return nil
@@ -443,6 +448,17 @@ enum AgentResumeCommandBuilder {
         }
     }
 
+    static func piFamilyVersionProbe(
+        launchCommand: AgentLaunchCommandSnapshot?,
+        fallbackExecutable: String
+    ) -> (executable: String, arguments: [String]) {
+        let original = commandParts(
+            launchCommand: launchCommand,
+            fallbackExecutable: fallbackExecutable
+        )
+        return (original.executable, ["--version"])
+    }
+
     private static func launchEnvironmentParts(
         kind: RestorableAgentKind,
         environment: [String: String]?
@@ -453,7 +469,15 @@ enum AgentResumeCommandBuilder {
 
         var environmentParts: [String] = []
         var preservedClaudeAuthSelectionEnvironmentKeys: [String] = []
-        let selectedEnvironment = AgentLaunchEnvironmentPolicy.selectedEnvironment(from: environment, kind: kind.rawValue)
+        var selectedEnvironment = AgentLaunchEnvironmentPolicy().selectedEnvironment(from: environment, kind: kind.rawValue)
+        let piFamilyUsesCapturedPath = kind == .pi
+            || kind.customAgentID == "pi"
+            || kind.customAgentID == "omp"
+        if piFamilyUsesCapturedPath,
+           let path = environment["PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            selectedEnvironment["PATH"] = path
+        }
         for key in selectedEnvironment.keys.sorted() {
             guard let value = selectedEnvironment[key] else { continue }
             environmentParts.append("\(key)=\(value)")
@@ -476,7 +500,8 @@ enum AgentResumeCommandBuilder {
         sessionId: String,
         launchCommand: AgentLaunchCommandSnapshot?,
         workingDirectory: String?,
-        customRegistration: CmuxVaultAgentRegistration?
+        customRegistration: CmuxVaultAgentRegistration?,
+        observedPermissionMode: String? = nil
     ) -> [String]? {
         switch AgentResumeArgv().launcherResolution(
             launcher: launchCommand?.launcher,
@@ -489,9 +514,9 @@ enum AgentResumeCommandBuilder {
         case .passthrough:
             break
         }
-
         if case .custom = kind {
             guard let customRegistration else { return nil }
+            if let arguments = campfireBuiltInResumeArguments(customRegistration: customRegistration, sessionId: sessionId, launchCommand: launchCommand) ?? kimiBuiltInResumeArguments(customRegistration: customRegistration, sessionId: sessionId, launchCommand: launchCommand) { return arguments }
             if customRegistration.id == CmuxVaultAgentRegistration.builtInAntigravity.id {
                 return resumeWithOption(
                     kind: "antigravity",
@@ -514,7 +539,8 @@ enum AgentResumeCommandBuilder {
             kind: kind.rawValue,
             sessionId: sessionId,
             executablePath: launchCommand?.executablePath,
-            arguments: launchCommand?.arguments ?? []
+            arguments: launchCommand?.arguments ?? [],
+            observedPermissionMode: observedPermissionMode
         )
     }
 
@@ -523,7 +549,8 @@ enum AgentResumeCommandBuilder {
         sessionId: String,
         launchCommand: AgentLaunchCommandSnapshot?,
         workingDirectory: String?,
-        customRegistration: CmuxVaultAgentRegistration?
+        customRegistration: CmuxVaultAgentRegistration?,
+        observedPermissionMode: String? = nil
     ) -> [String]? {
         let forkArgv = AgentForkArgv()
         switch forkArgv.launcherResolution(
@@ -553,7 +580,8 @@ enum AgentResumeCommandBuilder {
             kind: kind.rawValue,
             sessionId: sessionId,
             executablePath: launchCommand?.executablePath,
-            arguments: launchCommand?.arguments ?? []
+            arguments: launchCommand?.arguments ?? [],
+            observedPermissionMode: observedPermissionMode
         )
     }
 
@@ -738,26 +766,9 @@ struct SessionRestorableAgentSnapshot: Codable, Sendable {
     var workingDirectory: String?
     var launchCommand: AgentLaunchCommandSnapshot?
     var registration: CmuxVaultAgentRegistration? = nil
-
-    var resumeCommand: String? {
-        AgentResumeCommandBuilder.resumeShellCommand(
-            kind: kind,
-            sessionId: sessionId,
-            launchCommand: launchCommand,
-            workingDirectory: workingDirectory,
-            registrationOverride: registration
-        )
-    }
-
-    var forkCommand: String? {
-        AgentResumeCommandBuilder.forkShellCommand(
-            kind: kind,
-            sessionId: sessionId,
-            launchCommand: launchCommand,
-            workingDirectory: workingDirectory,
-            registrationOverride: registration
-        )
-    }
+    /// Last hook-observed permission mode; re-applied as `--permission-mode` on
+    /// user-owned claude resume/fork when no explicit launch flag covers it.
+    var permissionMode: String? = nil
 
     func resumeStartupInput(
         fileManager: FileManager = .default,
@@ -841,16 +852,6 @@ struct SessionRestorableAgentSnapshot: Codable, Sendable {
     }
 }
 
-extension SessionRestorableAgentSnapshot {
-    var agentDisplayName: String {
-        if let name = registration?.name.trimmingCharacters(in: .whitespacesAndNewlines),
-           !name.isEmpty {
-            return name
-        }
-        return kind.displayName
-    }
-}
-
 private enum AgentResumeScriptStore {
     private static let directoryName = "cmux-agent-resume"
     private static let scriptTTL: TimeInterval = 24 * 60 * 60
@@ -931,14 +932,18 @@ struct RestorableAgentSessionIndex: Sendable {
         let snapshot: SessionRestorableAgentSnapshot
         let lifecycle: AgentHibernationLifecycleState?
         let updatedAt: TimeInterval
+        /// Unlike an empty process ID set, this distinguishes an exited recorded process from no PID evidence.
+        let processLiveness: RestorableAgentProcessLiveness
         let processIDs: Set<Int>
         let agentProcessIDs: Set<Int>
         let agentProcessIdentities: [Int: AgentPIDProcessIdentity]
     }
 
-    enum ProcessDetectedSessionIDSource: Sendable {
+    enum ProcessDetectedSessionIDSource: Equatable, Sendable {
         case explicit
         case inferredLatestSessionFile
+        case forkParentFallback
+        case relaunchOnly
     }
 
     typealias ProcessDetectedSnapshotEntry = (
@@ -959,10 +964,21 @@ struct RestorableAgentSessionIndex: Sendable {
         let kind: RestorableAgentKind
     }
 
+    private struct PanelIDKindKey: Hashable {
+        let panelId: UUID
+        let kind: RestorableAgentKind
+    }
+
+    private struct PanelIDKindCandidate {
+        let panelKey: PanelKey
+        let entry: Entry
+        let isAmbiguous: Bool
+    }
+
     private let entriesByPanel: [PanelKey: Entry]
     private let entriesByPanelId: [UUID: Entry]
 
-    private func entry(workspaceId: UUID, panelId: UUID) -> Entry? {
+    func entry(workspaceId: UUID, panelId: UUID) -> Entry? {
         entriesByPanel[PanelKey(workspaceId: workspaceId, panelId: panelId)] ?? entriesByPanelId[panelId]
     }
 
@@ -996,16 +1012,33 @@ struct RestorableAgentSessionIndex: Sendable {
         !processIDs(workspaceId: workspaceId, panelId: panelId).isEmpty
     }
 
+    /// Fingerprints cache-visible agent identity and liveness, including entries without a live PID.
     func liveAgentProcessFingerprint() -> Set<String> {
-        Set(entriesByPanel.compactMap { key, entry in
+        Set(entriesByPanel.map { key, entry in
             let processIDs = entry.agentProcessIDs.isEmpty ? entry.processIDs : entry.agentProcessIDs
-            guard !processIDs.isEmpty else { return nil }
+            let processIdentities = entry.agentProcessIdentities
+                .sorted { $0.key < $1.key }
+                .map { processID, identity in
+                    "\(processID):\(identity.startSeconds):\(identity.startMicroseconds)"
+                }
+                .joined(separator: ",")
+            let liveness: String
+            switch entry.processLiveness {
+            case .running:
+                liveness = "running"
+            case .exited:
+                liveness = "exited"
+            case .unknown:
+                liveness = "unknown"
+            }
             return [
                 key.workspaceId.uuidString,
                 key.panelId.uuidString,
                 entry.snapshot.kind.rawValue,
                 entry.snapshot.sessionId,
-                processIDs.sorted().map(String.init).joined(separator: ",")
+                liveness,
+                processIDs.sorted().map(String.init).joined(separator: ","),
+                processIdentities
             ].joined(separator: "|")
         })
     }
@@ -1069,6 +1102,10 @@ struct RestorableAgentSessionIndex: Sendable {
         processArgumentsProvider: (Int) -> CmuxTopProcessArguments? = {
             CmuxTopProcessSnapshot.processArgumentsAndEnvironment(for: $0)
         },
+        processPresenceProvider: (Int) -> PIDPresence = {
+            guard $0 > 0, $0 <= Int(Int32.max) else { return .absent }
+            return PIDPresence.current(pid: pid_t($0))
+        },
         processIdentityProvider: (Int) -> AgentPIDProcessIdentity? = {
             guard $0 > 0, $0 <= Int(Int32.max) else { return nil }
             return AgentPIDProcessIdentity(pid: pid_t($0))
@@ -1080,6 +1117,8 @@ struct RestorableAgentSessionIndex: Sendable {
             homeDirectory: homeDirectory,
             fileManager: fileManager
         )
+        let codexCwdLookup = CodexSessionCwdLookupCache(fileManager: fileManager)
+        let cachedAgentProcessValidator = CachedAgentProcessIdentityValidator()
         let builtInKindIDs = Set(RestorableAgentKind.allCases.map(\.rawValue))
         let hookKinds: [(kind: RestorableAgentKind, registration: CmuxVaultAgentRegistration?)] =
             RestorableAgentKind.allCases.map { (kind: $0, registration: nil) }
@@ -1090,6 +1129,7 @@ struct RestorableAgentSessionIndex: Sendable {
             }
         var hookCandidatesBySession: [SessionKey: Entry] = [:]
         var hookCandidatesByPanelAndKind: [PanelKindKey: Entry] = [:]
+        var hookCandidatesByPanelIdAndKind: [PanelIDKindKey: PanelIDKindCandidate] = [:]
 
         for (kind, registration) in hookKinds {
             let fileURL = kind.hookStoreFileURL(homeDirectory: homeDirectory)
@@ -1135,37 +1175,92 @@ struct RestorableAgentSessionIndex: Sendable {
                         kind: kind,
                         registration: registration,
                         fileManager: fileManager,
-                        lookup: claudeTranscriptLookup
+                        lookup: claudeTranscriptLookup,
+                        codexCwdLookup: codexCwdLookup
                     ),
                     launchCommand: effectiveRecord.launchCommand,
-                    registration: registration
+                    registration: registration,
+                    permissionMode: effectiveRecord.lastPermissionMode
                 )
                 let key = PanelKey(workspaceId: workspaceId, panelId: panelId)
                 let sessionKey = SessionKey(kind: kind, sessionId: normalizedSessionId)
                 let panelKindKey = PanelKindKey(panelKey: key, kind: kind)
-                let liveProcessID = liveScopedProcessID(
-                    for: effectiveRecord,
-                    kind: kind,
-                    workspaceId: workspaceId,
-                    panelId: panelId,
-                    processArgumentsProvider: processArgumentsProvider
-                )
+                let panelIDKindKey = PanelIDKindKey(panelId: panelId, kind: kind)
+                let recordedProcessIdentity: AgentPIDProcessIdentity? = {
+                    guard let processID = effectiveRecord.pid,
+                          processID > 0,
+                          processID <= Int(Int32.max),
+                          let startSeconds = effectiveRecord.pidStartSeconds,
+                          let startMicroseconds = effectiveRecord.pidStartMicroseconds,
+                          startSeconds >= 0,
+                          startMicroseconds >= 0,
+                          startMicroseconds < 1_000_000 else {
+                        return nil
+                    }
+                    return AgentPIDProcessIdentity(
+                        pid: pid_t(processID),
+                        startSeconds: startSeconds,
+                        startMicroseconds: startMicroseconds
+                    )
+                }()
+                let currentProcessIdentity = effectiveRecord.pid.flatMap(processIdentityProvider)
+                let processObservation = RestorableAgentProcessObservation(
+                    recordedProcessID: effectiveRecord.pid
+                ) { pid in
+                    scopedProcessMatch(
+                        for: snapshot,
+                        workspaceId: workspaceId,
+                        panelId: panelId,
+                        processID: pid,
+                        recordedProcessIdentity: recordedProcessIdentity,
+                        currentProcessIdentity: currentProcessIdentity,
+                        processArgumentsProvider: processArgumentsProvider,
+                        processPresenceProvider: processPresenceProvider,
+                        validator: cachedAgentProcessValidator
+                    )
+                }
+                let liveProcessID = processObservation.processID
+                let liveProcessIdentities: [Int: AgentPIDProcessIdentity]
+                if let liveProcessID,
+                   let recordedProcessIdentity,
+                   Int(recordedProcessIdentity.pid) == liveProcessID {
+                    liveProcessIdentities = [liveProcessID: recordedProcessIdentity]
+                } else {
+                    liveProcessIdentities = [:]
+                }
                 let entry = Entry(
                     snapshot: snapshot,
                     lifecycle: effectiveRecord.agentLifecycle,
                     updatedAt: effectiveRecord.updatedAt,
+                    processLiveness: processObservation.liveness,
                     processIDs: liveProcessID.map { [$0] } ?? [],
                     agentProcessIDs: liveProcessID.map { [$0] } ?? [],
-                    agentProcessIdentities: agentProcessIdentities(
-                        for: liveProcessID.map { [$0] } ?? [],
-                        processIdentityProvider: processIdentityProvider
-                    )
+                    agentProcessIdentities: liveProcessIdentities
                 )
                 if shouldReplaceHookEntry(
                     existing: hookCandidatesByPanelAndKind[panelKindKey],
                     incoming: entry
                 ) {
                     hookCandidatesByPanelAndKind[panelKindKey] = entry
+                }
+                if let existingPanelIDCandidate = hookCandidatesByPanelIdAndKind[panelIDKindKey] {
+                    let shouldReplace = shouldReplaceHookEntry(
+                        existing: existingPanelIDCandidate.entry,
+                        incoming: entry
+                    )
+                    hookCandidatesByPanelIdAndKind[panelIDKindKey] = PanelIDKindCandidate(
+                        panelKey: shouldReplace ? key : existingPanelIDCandidate.panelKey,
+                        entry: shouldReplace ? entry : existingPanelIDCandidate.entry,
+                        isAmbiguous: existingPanelIDCandidate.isAmbiguous ||
+                            existingPanelIDCandidate.panelKey != key ||
+                            existingPanelIDCandidate.entry.snapshot.sessionId != entry.snapshot.sessionId
+                    )
+                } else {
+                    hookCandidatesByPanelIdAndKind[panelIDKindKey] = PanelIDKindCandidate(
+                        panelKey: key,
+                        entry: entry,
+                        isAmbiguous: false
+                    )
                 }
                 if shouldReplaceHookEntry(
                     existing: hookCandidatesBySession[sessionKey],
@@ -1174,19 +1269,62 @@ struct RestorableAgentSessionIndex: Sendable {
                     hookCandidatesBySession[sessionKey] = entry
                 }
                 // A saved PID is liveness evidence only. It can go stale while the
-                // transcript and hook record are still restorable, so keep the
-                // snapshot and leave processIDs empty when the process is gone.
+                // transcript and hook record are still restorable, so keep the snapshot,
+                // record the exited generation, and leave processIDs empty when it is gone.
                 if shouldReplaceHookEntry(existing: resolved[key], incoming: entry) {
                     resolved[key] = entry
                 }
             }
         }
 
+        func processDetectedEntry(snapshot: SessionRestorableAgentSnapshot, lifecycle: AgentHibernationLifecycleState?, updatedAt: TimeInterval, detected: ProcessDetectedSnapshotEntry) -> Entry {
+            Entry(
+                snapshot: snapshot, lifecycle: lifecycle, updatedAt: updatedAt,
+                processLiveness: .running,
+                processIDs: detected.processIDs, agentProcessIDs: detected.agentProcessIDs,
+                agentProcessIdentities: agentProcessIdentities(
+                    for: detected.agentProcessIDs,
+                    processIdentityProvider: processIdentityProvider
+                )
+            )
+        }
+
         for (key, detected) in detectedSnapshots {
             let sameKindPanelCandidate = hookCandidatesByPanelAndKind[
                 PanelKindKey(panelKey: key, kind: detected.snapshot.kind)
             ]
-            if let existing = Self.matchingHookEntry(
+            let sameKindPanelIDCandidate = hookCandidatesByPanelIdAndKind[
+                PanelIDKindKey(panelId: key.panelId, kind: detected.snapshot.kind)
+            ]
+            // Panel-only restore is safe only when this surface/kind maps back to exactly one
+            // old workspace/session pair. Stale hook stores can otherwise reuse a surface id
+            // across old workspaces, or record multiple sessions for the same old workspace and
+            // surface after an agent restart. In either case, shouldReplaceHookEntry would pick
+            // one session by recency, so the panel-only fallback must stay ambiguous.
+            let sameKindStablePanelCandidate = sameKindPanelCandidate ?? (
+                sameKindPanelIDCandidate?.isAmbiguous == false ? sameKindPanelIDCandidate?.entry : nil
+            )
+            if detected.sessionIDSource == .forkParentFallback,
+               let panelCandidate = sameKindPanelCandidate,
+               Self.hookCandidateRepresentsDetectedProcess(
+                   panelCandidate,
+                   detected: detected,
+                   processIdentityProvider: processIdentityProvider
+               ) {
+                resolved[key] = processDetectedEntry(snapshot: panelCandidate.snapshot, lifecycle: panelCandidate.lifecycle, updatedAt: panelCandidate.updatedAt, detected: detected)
+            } else if detected.sessionIDSource == .forkParentFallback,
+                      Self.forkParentFallbackMustYield(kind: detected.snapshot.kind, toExisting: resolved[key]) {
+                // A nested fork process inside another agent's pane must not displace
+                // that pane's hook-backed identity.
+                continue
+            } else if detected.sessionIDSource == .inferredLatestSessionFile,
+                      let panelCandidate = sameKindStablePanelCandidate {
+                // Latest-file detection is ambiguous when multiple panels or restored workspaces share a
+                // cwd. Prefer the hook-store identity for this stable panel/surface while still carrying
+                // live process evidence for the restored panel. The workspace UUID can rotate during
+                // session restore, but the surface id is intentionally reused on the normal restore path.
+                resolved[key] = processDetectedEntry(snapshot: panelCandidate.snapshot, lifecycle: panelCandidate.lifecycle, updatedAt: panelCandidate.updatedAt, detected: detected)
+            } else if let existing = Self.matchingHookEntry(
                 for: detected.snapshot,
                 resolved: resolved[key],
                 panelCandidate: sameKindPanelCandidate,
@@ -1194,44 +1332,9 @@ struct RestorableAgentSessionIndex: Sendable {
                     SessionKey(kind: detected.snapshot.kind, sessionId: detected.snapshot.sessionId)
                 ]
             ) {
-                resolved[key] = Entry(
-                    snapshot: detected.snapshot,
-                    lifecycle: existing.lifecycle,
-                    updatedAt: existing.updatedAt,
-                    processIDs: detected.processIDs,
-                    agentProcessIDs: detected.agentProcessIDs,
-                    agentProcessIdentities: agentProcessIdentities(
-                        for: detected.agentProcessIDs,
-                        processIdentityProvider: processIdentityProvider
-                    )
-                )
-            } else if detected.sessionIDSource == .inferredLatestSessionFile,
-                      let panelCandidate = sameKindPanelCandidate {
-                // Latest-file detection is ambiguous when multiple panels share a cwd; preserve the exact
-                // hook-store identity while still carrying live process evidence for this panel.
-                resolved[key] = Entry(
-                    snapshot: panelCandidate.snapshot,
-                    lifecycle: panelCandidate.lifecycle,
-                    updatedAt: panelCandidate.updatedAt,
-                    processIDs: detected.processIDs,
-                    agentProcessIDs: detected.agentProcessIDs,
-                    agentProcessIdentities: agentProcessIdentities(
-                        for: detected.agentProcessIDs,
-                        processIdentityProvider: processIdentityProvider
-                    )
-                )
+                resolved[key] = processDetectedEntry(snapshot: detected.snapshot, lifecycle: existing.lifecycle, updatedAt: existing.updatedAt, detected: detected)
             } else {
-                resolved[key] = Entry(
-                    snapshot: detected.snapshot,
-                    lifecycle: nil,
-                    updatedAt: 0,
-                    processIDs: detected.processIDs,
-                    agentProcessIDs: detected.agentProcessIDs,
-                    agentProcessIdentities: agentProcessIdentities(
-                        for: detected.agentProcessIDs,
-                        processIdentityProvider: processIdentityProvider
-                    )
-                )
+                resolved[key] = processDetectedEntry(snapshot: detected.snapshot, lifecycle: nil, updatedAt: 0, detected: detected)
             }
         }
 
@@ -1542,7 +1645,8 @@ struct RestorableAgentSessionIndex: Sendable {
         kind: RestorableAgentKind,
         registration: CmuxVaultAgentRegistration?,
         fileManager: FileManager,
-        lookup: ClaudeTranscriptLookupCache
+        lookup: ClaudeTranscriptLookupCache,
+        codexCwdLookup: CodexSessionCwdLookupCache
     ) -> String? {
         let recordedCwd = normalizedWorkingDirectory(record.cwd)
         let launchCwd = normalizedWorkingDirectory(record.launchCommand?.workingDirectory)
@@ -1552,7 +1656,7 @@ struct RestorableAgentSessionIndex: Sendable {
         // launch dir. `.ignore` agents resume from the current directory, so the snapshot must carry
         // no saved cwd at all (downstream restore consumers read `workingDirectory` directly, not just
         // the command builder). The by-directory namespace below is only for built-in agents.
-        if let registration {
+        if let registration, !registration.isBuiltInKimi {
             return registration.cwd == .ignore ? nil : (recordedCwd ?? launchCwd)
         }
 
@@ -1560,7 +1664,7 @@ struct RestorableAgentSessionIndex: Sendable {
         case .cwdInFile:
             // Resume is addressed by id and the cwd lives inside the record, so the runtime cwd is
             // fine — keeping it preserves the directory the agent was working in.
-            return recordedCwd ?? launchCwd
+            return recordedCwd ?? launchCwd ?? codexCwdLookup.workingDirectory(kind: kind, sessionId: record.sessionId, launchCommand: record.launchCommand)
         case .byDirectory:
             if kind == .claude,
                let verified = claudeVerifiedRestorableWorkingDirectory(
@@ -2122,75 +2226,37 @@ struct RestorableAgentSessionIndex: Sendable {
         regularFileState(atPath: path, fileManager: fileManager) == .nonEmpty
     }
 
-    private static func liveScopedProcessID(
-        for record: RestorableAgentHookSessionRecord,
-        kind: RestorableAgentKind,
+    private static func scopedProcessMatch(
+        for snapshot: SessionRestorableAgentSnapshot,
         workspaceId: UUID,
         panelId: UUID,
-        processArgumentsProvider: (Int) -> CmuxTopProcessArguments?
-    ) -> Int? {
-        guard let pid = record.pid else {
-            return nil
+        processID: Int,
+        recordedProcessIdentity: AgentPIDProcessIdentity?,
+        currentProcessIdentity: AgentPIDProcessIdentity?,
+        processArgumentsProvider: (Int) -> CmuxTopProcessArguments?,
+        processPresenceProvider: (Int) -> PIDPresence,
+        validator: CachedAgentProcessIdentityValidator
+    ) -> RestorableAgentProcessMatch {
+        guard let recordedProcessIdentity,
+              Int(recordedProcessIdentity.pid) == processID else {
+            return processPresenceProvider(processID) == .absent ? .mismatches : .unknown
         }
-        guard pid > 0,
-              let process = processArgumentsProvider(pid),
-              process.matchesCMUXScope(workspaceId: workspaceId, surfaceId: panelId) else {
-            return nil
+        guard let currentProcessIdentity,
+              Int(currentProcessIdentity.pid) == processID else {
+            return processPresenceProvider(processID) == .absent ? .mismatches : .unknown
         }
-
-        if let liveKind = normalizedProcessValue(process.environment["CMUX_AGENT_LAUNCH_KIND"]),
-           liveKind.compare(kind.rawValue, options: [.caseInsensitive, .literal]) != .orderedSame {
-            return nil
+        guard currentProcessIdentity == recordedProcessIdentity else {
+            return .mismatches
         }
-
-        guard let recordedExecutable = recordedExecutableBasename(record),
-              let liveExecutable = process.arguments.first.map(executableBasename) else {
-            return pid
+        guard let process = processArgumentsProvider(processID) else {
+            // A present process may be temporarily uninspectable. Only ESRCH-grade
+            // absence proves that the recorded generation exited.
+            return processPresenceProvider(processID) == .absent ? .mismatches : .unknown
         }
-        guard liveProcessExecutableMatchesRecordedAgent(
-            kind: kind,
-            liveExecutable: liveExecutable,
-            recordedExecutable: recordedExecutable,
-            arguments: process.arguments
-        ) else {
-            return nil
+        guard process.matchesCMUXScope(workspaceId: workspaceId, surfaceId: panelId) else {
+            return .mismatches
         }
-        return pid
-    }
-
-    private static func liveProcessExecutableMatchesRecordedAgent(
-        kind: RestorableAgentKind,
-        liveExecutable: String,
-        recordedExecutable: String,
-        arguments: [String]
-    ) -> Bool {
-        if liveExecutable.compare(recordedExecutable, options: [.caseInsensitive, .literal]) == .orderedSame {
-            return true
-        }
-
-        guard kind == .claude else { return false }
-        let liveBase = liveExecutable.lowercased()
-        guard liveBase == "node" || liveBase == "bun" else { return false }
-        return arguments.dropFirst().contains { argument in
-            let lowered = argument.lowercased()
-            return executableBasename(argument).compare("claude", options: [.caseInsensitive, .literal]) == .orderedSame
-                || lowered.contains("/.claude/")
-                || lowered.contains("/claude/versions/")
-        }
-    }
-
-    private static func recordedExecutableBasename(_ record: RestorableAgentHookSessionRecord) -> String? {
-        let executable = normalizedProcessValue(record.launchCommand?.executablePath)
-            ?? normalizedProcessValue(record.launchCommand?.arguments.first)
-        return executable.map(executableBasename)
-    }
-
-    private static func executableBasename(_ value: String) -> String {
-        (value as NSString).lastPathComponent
-    }
-
-    private static func normalizedProcessValue(_ value: String?) -> String? {
-        normalizedNonEmptyValue(value)
+        return validator.currentProcess(process, matches: snapshot) ? .matches : .mismatches
     }
 
     private static func normalizedNonEmptyValue(_ value: String?) -> String? {

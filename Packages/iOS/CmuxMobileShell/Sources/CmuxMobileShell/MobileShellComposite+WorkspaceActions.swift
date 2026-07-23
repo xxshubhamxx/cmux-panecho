@@ -230,6 +230,41 @@ extension MobileShellComposite {
         await sendWorkspaceGroupMutation(id: id, action: "delete", title: nil, actionName: "delete_group")
     }
 
+    /// Create a workspace group on the foreground Mac.
+    /// - Parameter title: Optional group title. Whitespace-only titles use the Mac's default auto-name.
+    /// - Returns: `success` when the Mac accepted the request, otherwise the
+    ///   failure the UI should surface.
+    @discardableResult
+    public func createWorkspaceGroup(
+        title: String? = nil
+    ) async -> Result<Void, MobileWorkspaceMutationFailure> {
+        let target = WorkspaceMutationTarget(
+            client: remoteClient,
+            isForeground: true,
+            macDeviceID: foregroundMacDeviceID
+        )
+        let hostDisplayName = workspaceMutationHostDisplayName(target: target, fallback: nil)
+        guard supportedHostCapabilities.contains("workspace.group_create.v1") else {
+            return .failure(.unsupported(hostDisplayName: hostDisplayName))
+        }
+        guard macScopedWorkspaceMutationIsAuthorized(target: target) else {
+            return .failure(.authorizationFailed(hostDisplayName: hostDisplayName))
+        }
+        var params: [String: Any] = [:]
+        if let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmed.isEmpty {
+            params["title"] = trimmed
+        }
+        return await sendWorkspaceMutation(
+            method: "workspace.group.create",
+            params: params,
+            target: target,
+            hostDisplayName: hostDisplayName,
+            logID: "foreground",
+            actionName: "create_group"
+        )
+    }
+
     private func workspaceActionCapabilities(for id: MobileWorkspacePreview.ID) -> MobileWorkspaceActionCapabilities {
         workspaces.first { $0.id == id }?.actionCapabilities ?? .none
     }
@@ -247,7 +282,7 @@ extension MobileShellComposite {
         let policy = MobileShellWorkspaceMutationTicketPolicy(now: now)
         if target.isForeground {
             return policy.allowsMacScopedWorkspaceMutations(
-                activeTicket ?? client.attachTicket,
+                activeTicket ?? client.attachTicket
             )
         }
         let ticket = target.macDeviceID.flatMap { secondaryMacSubscriptions[$0]?.ticket }
@@ -324,6 +359,7 @@ extension MobileShellComposite {
             await refreshWorkspaces()
             return .failure(.notConnected(hostDisplayName: hostDisplayName))
         }
+        let generation = connectionGeneration
         do {
             let request = try MobileCoreRPCClient.requestData(method: method, params: params)
             _ = try await client.sendRequest(request)
@@ -335,7 +371,11 @@ extension MobileShellComposite {
             // unavailable/reconnect UI; a failed write to a secondary Mac must not
             // tear the foreground session down.
             if target.isForeground {
-                markMacConnectionUnavailableIfNeeded(after: error)
+                handleMacAvailabilityFailureIfCurrent(
+                    after: error,
+                    expectedClient: client,
+                    expectedGeneration: generation
+                )
             }
             mobileShellLog.error("workspace mutation failed action=\(actionName, privacy: .public) id=\(logID, privacy: .public) error=\(String(describing: error), privacy: .public)")
             await refreshAfterWorkspaceMutation(target)
@@ -368,7 +408,7 @@ extension MobileShellComposite {
         return workspaceMutationTarget(for: anchorWorkspaceID)
     }
 
-    private func workspaceMutationFailure(
+    func workspaceMutationFailure(
         _ error: any Error,
         hostDisplayName: String?
     ) -> MobileWorkspaceMutationFailure {
@@ -376,7 +416,7 @@ extension MobileShellComposite {
             return .rejected(hostDisplayName: hostDisplayName)
         }
         switch connectionError {
-        case .connectionClosed:
+        case .connectionClosed, .transportWriteTimedOut:
             return .notConnected(hostDisplayName: hostDisplayName)
         case .requestTimedOut:
             return .requestTimedOut(hostDisplayName: hostDisplayName)
@@ -388,9 +428,12 @@ extension MobileShellComposite {
                ["unauthorized", "forbidden", "invalid_token", "token_expired", "expired_token", "auth_required", "account_mismatch"].contains(normalizedCode) {
                 return .authorizationFailed(hostDisplayName: hostDisplayName)
             }
-            if normalizedCode == "unavailable" {
-                return .notConnected(hostDisplayName: hostDisplayName)
-            }
+            if normalizedCode == "unavailable" { return .notConnected(hostDisplayName: hostDisplayName) }
+            if normalizedCode == "request_timeout" { return .requestTimedOut(hostDisplayName: hostDisplayName) }
+            if normalizedCode == "busy" { return .busy(hostDisplayName: hostDisplayName) }
+            if normalizedCode == "invalid_working_directory" { return .invalidWorkingDirectory(hostDisplayName: hostDisplayName) }
+            if normalizedCode == "persistence_failed" { return .persistenceUnavailable(hostDisplayName: hostDisplayName) }
+            if normalizedCode == "already_completed" { return .alreadyCompleted(hostDisplayName: hostDisplayName) }
             return .rejected(hostDisplayName: hostDisplayName)
         case .invalidResponse:
             return .rejected(hostDisplayName: hostDisplayName)

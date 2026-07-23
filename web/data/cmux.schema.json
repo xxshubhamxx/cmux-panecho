@@ -65,6 +65,113 @@
         "additionalProperties": true
       }
     },
+    "agentChat": {
+      "title": "agentChat",
+      "description": "Agent Chat GUI server settings. The built-in New agent chat action opens this URL in a browser workspace, probing /healthz first and optionally starting the server with startCommand.",
+      "descriptionKey": "schemaDescriptions.agentChat.description",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://",
+          "minLength": 1,
+          "default": "http://127.0.0.1:7739",
+          "description": "Base URL for the machine-local Agent Chat GUI server. cmux probes <url>/healthz before opening the workspace.",
+          "descriptionKey": "schemaDescriptions.agentChat.url"
+        },
+        "startCommand": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional shell command to start the Agent Chat server when <url>/healthz is unreachable. cmux runs it detached with the user's SHELL, polls healthz for a short bounded window, then opens the workspace either way.",
+          "descriptionKey": "schemaDescriptions.agentChat.startCommand"
+        },
+        "keys": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Keyboard behavior overrides for the Agent Chat web UI.",
+          "descriptionKey": "schemaDescriptions.agentChat.keys.description",
+          "properties": {
+            "ctrlJ": {
+              "type": "string",
+              "enum": ["newline", "menu"],
+              "default": "newline",
+              "description": "Behavior for Ctrl+J in Agent Chat text fields. Use newline to insert a line break, or menu to move to the next popup item while a menu is open.",
+              "descriptionKey": "schemaDescriptions.agentChat.keys.ctrlJ"
+            }
+          }
+        },
+        "fonts": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Font overrides for the Agent Chat web UI. Omitted values fall back to Ghostty and built-in defaults.",
+          "descriptionKey": "schemaDescriptions.agentChat.fonts.description",
+          "properties": {
+            "sansFamily": {
+              "type": "string",
+              "minLength": 1,
+              "description": "CSS font family used for Agent Chat body and UI text.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.sansFamily"
+            },
+            "bodyFamily": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Alias for sansFamily.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.bodyFamily"
+            },
+            "family": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Alias for sansFamily.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.family"
+            },
+            "baseSize": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Base Agent Chat font size in CSS pixels.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.baseSize"
+            },
+            "bodySize": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Alias for baseSize.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.bodySize"
+            },
+            "monoFamily": {
+              "type": "string",
+              "minLength": 1,
+              "description": "CSS font family used for Agent Chat code and monospace text.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.monoFamily"
+            },
+            "codeFamily": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Alias for monoFamily.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.codeFamily"
+            },
+            "codeSize": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Agent Chat code font size in CSS pixels.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.codeSize"
+            },
+            "monoSize": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Alias for codeSize.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.monoSize"
+            },
+            "codeLineHeight": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Line-height multiplier used for Agent Chat code blocks.",
+              "descriptionKey": "schemaDescriptions.agentChat.fonts.codeLineHeight"
+            }
+          }
+        }
+      }
+    },
     "vault": {
       "title": "vault",
       "description": "Vault session restore agent registrations. cmux includes Pi by default; use this section to add or override JSONL-backed coding agents without an app update.",
@@ -344,6 +451,11 @@
           "default": true,
           "description": "When cmux is inactive, the first click can activate and focus the clicked pane."
         },
+        "focusHistoryIncludesPanesAndTabs": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, Back and Forward include focus changes between panes and tabs. When false, they navigate between workspaces only."
+        },
         "preferredEditor": {
           "type": "string",
           "default": "",
@@ -443,6 +555,29 @@
           "default": 1.0,
           "descriptionKey": "schemaDescriptions.terminal.scrollSpeed",
           "description": "Multiplier applied to terminal scroll wheel and trackpad deltas. Higher values scroll faster; lower values scroll slower."
+        },
+        "sessionContentMaxWidth": {
+          "oneOf": [
+            {
+              "type": "boolean",
+              "const": false
+            },
+            {
+              "type": "number",
+              "minimum": 320,
+              "multipleOf": 20
+            }
+          ],
+          "default": false,
+          "descriptionKey": "schemaDescriptions.terminal.sessionContentMaxWidth",
+          "description": "Optional maximum width, in points, for terminal and built-in agent chat content. Set false to use the full pane width."
+        },
+        "sessionContentAlignment": {
+          "type": "string",
+          "enum": ["left", "center", "right"],
+          "default": "center",
+          "descriptionKey": "schemaDescriptions.terminal.sessionContentAlignment",
+          "description": "Horizontal placement for terminal and built-in agent chat content when sessionContentMaxWidth is enabled."
         },
         "copyOnSelect": {
           "type": "boolean",
@@ -868,6 +1003,26 @@
           "default": true,
           "description": "Show custom workspace descriptions in the sidebar."
         },
+        "beta": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Experimental sidebar features.",
+          "properties": {
+            "workspaceTodos": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Workspace todos checklist presentation.",
+              "properties": {
+                "checklistStyle": {
+                  "type": "string",
+                  "enum": ["popover", "inline"],
+                  "default": "popover",
+                  "description": "How a row's checklist opens from its summary line: an anchored popover or inline expansion."
+                }
+              }
+            }
+          }
+        },
         "branchLayout": {
           "type": "string",
           "enum": ["vertical", "inline"],
@@ -878,6 +1033,14 @@
           "type": "boolean",
           "default": true,
           "description": "Show the latest notification text in the sidebar."
+        },
+        "notificationMessageLineLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 12,
+          "description": "Maximum lines shown for the latest notification below each workspace title.",
+          "descriptionKey": "schemaDescriptions.sidebar.notificationMessageLineLimit"
         },
         "showBranchDirectory": {
           "type": "boolean",
@@ -928,6 +1091,23 @@
           "type": "boolean",
           "default": true,
           "description": "Show progress indicators."
+        },
+        "showAgentActivity": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the loading spinner on workspaces with running coding agents or active loaders."
+        },
+        "loadingSpinnerPosition": {
+          "type": "string",
+          "enum": ["leading", "trailing"],
+          "default": "leading",
+          "description": "Which side of the workspace row the loading spinner appears on: leading (left, sharing the unread-badge slot) or trailing (right)."
+        },
+        "notificationBadgePosition": {
+          "type": "string",
+          "enum": ["leading", "trailing"],
+          "default": "leading",
+          "description": "Which side of the workspace row the unread notification badge appears on: leading (left) or trailing (right)."
         },
         "showCustomMetadata": {
           "type": "boolean",
@@ -1273,6 +1453,20 @@
         }
       }
     },
+    "mobile": {
+      "title": "mobile",
+      "description": "Mac-side settings for cmux on iOS.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artifactFolderAccess": {
+          "type": "string",
+          "enum": ["subtree", "oneLevel"],
+          "default": "subtree",
+          "description": "Controls whether a referenced or terminal-visible directory authorizes its full canonical subtree or only immediate children."
+        }
+      }
+    },
     "markdown": {
       "title": "markdown",
       "description": "Built-in markdown viewer settings.",
@@ -1419,15 +1613,22 @@
               "triggerFlash",
               "nextSurface",
               "prevSurface",
+              "moveSurfaceLeft",
+              "moveSurfaceRight",
               "selectSurfaceByNumber",
               "nextSidebarTab",
               "prevSidebarTab",
+              "moveWorkspaceUp",
+              "moveWorkspaceDown",
               "focusHistoryBack",
               "focusHistoryForward",
               "selectWorkspaceByNumber",
               "renameTab",
               "renameWorkspace",
               "editWorkspaceDescription",
+              "markWorkspaceDone",
+              "cycleWorkspaceStatus",
+              "toggleChecklistItemComplete",
               "closeTab",
               "closeOtherTabsInPane",
               "closeWorkspace",
@@ -1492,13 +1693,20 @@
               "toggleBrowserDeveloperTools",
               "showBrowserJavaScriptConsole",
               "toggleBrowserFocusMode",
+              "toggleBrowserDesignMode",
               "toggleReactGrab",
               "openDiffViewer",
               "diffViewerScrollDown",
               "diffViewerScrollUp",
+              "diffViewerScrollHalfPageDown",
+              "diffViewerScrollHalfPageUp",
+              "diffViewerScrollDownEmacs",
+              "diffViewerScrollUpEmacs",
               "diffViewerScrollToBottom",
               "diffViewerScrollToTop",
-              "diffViewerOpenFileSearch"
+              "diffViewerOpenFileSearch",
+              "diffViewerNextFile",
+              "diffViewerPreviousFile"
             ]
           },
           "properties": {
@@ -1514,6 +1722,18 @@
             "diffViewerScrollUp": {
               "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
             },
+            "diffViewerScrollHalfPageDown": {
+              "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
+            },
+            "diffViewerScrollHalfPageUp": {
+              "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
+            },
+            "diffViewerScrollDownEmacs": {
+              "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
+            },
+            "diffViewerScrollUpEmacs": {
+              "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
+            },
             "diffViewerScrollToBottom": {
               "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
             },
@@ -1521,6 +1741,12 @@
               "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
             },
             "diffViewerOpenFileSearch": {
+              "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
+            },
+            "diffViewerNextFile": {
+              "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
+            },
+            "diffViewerPreviousFile": {
               "$ref": "#/$defs/bareFirstStrokeShortcutBindingNullable"
             }
           },
