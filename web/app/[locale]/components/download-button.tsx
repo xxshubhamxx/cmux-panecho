@@ -4,9 +4,12 @@ import { Menu } from "@base-ui-components/react/menu";
 import { useTranslations } from "next-intl";
 import { Link, usePathname } from "../../../i18n/navigation";
 import {
+  BROWSER_NIGHTLY_PAGE,
   DOWNLOAD_CONFIRMATION_HREF,
   DOWNLOAD_CONFIRMATION_PATH,
+  DOWNLOAD_PLATFORMS,
   DOWNLOAD_URL,
+  PLATFORM_DOWNLOADS,
   WAITLIST_PLATFORMS,
   type WaitlistPlatform,
 } from "../../lib/download";
@@ -36,6 +39,8 @@ export function DownloadButton({
   void location;
   const t = useTranslations("common");
   const tp = useTranslations("platforms");
+  const tb = useTranslations("browserDownloads");
+  const tf = useTranslations("footer");
   const tw = useTranslations("waitlist");
   const pathname = usePathname();
   const isSmall = size === "sm";
@@ -96,5 +101,25 @@ export function DownloadButton({
       {icon}
       {t("downloadForMac")}
     </Link>
+  );
+}
+
+function BrowserIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9h18" />
+      <path d="M7 6.5h.01M10 6.5h.01" />
+    </svg>
   );
 }

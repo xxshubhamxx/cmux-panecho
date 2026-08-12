@@ -5,7 +5,7 @@
 //! presentation snapshot so cloud, SSH, local-socket, and future transports
 //! can share the same Ratatui rail without sharing provider implementation.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
@@ -26,6 +26,18 @@ pub enum MachineStatus {
     Sleeping,
     Stopped,
     Unavailable,
+}
+
+/// Client-side transport state. Provider lifecycle state remains in
+/// [`MachineStatus`], so selecting a running VM never has to imply that its
+/// terminal transport has finished opening.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MachineConnectionPhase {
+    #[default]
+    Disconnected,
+    Connecting,
+    Ready,
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -87,10 +99,25 @@ pub enum ProviderActionFieldKind {
     Integer,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProviderActionTarget {
+    #[default]
+    Scope,
+    SelectedMachine,
+    SelectedWorkspace,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderActionContext {
+    pub machine_id: Option<String>,
+    pub workspace_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderActionDescriptor {
     pub id: String,
     pub label: String,
+    pub target: ProviderActionTarget,
     pub destructive: bool,
     pub fields: Vec<ProviderActionFieldDescriptor>,
 }
@@ -122,6 +149,8 @@ pub enum ProviderActionInputError {
     InvalidInteger,
     BelowMinimum,
     AboveMaximum,
+    MissingSelectedMachine,
+    MissingSelectedWorkspace,
     UnsupportedFieldCount,
 }
 
@@ -129,7 +158,11 @@ impl ProviderActionDescriptor {
     /// Build a typed provider request from the shared one-field text prompt.
     /// Zero-field actions submit immediately. Descriptors with more than one
     /// field are rejected until the TUI has a real multi-field form.
-    pub fn request(&self, input: Option<&str>) -> Result<MachineRequest, ProviderActionInputError> {
+    pub fn request(
+        &self,
+        input: Option<&str>,
+        context: &ProviderActionContext,
+    ) -> Result<MachineRequest, ProviderActionInputError> {
         let mut values = BTreeMap::new();
         match self.fields.as_slice() {
             [] => {}
@@ -141,7 +174,38 @@ impl ProviderActionDescriptor {
             }
             _ => return Err(ProviderActionInputError::UnsupportedFieldCount),
         }
-        Ok(MachineRequest::InvokeProviderAction { action_id: self.id.clone(), values })
+        let (machine_id, workspace_id) = match self.target {
+            ProviderActionTarget::Scope => (None, None),
+            ProviderActionTarget::SelectedMachine => (
+                Some(
+                    context
+                        .machine_id
+                        .clone()
+                        .ok_or(ProviderActionInputError::MissingSelectedMachine)?,
+                ),
+                None,
+            ),
+            ProviderActionTarget::SelectedWorkspace => (
+                Some(
+                    context
+                        .machine_id
+                        .clone()
+                        .ok_or(ProviderActionInputError::MissingSelectedMachine)?,
+                ),
+                Some(
+                    context
+                        .workspace_id
+                        .clone()
+                        .ok_or(ProviderActionInputError::MissingSelectedWorkspace)?,
+                ),
+            ),
+        };
+        Ok(MachineRequest::InvokeProviderAction {
+            action_id: self.id.clone(),
+            values,
+            machine_id,
+            workspace_id,
+        })
     }
 }
 
@@ -267,6 +331,12 @@ impl MachineSnapshot {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MachineConnectRoute {
+    Local,
+    Provider,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MachineRequest {
     Switch(MachineKey),
@@ -275,15 +345,31 @@ pub enum MachineRequest {
     /// before reopening the selected machine.
     ReconnectProvider,
     Create,
-    Connect(String),
+    /// Select one native creation source advertised by the client-local
+    /// catalog. Dynamic providers continue to own the source-less `Create`.
+    CreateFrom {
+        source_id: String,
+    },
+    Connect {
+        target: String,
+        route: MachineConnectRoute,
+    },
     SelectProviderScope(String),
     InvokeProviderAction {
         action_id: String,
         values: BTreeMap<String, ProviderActionValue>,
+        machine_id: Option<String>,
+        workspace_id: Option<String>,
     },
     RenameManagedMachine {
         machine: MachineKey,
         expected_version: u64,
+        name: String,
+    },
+    /// Rename a row owned by the client-local catalog. This changes only the
+    /// current process's presentation; it never rewrites SSH or cmux config.
+    RenameClientMachine {
+        machine: MachineKey,
         name: String,
     },
     DeleteManagedMachine {
@@ -335,6 +421,7 @@ pub(crate) enum ManagedWorkspaceSessionMutation {
 pub(crate) struct MachineSession {
     pub session: Session,
     pub label: String,
+    pub machine: Option<MachineKey>,
 }
 
 /// The result of one machine-side action. Most actions only update the rail;
@@ -359,9 +446,10 @@ impl MachineActionResult {
     }
 
     pub(crate) fn replace(ui: MachineUiState, session: Session, label: String) -> Self {
+        let machine = ui.snapshot.active;
         Self {
             ui,
-            replacement: Some(MachineSession { session, label }),
+            replacement: Some(MachineSession { session, label, machine }),
             restart_updates: false,
             session_mutation: None,
             session_label: None,
@@ -397,9 +485,18 @@ pub(crate) fn validate_machine_session(
 pub(crate) trait MachineController: Send {
     fn perform(&mut self, request: MachineRequest) -> anyhow::Result<MachineActionResult>;
 
+    /// Persist acknowledgement of a provider notice only after the app has
+    /// accepted and painted that exact delivery.
+    fn acknowledge_durable_notice(
+        &mut self,
+        _delivery: &DurableNoticeDelivery,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Commit controller-side ownership changes for a replacement only after
     /// the replacement session has passed the shared workspace guard.
-    fn commit_replacement(&mut self) -> anyhow::Result<()> {
+    fn commit_replacement(&mut self, _present: bool) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -433,6 +530,21 @@ pub enum MachineRailTarget {
     ConnectMachine,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineCreationSource {
+    pub id: String,
+    pub name: String,
+    pub subtitle: String,
+}
+
+/// A client-local destination advertised by a native connection source.
+/// `target` is opaque to the picker and is passed back to the owning route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineConnectionTarget {
+    pub target: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct MachineUiState {
     pub snapshot: MachineSnapshot,
@@ -441,15 +553,46 @@ pub struct MachineUiState {
     pub notice: Option<String>,
     pub session_available: bool,
     pub provider: Option<ProviderPresentation>,
+    pub connect_accepts_pairing_code: bool,
     pub rail_selection: MachineRailSelection,
+    pub creation_sources: Vec<MachineCreationSource>,
+    pub connection_targets: Vec<MachineConnectionTarget>,
+    connection_phases: HashMap<MachineKey, MachineConnectionPhase>,
     workspace_creation: HashMap<MachineKey, WorkspaceCreationPolicy>,
+    client_renamable_machines: HashSet<MachineKey>,
     managed_machines: Vec<ManagedMachineDescriptor>,
     managed_workspaces: HashMap<MachineKey, Vec<ManagedWorkspaceDescriptor>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableNoticeLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DurableNoticeDelivery {
+    pub notice_id: String,
+    pub sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DurableProviderNotice {
+    pub delivery: DurableNoticeDelivery,
+    pub level: DurableNoticeLevel,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum MachineUpdate {
+    Ui(Box<MachineUiState>),
+    DurableNotice(DurableProviderNotice),
+}
+
 /// A cancelable stream of provider-owned presentation snapshots.
 pub struct MachineUpdateStream {
-    receiver: Option<Receiver<MachineUiState>>,
+    receiver: Option<Receiver<MachineUpdate>>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     armed: bool,
@@ -457,7 +600,7 @@ pub struct MachineUpdateStream {
 
 impl MachineUpdateStream {
     pub fn new(
-        receiver: Receiver<MachineUiState>,
+        receiver: Receiver<MachineUpdate>,
         stop: Arc<AtomicBool>,
         worker: JoinHandle<()>,
     ) -> Self {
@@ -466,7 +609,7 @@ impl MachineUpdateStream {
 
     pub(crate) fn into_parts(
         mut self,
-    ) -> (Receiver<MachineUiState>, Arc<AtomicBool>, JoinHandle<()>) {
+    ) -> (Receiver<MachineUpdate>, Arc<AtomicBool>, JoinHandle<()>) {
         self.armed = false;
         (
             self.receiver.take().expect("machine update receiver is present"),
@@ -498,6 +641,11 @@ impl MachineUiState {
     pub fn new(snapshot: MachineSnapshot) -> Self {
         let selection = snapshot.active_index().unwrap_or_default();
         let session_available = snapshot.active_index().is_some();
+        let connection_phases = snapshot
+            .active
+            .map(|active| (active, MachineConnectionPhase::Ready))
+            .into_iter()
+            .collect();
         let mut state = Self {
             snapshot,
             selection,
@@ -505,13 +653,43 @@ impl MachineUiState {
             notice: None,
             session_available,
             provider: None,
+            connect_accepts_pairing_code: false,
             rail_selection: MachineRailSelection::Machine,
+            creation_sources: Vec::new(),
+            connection_targets: Vec::new(),
+            connection_phases,
             workspace_creation: HashMap::new(),
+            client_renamable_machines: HashSet::new(),
             managed_machines: Vec::new(),
             managed_workspaces: HashMap::new(),
         };
         state.ensure_rail_selection();
         state
+    }
+
+    pub fn connection_phase(&self, machine: MachineKey) -> MachineConnectionPhase {
+        self.connection_phases.get(&machine).copied().unwrap_or_default()
+    }
+
+    pub fn set_connection_phase(&mut self, machine: MachineKey, phase: MachineConnectionPhase) {
+        self.connection_phases.insert(machine, phase);
+    }
+
+    pub fn set_connection_phases(
+        &mut self,
+        phases: impl IntoIterator<Item = (MachineKey, MachineConnectionPhase)>,
+    ) {
+        self.connection_phases = phases.into_iter().collect();
+    }
+
+    pub fn extend_connection_phases_from(&mut self, previous: &Self) {
+        let visible =
+            self.snapshot.machines.iter().map(|machine| machine.key).collect::<HashSet<_>>();
+        for (machine, phase) in &previous.connection_phases {
+            if visible.contains(machine) {
+                self.connection_phases.entry(*machine).or_insert(*phase);
+            }
+        }
     }
 
     pub fn selected(&self) -> Option<&MachineDescriptor> {
@@ -552,6 +730,28 @@ impl MachineUiState {
             .iter()
             .any(|machine| machine.key == active)
             .then(|| self.workspace_creation.get(&active).cloned().unwrap_or_default())
+    }
+
+    pub fn is_provider_machine(&self, machine: MachineKey) -> bool {
+        self.workspace_creation.contains_key(&machine)
+    }
+
+    pub fn set_client_renamable_machines(
+        &mut self,
+        machines: impl IntoIterator<Item = MachineKey>,
+    ) {
+        self.client_renamable_machines = machines.into_iter().collect();
+    }
+
+    pub fn extend_client_renamable_machines(
+        &mut self,
+        machines: impl IntoIterator<Item = MachineKey>,
+    ) {
+        self.client_renamable_machines.extend(machines);
+    }
+
+    pub fn is_client_machine_renamable(&self, machine: MachineKey) -> bool {
+        self.client_renamable_machines.contains(&machine)
     }
 
     pub fn set_managed_machines(&mut self, machines: Vec<ManagedMachineDescriptor>) {
@@ -793,6 +993,7 @@ mod tests {
             actions: vec![ProviderActionDescriptor {
                 id: "billing".into(),
                 label: "Billing".into(),
+                target: ProviderActionTarget::Scope,
                 destructive: false,
                 fields: Vec::new(),
             }],
@@ -854,6 +1055,7 @@ mod tests {
         ProviderActionDescriptor {
             id: "action".into(),
             label: "Action".into(),
+            target: ProviderActionTarget::Scope,
             destructive: false,
             fields,
         }
@@ -892,15 +1094,17 @@ mod tests {
     #[test]
     fn provider_action_builds_zero_and_one_field_typed_requests() {
         assert_eq!(
-            action(Vec::new()).request(None),
+            action(Vec::new()).request(None, &ProviderActionContext::default()),
             Ok(MachineRequest::InvokeProviderAction {
                 action_id: "action".into(),
                 values: BTreeMap::new(),
+                machine_id: None,
+                workspace_id: None,
             })
         );
 
         let request = action(vec![action_field(ProviderActionFieldKind::Email)])
-            .request(Some("  person@example.com  "))
+            .request(Some("  person@example.com  "), &ProviderActionContext::default())
             .unwrap();
         assert_eq!(
             request,
@@ -910,6 +1114,8 @@ mod tests {
                     "value".into(),
                     ProviderActionValue::Text("person@example.com".into())
                 )]),
+                machine_id: None,
+                workspace_id: None,
             }
         );
     }
@@ -917,12 +1123,13 @@ mod tests {
     #[test]
     fn provider_action_validates_required_email_integer_and_field_count() {
         assert_eq!(
-            action(vec![action_field(ProviderActionFieldKind::Text)]).request(Some("")),
+            action(vec![action_field(ProviderActionFieldKind::Text)])
+                .request(Some(""), &ProviderActionContext::default()),
             Err(ProviderActionInputError::Required)
         );
         assert_eq!(
             action(vec![action_field(ProviderActionFieldKind::Email)])
-                .request(Some("not-an-email")),
+                .request(Some("not-an-email"), &ProviderActionContext::default()),
             Err(ProviderActionInputError::InvalidEmail)
         );
 
@@ -930,20 +1137,67 @@ mod tests {
         integer.minimum = Some(2);
         integer.maximum = Some(4);
         assert_eq!(
-            action(vec![integer.clone()]).request(Some("one")),
+            action(vec![integer.clone()]).request(Some("one"), &ProviderActionContext::default()),
             Err(ProviderActionInputError::InvalidInteger)
         );
         assert_eq!(
-            action(vec![integer.clone()]).request(Some("1")),
+            action(vec![integer.clone()]).request(Some("1"), &ProviderActionContext::default()),
             Err(ProviderActionInputError::BelowMinimum)
         );
         assert_eq!(
-            action(vec![integer.clone()]).request(Some("5")),
+            action(vec![integer.clone()]).request(Some("5"), &ProviderActionContext::default()),
             Err(ProviderActionInputError::AboveMaximum)
         );
         assert_eq!(
-            action(vec![integer, action_field(ProviderActionFieldKind::Text)]).request(None),
+            action(vec![integer, action_field(ProviderActionFieldKind::Text)])
+                .request(None, &ProviderActionContext::default()),
             Err(ProviderActionInputError::UnsupportedFieldCount)
+        );
+    }
+
+    #[test]
+    fn provider_action_binds_selected_workspace_context() {
+        let mut descriptor = action(Vec::new());
+        descriptor.target = ProviderActionTarget::SelectedWorkspace;
+        let context = ProviderActionContext {
+            machine_id: Some("machine-1".into()),
+            workspace_id: Some("workspace-1".into()),
+        };
+        assert_eq!(
+            descriptor.request(None, &context),
+            Ok(MachineRequest::InvokeProviderAction {
+                action_id: "action".into(),
+                values: BTreeMap::new(),
+                machine_id: Some("machine-1".into()),
+                workspace_id: Some("workspace-1".into()),
+            })
+        );
+        assert_eq!(
+            descriptor.request(
+                None,
+                &ProviderActionContext { machine_id: Some("machine-1".into()), workspace_id: None }
+            ),
+            Err(ProviderActionInputError::MissingSelectedWorkspace)
+        );
+        assert_eq!(
+            descriptor.request(None, &ProviderActionContext::default()),
+            Err(ProviderActionInputError::MissingSelectedMachine)
+        );
+
+        let mut machine_scoped = action(Vec::new());
+        machine_scoped.target = ProviderActionTarget::SelectedMachine;
+        assert_eq!(
+            machine_scoped.request(None, &context),
+            Ok(MachineRequest::InvokeProviderAction {
+                action_id: "action".into(),
+                values: BTreeMap::new(),
+                machine_id: Some("machine-1".into()),
+                workspace_id: None,
+            })
+        );
+        assert_eq!(
+            machine_scoped.request(None, &ProviderActionContext::default()),
+            Err(ProviderActionInputError::MissingSelectedMachine)
         );
     }
 
@@ -955,13 +1209,13 @@ mod tests {
             capabilities: MachineCapabilities::default(),
         });
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        sender.send(update.clone()).unwrap();
+        sender.send(MachineUpdate::Ui(Box::new(update.clone()))).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let exited = Arc::new(AtomicBool::new(false));
         let worker_exited = exited.clone();
         let worker = std::thread::spawn(move || {
             // This blocks until MachineUpdateStream drops its receiver.
-            let _ = sender.send(update);
+            let _ = sender.send(MachineUpdate::Ui(Box::new(update)));
             worker_exited.store(true, Ordering::Release);
         });
         let stream = MachineUpdateStream::new(receiver, stop.clone(), worker);

@@ -2,6 +2,16 @@ import AppKit
 import Bonsplit
 
 extension DockSplitStore {
+    /// Returns the live Dock store that owns `panelId`, if one exists.
+    static func liveStore(containingPanel panelId: UUID) -> DockSplitStore? {
+        liveStores.first(where: { $0.containsPanel(panelId) })
+    }
+
+    /// Returns the live Dock store that owns `paneId`, if one exists.
+    static func liveStore(containingPane paneId: UUID) -> DockSplitStore? {
+        liveStores.first(where: { $0.containsPane(paneId) })
+    }
+
     var focusedPanelId: UUID? {
         guard let paneId = bonsplitController.focusedPaneId,
               let tabId = bonsplitController.selectedTab(inPane: paneId)?.id else { return nil }
@@ -13,8 +23,14 @@ extension DockSplitStore {
         panels[panelId] != nil
     }
 
+    /// Whether a pane id is present in the Dock tree.
     func containsPane(_ paneId: UUID) -> Bool {
-        bonsplitController.allPaneIds.contains(where: { $0.id == paneId })
+        ownedPaneIds.contains(paneId)
+    }
+
+    /// Refreshes indexed pane ownership after a Bonsplit tree mutation.
+    func synchronizeOwnedPaneIds(with controller: BonsplitController) {
+        ownedPaneIds = Set(controller.allPaneIds.map(\.id))
     }
 
     /// Resolves a Dock pane for `surface.create --placement dock`. An explicit
@@ -46,12 +62,42 @@ extension DockSplitStore {
         applyDockSelection(tabId: tabId, inPane: paneId)
     }
 
+    /// Applies the complete user-interaction focus transaction for a Dock panel.
+    /// Model selection, window-scoped shortcut intent, and notification
+    /// dismissal move together so AppKit focus, Dock selection, and read state
+    /// converge on the same panel.
+    func focusPanelFromDockInteraction(_ panelId: UUID, window: NSWindow?) {
+        noteKeyboardFocusIntent(window: window)
+        focusPanel(panelId)
+        guard let appDelegate = AppDelegate.shared,
+              let tabManager = appDelegate.dockReferenceTabManager(for: self) else {
+            return
+        }
+        _ = tabManager.dismissNotificationOnDirectInteraction(
+            tabId: workspaceId,
+            surfaceId: panelId
+        )
+    }
+
+    /// Resolves both workspace and per-window Docks through their shared live
+    /// registry before applying pointer focus. The terminal portal can outlive a
+    /// SwiftUI host callback briefly, so pointer activation cannot depend on that
+    /// callback to update the authoritative Dock selection.
+    static func focusPanelFromDockPointer(_ panelId: UUID, window: NSWindow?) {
+        liveStore(containingPanel: panelId)?.focusPanelFromDockInteraction(panelId, window: window)
+    }
+
     func triggerFocusFlash(panelId: UUID) {
         panels[panelId]?.triggerFlash(reason: .navigation)
     }
 
+    func triggerUserInitiatedFocusFlash(panelId: UUID) {
+        panels[panelId]?.triggerFlash(reason: .userInitiated)
+    }
+
     func focusFirstControl() -> Bool {
-        guard let paneId = bonsplitController.allPaneIds.first else { return false }
+        guard let paneId = bonsplitController.focusedPaneId
+            ?? bonsplitController.allPaneIds.first else { return false }
         bonsplitController.focusPane(paneId)
         guard let tabId = bonsplitController.selectedTab(inPane: paneId)?.id,
               let panelId = surfaceIdToPanelId[tabId],
@@ -61,7 +107,11 @@ extension DockSplitStore {
     }
 
     func noteKeyboardFocusIntent(window: NSWindow?) {
-        AppDelegate.shared?.noteRightSidebarKeyboardFocusIntent(mode: .dock, in: window)
+        guard let appDelegate = AppDelegate.shared else { return }
+        let ownerWindow = appDelegate.dockReferenceTabManager(for: self)
+            .flatMap { appDelegate.windowId(for: $0) }
+            .flatMap { appDelegate.mainWindow(for: $0) }
+        appDelegate.noteRightSidebarKeyboardFocusIntent(mode: .dock, in: ownerWindow ?? window)
     }
 
     func browserPanel(owning responder: NSResponder?, in window: NSWindow?) -> BrowserPanel? {
@@ -238,6 +288,7 @@ extension DockSplitStore {
         newPane: PaneID,
         orientation: SplitOrientation
     ) {
+        synchronizeOwnedPaneIds(with: controller)
         scheduleDockPortalReconcile(reason: "dock.splitPane")
         // Programmatic splits (config seed, `newSplit`, cross-container transfer)
         // seed their own new-pane tab, so don't auto-create another.
@@ -272,6 +323,10 @@ extension DockSplitStore {
         fromPane source: PaneID,
         toPane destination: PaneID
     ) {
+        // Bonsplit auto-closes an emptied source pane during a cross-pane move
+        // without emitting `didClosePane`, so this callback must reconcile the
+        // full ownership snapshot.
+        synchronizeOwnedPaneIds(with: controller)
         applyDockSelection(tabId: tab.id, inPane: destination)
         let movedPanel = panel(for: tab.id)
         (movedPanel as? TerminalPanel)?.recordPortalHostOwnershipChange()

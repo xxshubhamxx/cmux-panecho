@@ -43,11 +43,26 @@ struct MobilePairingScannerSheet: View {
                 } else {
                     switch authorizationStatus {
                     case .authorized:
-                        QRCodeScannerView { code in
-                            dismiss()
-                            onCode(code)
+                        ZStack(alignment: .bottom) {
+                            QRCodeScannerView { code in
+                                dismiss()
+                                onCode(code)
+                            }
+                            .ignoresSafeArea(edges: .bottom)
+
+                            Text(Self.guidanceText)
+                                .font(.footnote.weight(.medium))
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background(
+                                    .black.opacity(0.72),
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                )
+                                .padding(16)
+                                .accessibilityIdentifier("MobilePairingScannerGuidance")
                         }
-                        .ignoresSafeArea(edges: .bottom)
                     case .notDetermined:
                         ProgressView()
                             .accessibilityIdentifier("MobilePairingScannerPermissionProgress")
@@ -165,3 +180,17 @@ struct MobilePairingScannerSheet: View {
     }
 }
 #endif
+
+extension MobilePairingScannerSheet {
+    /// The localized Tailscale setup sequence shared by every pairing entrypoint.
+    static var guidanceText: String {
+        L10n.string(
+            "mobile.tailscalePairing.instructions",
+            defaultValue: """
+            Install Tailscale on both devices and use the same Tailscale network. On cmux 0.64.17, \
+            choose Connect iPhone/iPad and scan the Pair iPhone code. On newer versions, open \
+            Tailscale Pairing and scan its code here.
+            """
+        )
+    }
+}
