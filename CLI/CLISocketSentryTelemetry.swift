@@ -1,9 +1,12 @@
 import CmuxFoundation
+#if canImport(Sentry) && !PRIVACY_MODE
+// Panecho: CmuxSentryReporting links sentry-cocoa; keep it out of privacy builds.
 import CmuxSentryReporting
+#endif
 import Darwin
 import Foundation
 
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
 // Sentry Cocoa 9.3.0 is pinned in Package.resolved. This SPI stores the
 // envelope durably without blocking short-lived CLI commands; verify it before
 // any Sentry SDK upgrade.
@@ -51,7 +54,7 @@ final class CLISocketSentryTelemetry {
     private let sentryPolicy: CLISocketSentryPolicy
     private var pendingBreadcrumbs: [PendingBreadcrumb] = []
 
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
     private static let startupLock = NSLock()
     private static var started = false
     private static let dsn = "https://ecba1ec90ecaee02a102fba931b6d2b3@o4507547940749312.ingest.us.sentry.io/4510796264636416"
@@ -124,7 +127,7 @@ final class CLISocketSentryTelemetry {
 
     func breadcrumb(_ message: String, data: [String: Any] = [:]) {
         guard shouldEmit else { return }
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
         pendingBreadcrumbs.append(PendingBreadcrumb(message: message, data: data))
 #endif
     }
@@ -143,7 +146,7 @@ final class CLISocketSentryTelemetry {
 #if DEBUG
         recordCaptureProbe(stage: stage, error: error)
 #endif
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
         Self.ensureStarted()
         var context = baseContext()
         context["stage"] = stage
@@ -197,7 +200,7 @@ final class CLISocketSentryTelemetry {
         try? payload.write(toFile: NSString(string: path).expandingTildeInPath, atomically: true, encoding: .utf8)
     }
 
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
     private func recordStoreProbe(eventId: String) {
         guard let path = processEnv["CMUX_CLI_SENTRY_STORE_PROBE_PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !path.isEmpty else {
@@ -209,7 +212,7 @@ final class CLISocketSentryTelemetry {
 #endif
 #endif
 
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
     private static func makeErrorEvent(
         error: Error,
         context: [String: Any],
@@ -386,7 +389,7 @@ final class CLISocketSentryTelemetry {
         return sockets
     }
 
-#if canImport(Sentry)
+#if canImport(Sentry) && !PRIVACY_MODE
     private static func ensureStarted() {
         startupLock.lock()
         defer { startupLock.unlock() }

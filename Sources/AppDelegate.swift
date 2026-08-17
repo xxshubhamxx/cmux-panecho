@@ -29,7 +29,10 @@ import Combine
 import ObjectiveC.runtime
 import Darwin
 import CmuxFoundation
+#if canImport(Sentry) && !PRIVACY_MODE
+// Panecho: CmuxSentryReporting links sentry-cocoa; keep it out of privacy builds.
 import CmuxSentryReporting
+#endif
 import CmuxSidebar
 import CmuxGit
 
@@ -586,8 +589,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// Bridges the Mac host's transport diagnostic ring into Sentry
     /// (breadcrumbs, structured logs, throttled failure events with the ring
     /// export attached). Created after `SentrySDK.start`; delivery no-ops when
-    /// the SDK is off.
+    /// the SDK is off. Absent entirely in Panecho privacy builds.
+#if canImport(Sentry) && !PRIVACY_MODE
     private var transportSentryReporter: TransportSentryReporter?
+#endif
     private let cmuxThemePreviewReloadScheduler = MainActorDeferredActionScheduler()
     private let connectivityInvalidationSubscriberCoordinator =
         ConnectivityInvalidationSubscriberCoordinator()

@@ -118,6 +118,20 @@ jobs:
           test -x "$APP_PATH/Contents/MacOS/cmux"
           test -x "$APP_PATH/Contents/Resources/bin/cmux"
           ! /usr/bin/find "$APP_PATH" \( -iname '*Sentry*' -o -iname '*PostHog*' \) -print -quit | grep -q .
+          # A filename scan alone is not sufficient: an SPM product (e.g. the
+          # CmuxSentryReporting -> sentry-cocoa chain upstream added) links
+          # STATICALLY, producing no *Sentry* file while still shipping the SDK
+          # and its ingest DSN. Assert at the symbol and string level instead.
+          for BIN in "$APP_PATH/Contents/MacOS/cmux" "$APP_PATH/Contents/Resources/bin/cmux"; do
+            echo "telemetry symbol scan: $BIN"
+            if nm -a "$BIN" 2>/dev/null | grep -qiE '(_OBJC_CLASS_\$_Sentry|SentrySDK|PostHogSDK)'; then
+              echo "::error::telemetry SDK symbols linked into $BIN" >&2; exit 1
+            fi
+            if strings - "$BIN" 2>/dev/null | grep -qiE 'ingest\.[a-z]*\.?sentry\.io|sentry_dsn|i\.posthog\.com|app\.posthog\.com'; then
+              echo "::error::telemetry ingest endpoint embedded in $BIN" >&2; exit 1
+            fi
+          done
+          echo "no telemetry SDK symbols or ingest endpoints in shipped binaries"
           # react-grab script must be bundled offline with the pinned hash
           RG="$APP_PATH/Contents/Resources/react-grab-0.1.29.global.js"
           test -f "$RG"
