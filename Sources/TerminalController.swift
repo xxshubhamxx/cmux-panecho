@@ -356,9 +356,27 @@ class TerminalController {
     )
     private var browserDownloadObserver: NSObjectProtocol?
 
-    func cleanupSurfaceState(surfaceIds: [UUID], paneIds: [UUID] = []) {
+    /// Retains the single canonical file each file-backed panel currently
+    /// exposes, so a mobile artifact request can only ever reach the file its
+    /// panel is actually showing.
+    let panelArtifactAuthorizationStore = PanelArtifactAuthorizationStore()
+
+    func cleanupSurfaceState(
+        surfaceIds: [UUID],
+        workspaceID: UUID? = nil,
+        paneIds: [UUID] = []
+    ) {
         let uniqueSurfaceIds = Set(surfaceIds)
         socketFastPathState.removeShellActivity(panelIds: uniqueSurfaceIds)
+        if let workspaceID {
+            // A torn-down panel must not leave a live file grant behind.
+            for surfaceId in uniqueSurfaceIds {
+                panelArtifactAuthorizationStore.invalidate(
+                    workspaceID: workspaceID.uuidString,
+                    surfaceID: surfaceId.uuidString
+                )
+            }
+        }
         for surfaceId in uniqueSurfaceIds {
             v2BrowserFrameSelectorBySurface.removeValue(forKey: surfaceId)
             v2BrowserDialogQueueBySurface.removeValue(forKey: surfaceId)
