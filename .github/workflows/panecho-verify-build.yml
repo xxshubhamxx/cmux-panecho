@@ -122,16 +122,30 @@ jobs:
           # CmuxSentryReporting -> sentry-cocoa chain upstream added) links
           # STATICALLY, producing no *Sentry* file while still shipping the SDK
           # and its ingest DSN. Assert at the symbol and string level instead.
-          for BIN in "$APP_PATH/Contents/MacOS/cmux" "$APP_PATH/Contents/Resources/bin/cmux"; do
-            echo "telemetry symbol scan: $BIN"
+          # Naming the two Swift binaries was not enough: this bundle also ships
+          # third-party executables (a Rust helper, the Ghostty CLI helper) that
+          # carry their own telemetry clients and never touch our compile-time
+          # gates. Assert over EVERY Mach-O the bundle actually contains, so a
+          # newly bundled executable cannot arrive unscanned.
+          SCANNED=0
+          while IFS= read -r -d '' BIN; do
+            file "$BIN" | grep -q "Mach-O" || continue
+            SCANNED=$((SCANNED + 1))
             if nm -a "$BIN" 2>/dev/null | grep -qiE '(_OBJC_CLASS_\$_Sentry|SentrySDK|PostHogSDK)'; then
-              echo "::error::telemetry SDK symbols linked into $BIN" >&2; exit 1
+              echo "::error::telemetry SDK symbols linked into ${BIN#"$APP_PATH/"}" >&2; exit 1
             fi
-            if strings - "$BIN" 2>/dev/null | grep -qiE 'ingest\.[a-z]*\.?sentry\.io|sentry_dsn|i\.posthog\.com|app\.posthog\.com'; then
-              echo "::error::telemetry ingest endpoint embedded in $BIN" >&2; exit 1
+            if strings - "$BIN" 2>/dev/null | grep -qiE 'ingest\.[a-z]*\.?sentry\.io|sentry_dsn|[a-z]+\.i\.posthog\.com|app\.posthog\.com'; then
+              echo "::error::telemetry ingest endpoint embedded in ${BIN#"$APP_PATH/"}" >&2; exit 1
             fi
-          done
-          echo "no telemetry SDK symbols or ingest endpoints in shipped binaries"
+          done < <(find "$APP_PATH" -type f -perm +111 -print0)
+          [ "$SCANNED" -ge 6 ] || { echo "::error::only $SCANNED Mach-O binaries scanned; the walk is not finding them" >&2; exit 1; }
+          echo "no telemetry SDK symbols or ingest endpoints in any of the $SCANNED shipped Mach-O binaries"
+          # The Computer Use helper is a separate process outside the egress
+          # guard, so privacy builds must not ship it at all.
+          if [ -e "$APP_PATH/Contents/Library/cmux Computer Use.app" ] || [ -e "$APP_PATH/Contents/Resources/bin/cmux-cua" ]; then
+            echo "::error::Computer Use helper is still bundled" >&2; exit 1
+          fi
+          echo "Computer Use helper is absent"
           # react-grab script must be bundled offline with the pinned hash
           RG="$APP_PATH/Contents/Resources/react-grab-0.1.29.global.js"
           test -f "$RG"

@@ -60,7 +60,13 @@ final class ComputerUseRuntimeService {
         let nestedURL = bundle.bundleURL
             .appendingPathComponent("Contents/Library/\(Self.helperAppName).app", isDirectory: true)
         applicationName = Self.helperAppName
-        if FileManager.default.fileExists(atPath: nestedURL.path) {
+        // Panecho: the helper is a separate executable with its own analytics
+        // client, so it runs outside this process's egress guard. Privacy builds
+        // do not ship it (see scripts/stage-panecho-app.sh) and must not adopt a
+        // stray copy either, so the lookup is skipped outright.
+        if PrivacyMode.isEnabled {
+            bundledHelperAppURL = nil
+        } else if FileManager.default.fileExists(atPath: nestedURL.path) {
             bundledHelperAppURL = nestedURL
         } else {
             bundledHelperAppURL = nil

@@ -259,6 +259,10 @@ build_helper() {
     cli-helper
     -Dapp-runtime=none
     -Dcrash-report-subdir=cmux/crash
+    # Panecho: the CLI helper is a shipped Mach-O like the framework, so it gets
+    # the same crash-reporter-free treatment; otherwise sentry-native links in
+    # and its handler writes foreign app data at startup.
+    -Dsentry=false
     -Demit-macos-app=false
     -Demit-xcframework=false
     -Doptimize=ReleaseFast

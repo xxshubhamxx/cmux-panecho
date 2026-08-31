@@ -62,8 +62,19 @@ set_plist_value "SUSendProfileInfo" bool false
 delete_plist_key "SUFeedURL"
 delete_plist_key "SUPublicEDKey"
 
+CMUX_COMPUTER_USE_HELPER_APP="cmux Computer Use.app"
+
 rm -rf "$DEST_APP/Contents/Frameworks/Sentry.framework"
 rm -rf "$DEST_APP/Contents/Resources/PostHog_PostHog.bundle"
+
+# Panecho: the bundled Computer Use helper is a separate Rust executable with its
+# own analytics client compiled in (an eu.i.posthog.com capture endpoint). It runs
+# as its own process, so neither the compile-time stubs nor the in-process egress
+# guard can reach it — the only way it sends nothing is to not ship it. The app
+# treats a missing helper as "feature unavailable" (see ComputerUseRuntimeService).
+rm -rf "$DEST_APP/Contents/Library/$CMUX_COMPUTER_USE_HELPER_APP"
+rm -f "$DEST_APP/Contents/Resources/bin/cmux-cua"
+rmdir "$DEST_APP/Contents/Library" 2>/dev/null || true
 
 # Panecho: ship the react-grab inspector script offline so the in-app browser's
 # React Grab works with no CDN fetch (privacy mode loads it from the app bundle).
