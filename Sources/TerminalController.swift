@@ -3931,6 +3931,11 @@ class TerminalController {
             return status == 401
         case .sessionRefreshFailed, .backendUnreachable, .malformedResponse:
             return false
+        case .privacyModeDisabled:
+            // A privacy-mode block is not an auth failure: routing it into the
+            // sign-in flow would ask the user to authenticate against a backend
+            // this build never contacts.
+            return false
         }
     }
 
