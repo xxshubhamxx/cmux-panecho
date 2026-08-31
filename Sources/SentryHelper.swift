@@ -43,6 +43,7 @@ func sentryRefreshMemoryContext(reason: String) async { _ = reason }
 #else
 
 import Darwin
+import CmuxSentryReporting
 import CmuxTerminal
 import Foundation
 import Sentry
