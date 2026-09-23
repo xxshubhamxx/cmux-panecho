@@ -1,6 +1,7 @@
 import CMUXAuthCore
 import CMUXMobileCore
 import CmuxAuthRuntime
+import CmuxPhonePush
 import CmuxMobileSupport
 import CmuxMobileTransport
 import Foundation
@@ -77,7 +78,7 @@ public struct MobileAuthComposition {
         self.appNamespace = appNamespace
         self.keychainAccessGroup = keychainAccessGroup
 
-        let overrides = Self.authOverrides(
+        let sourcedOverrides = Self.authOverrides(
             localConfig: Self.localConfigStringOverrides(in: bundle),
             bakedAuthEnvironment: bundle.object(
                 forInfoDictionaryKey: Self.authEnvironmentInfoPlistKey
@@ -88,7 +89,11 @@ public struct MobileAuthComposition {
         )
         let resolvedEnvironment = Self.resolvedAuthEnvironment(
             isDevelopmentBuild: Self.isDevelopmentBuild,
-            overrides: overrides
+            overrides: sourcedOverrides
+        )
+        let overrides = Self.productionSafeOverrides(
+            sourcedOverrides,
+            authEnvironment: resolvedEnvironment
         )
         self.authEnvironment = resolvedEnvironment
         let resolvedConfig = AuthConfig(
@@ -169,14 +174,38 @@ public struct MobileAuthComposition {
             isTokenStorageAvailable: { await MainActor.run { availability.isAvailable } },
             onSignedIn: { await deferredSignIn.run() }
         )
+        let pushIdentity = try? PhonePushKeyMaterial.current(
+            bundleID: bundle.bundleIdentifier ?? "",
+            accessGroup: keychainAccessGroup
+        )
         let push = PushRegistrationService(
             tokenProvider: coordinator,
             apiBaseURL: resolvedConfig.apiBaseURL,
             bundleID: bundle.bundleIdentifier ?? "",
             apnsEnvironment: Self.apnsEnvironment,
+            pushInstallationID: pushIdentity?.installationID,
+            pushKeyID: pushIdentity?.keyID,
+            pushPublicKey: pushIdentity?.publicKeyData.base64EncodedString(),
+            pushIdentityProvider: {
+                guard let identity = try? PhonePushKeyMaterial.current(
+                    bundleID: bundle.bundleIdentifier ?? "",
+                    accessGroup: keychainAccessGroup
+                ) else { return nil }
+                return PushRegistrationIdentity(
+                    installationID: identity.installationID,
+                    keyID: identity.keyID,
+                    publicKey: identity.publicKeyData.base64EncodedString()
+                )
+            },
             session: .shared
         )
-        deferredSignIn.set { await push.syncTokenIfPossible() }
+        deferredSignIn.set {
+            let accountID = await MainActor.run { coordinator.currentUser?.id }
+            if let accountID {
+                PhonePushActiveAccountStore().set(accountID)
+            }
+            await push.syncTokenIfPossible()
+        }
         self.coordinator = coordinator
         self.pushRegistration = push
         self.protectedDataAvailability = availability
@@ -192,8 +221,18 @@ public struct MobileAuthComposition {
     /// Begin asynchronous session restore (call once after construction).
     public func start() {
         taskOwner.recordRestoreStarted()
-        protectedDataAvailability.startObserving { [coordinator, taskOwner] in
-            taskOwner.revalidateSession(using: coordinator)
+        let pushRegistration = self.pushRegistration
+        protectedDataAvailability.startObserving { [coordinator, taskOwner, pushRegistration] in
+            taskOwner.revalidateSession(using: coordinator) {
+                if let accountID = coordinator.currentUser?.id {
+                    PhonePushActiveAccountStore().set(accountID)
+                } else {
+                    PhonePushActiveAccountStore().clear()
+                }
+                Task {
+                    await pushRegistration.syncTokenIfPossible()
+                }
+            }
         }
         coordinator.start()
         taskOwner.observeRestore(using: coordinator)
@@ -260,6 +299,7 @@ public struct MobileAuthComposition {
         isDevelopmentBuild: Bool,
         overrides: [String: String]
     ) -> CMUXAuthEnvironment {
+        guard isDevelopmentBuild else { return .production }
         switch overrides[authEnvironmentOverrideKey]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() {
@@ -270,6 +310,20 @@ public struct MobileAuthComposition {
         default:
             return isDevelopmentBuild ? .development : .production
         }
+    }
+
+    /// Release and production-auth builds cannot be redirected by a stale
+    /// LocalConfig.plist or launch override. Keep the auth channel and its
+    /// credential-bearing API origin aligned before constructing AuthConfig.
+    nonisolated static func productionSafeOverrides(
+        _ overrides: [String: String],
+        authEnvironment: CMUXAuthEnvironment
+    ) -> [String: String] {
+        guard authEnvironment == .production else { return overrides }
+        var safe = overrides
+        safe[authEnvironmentOverrideKey] = "production"
+        safe["ApiBaseURL"] = "https://cmux.com"
+        return safe
     }
 
     /// Whether launch enables the `42` debug sign-in shortcut. It signs in
@@ -384,7 +438,7 @@ public struct MobileAuthComposition {
     }
 
     private static func keychainAccessGroup(in bundle: Bundle) -> String? {
-        MobileKeychainAccessGroupPolicy.resolve(
+        String.cmuxKeychainAccessGroup(from:
             bundle.object(forInfoDictionaryKey: "CMUXKeychainAccessGroup") as? String
         )
     }
@@ -445,11 +499,15 @@ private final class MobileAuthTaskOwner {
         }
     }
 
-    func revalidateSession(using coordinator: AuthCoordinator) {
+    func revalidateSession(
+        using coordinator: AuthCoordinator,
+        onComplete: @escaping @MainActor () -> Void = {}
+    ) {
         revalidationTask?.cancel()
         revalidationTask = Task { @MainActor [weak self, coordinator] in
             await coordinator.revalidateSession()
             guard !Task.isCancelled else { return }
+            onComplete()
             self?.revalidationTask = nil
         }
     }

@@ -1,5 +1,5 @@
 // This file is generated. Do not edit by hand.
-// cmux-tui mux protocol 12, IR 65aa592727bc414fe3e66ac125c9b8541a1926bbe9eaa572acc66b4681bf6589.
+// cmux-tui mux protocol 12, IR 7042c629f34d3606581d07b2d2c03b65116c2467810724163c54674865825cc0.
 // The emitter owns this layout so generation is independent of the installed rustfmt.
 
 use super::metadata::*;
@@ -101,6 +101,8 @@ pub struct ColorsChangedEvent {
     pub cursor_style: Optional<T::CursorStyle>,
     pub fg: Nullable<T::ColorHex>,
     #[serde(default, deserialize_with = "crate::presence::deserialize_optional_non_null", skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<T::TerminalColorOverrides>,
+    #[serde(default, deserialize_with = "crate::presence::deserialize_optional_non_null", skip_serializing_if = "Option::is_none")]
     pub palette: Option<BTreeMap<String, T::ColorHex>>,
     pub selection_bg: Nullable<T::ColorHex>,
     pub selection_fg: Nullable<T::ColorHex>,
@@ -111,6 +113,11 @@ pub struct ColorsChangedEvent {
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ConfigReloadRequestedEvent {
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DaemonShutdownEvent {
 }
 
 #[rustfmt::skip]
@@ -180,6 +187,12 @@ pub struct GraphicsStatusEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayoutChangedEvent {
     pub screen: T::Id,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MachineUsageChangedEvent {
+    pub usage: Nullable<T::MachineUsage>,
 }
 
 #[rustfmt::skip]
@@ -429,6 +442,14 @@ pub struct TreeChangedEvent {
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UrlOpenEvent {
+    pub request_id: String,
+    pub terminal_id: String,
+    pub url: String,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VtStateEvent {
     #[serde(default, deserialize_with = "crate::presence::deserialize_optional_non_null", skip_serializing_if = "Option::is_none")]
     pub colors: Option<T::TerminalColors>,
@@ -528,12 +549,14 @@ pub enum Event {
     ClientListInvalidated(ClientListInvalidatedEvent),
     ColorsChanged(ColorsChangedEvent),
     ConfigReloadRequested(ConfigReloadRequestedEvent),
+    DaemonShutdown(DaemonShutdownEvent),
     Detached(DetachedEvent),
     Empty(EmptyEvent),
     Frame(FrameEvent),
     FrontendProjectionChanged(FrontendProjectionChangedEvent),
     GraphicsStatus(GraphicsStatusEvent),
     LayoutChanged(LayoutChangedEvent),
+    MachineUsageChanged(MachineUsageChangedEvent),
     Notification(NotificationEvent),
     Output(OutputEvent),
     Overflow(OverflowEvent),
@@ -559,6 +582,7 @@ pub enum Event {
     TerminalRegistryChanged(TerminalRegistryChangedEvent),
     TitleChanged(TitleChangedEvent),
     TreeChanged(TreeChangedEvent),
+    UrlOpen(UrlOpenEvent),
     VtState(VtStateEvent),
     WindowTitleRequested(WindowTitleRequestedEvent),
     WorkspaceAdded(WorkspaceAddedEvent),
@@ -581,12 +605,14 @@ impl Event {
             Self::ClientListInvalidated(_) => Some("client-list-invalidated"),
             Self::ColorsChanged(_) => Some("colors-changed"),
             Self::ConfigReloadRequested(_) => Some("config-reload-requested"),
+            Self::DaemonShutdown(_) => Some("daemon-shutdown"),
             Self::Detached(_) => Some("detached"),
             Self::Empty(_) => Some("empty"),
             Self::Frame(_) => Some("frame"),
             Self::FrontendProjectionChanged(_) => Some("frontend-projection-changed"),
             Self::GraphicsStatus(_) => Some("graphics-status"),
             Self::LayoutChanged(_) => Some("layout-changed"),
+            Self::MachineUsageChanged(_) => Some("machine-usage-changed"),
             Self::Notification(_) => Some("notification"),
             Self::Output(_) => Some("output"),
             Self::Overflow(_) => Some("overflow"),
@@ -612,6 +638,7 @@ impl Event {
             Self::TerminalRegistryChanged(_) => Some("terminal-registry-changed"),
             Self::TitleChanged(_) => Some("title-changed"),
             Self::TreeChanged(_) => Some("tree-changed"),
+            Self::UrlOpen(_) => Some("url-open"),
             Self::VtState(_) => Some("vt-state"),
             Self::WindowTitleRequested(_) => Some("window-title-requested"),
             Self::WorkspaceAdded(_) => Some("workspace-added"),
@@ -633,12 +660,14 @@ impl Event {
             Self::ClientListInvalidated(_) => Some(&CLIENT_LIST_INVALIDATED_EVENT_METADATA),
             Self::ColorsChanged(_) => Some(&COLORS_CHANGED_EVENT_METADATA),
             Self::ConfigReloadRequested(_) => Some(&CONFIG_RELOAD_REQUESTED_EVENT_METADATA),
+            Self::DaemonShutdown(_) => Some(&DAEMON_SHUTDOWN_EVENT_METADATA),
             Self::Detached(_) => Some(&DETACHED_EVENT_METADATA),
             Self::Empty(_) => Some(&EMPTY_EVENT_METADATA),
             Self::Frame(_) => Some(&FRAME_EVENT_METADATA),
             Self::FrontendProjectionChanged(_) => Some(&FRONTEND_PROJECTION_CHANGED_EVENT_METADATA),
             Self::GraphicsStatus(_) => Some(&GRAPHICS_STATUS_EVENT_METADATA),
             Self::LayoutChanged(_) => Some(&LAYOUT_CHANGED_EVENT_METADATA),
+            Self::MachineUsageChanged(_) => Some(&MACHINE_USAGE_CHANGED_EVENT_METADATA),
             Self::Notification(_) => Some(&NOTIFICATION_EVENT_METADATA),
             Self::Output(_) => Some(&OUTPUT_EVENT_METADATA),
             Self::Overflow(_) => Some(&OVERFLOW_EVENT_METADATA),
@@ -664,6 +693,7 @@ impl Event {
             Self::TerminalRegistryChanged(_) => Some(&TERMINAL_REGISTRY_CHANGED_EVENT_METADATA),
             Self::TitleChanged(_) => Some(&TITLE_CHANGED_EVENT_METADATA),
             Self::TreeChanged(_) => Some(&TREE_CHANGED_EVENT_METADATA),
+            Self::UrlOpen(_) => Some(&URL_OPEN_EVENT_METADATA),
             Self::VtState(_) => Some(&VT_STATE_EVENT_METADATA),
             Self::WindowTitleRequested(_) => Some(&WINDOW_TITLE_REQUESTED_EVENT_METADATA),
             Self::WorkspaceAdded(_) => Some(&WORKSPACE_ADDED_EVENT_METADATA),
@@ -751,6 +781,14 @@ pub fn decode_event(raw: Value) -> Event {
                 decode_error: Some(error.to_string()),
             }),
         },
+        Some("daemon-shutdown") => match serde_json::from_value::<DaemonShutdownEvent>(raw.clone()) {
+            Ok(event) => Event::DaemonShutdown(event),
+            Err(error) => Event::Unknown(UnknownEvent {
+                name,
+                raw,
+                decode_error: Some(error.to_string()),
+            }),
+        },
         Some("detached") => match serde_json::from_value::<DetachedEvent>(raw.clone()) {
             Ok(event) => Event::Detached(event),
             Err(error) => Event::Unknown(UnknownEvent {
@@ -793,6 +831,14 @@ pub fn decode_event(raw: Value) -> Event {
         },
         Some("layout-changed") => match serde_json::from_value::<LayoutChangedEvent>(raw.clone()) {
             Ok(event) => Event::LayoutChanged(event),
+            Err(error) => Event::Unknown(UnknownEvent {
+                name,
+                raw,
+                decode_error: Some(error.to_string()),
+            }),
+        },
+        Some("machine-usage-changed") => match serde_json::from_value::<MachineUsageChangedEvent>(raw.clone()) {
+            Ok(event) => Event::MachineUsageChanged(event),
             Err(error) => Event::Unknown(UnknownEvent {
                 name,
                 raw,
@@ -993,6 +1039,14 @@ pub fn decode_event(raw: Value) -> Event {
         },
         Some("tree-changed") => match serde_json::from_value::<TreeChangedEvent>(raw.clone()) {
             Ok(event) => Event::TreeChanged(event),
+            Err(error) => Event::Unknown(UnknownEvent {
+                name,
+                raw,
+                decode_error: Some(error.to_string()),
+            }),
+        },
+        Some("url-open") => match serde_json::from_value::<UrlOpenEvent>(raw.clone()) {
+            Ok(event) => Event::UrlOpen(event),
             Err(error) => Event::Unknown(UnknownEvent {
                 name,
                 raw,

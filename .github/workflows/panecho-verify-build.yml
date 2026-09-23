@@ -66,7 +66,9 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version-file: daemon/remote/go.mod
+          # Mirrors upstream release.yml: the Cloud tunnel's wireguard-go and the SSH
+          # daemon both build with this toolchain (GOTOOLCHAIN=local, no auto-download).
+          go-version: '1.26.x'
           cache: false
 
       - name: Build Panecho.app
@@ -146,6 +148,10 @@ jobs:
             echo "::error::Computer Use helper is still bundled" >&2; exit 1
           fi
           echo "Computer Use helper is absent"
+          if [ -e "$APP_PATH/Contents/Library/SystemExtensions" ]; then
+            echo "::error::Cloud tunnel system extension is still bundled" >&2; exit 1
+          fi
+          echo "Cloud tunnel system extension is absent"
           # react-grab script must be bundled offline with the pinned hash
           RG="$APP_PATH/Contents/Resources/react-grab-0.1.29.global.js"
           test -f "$RG"

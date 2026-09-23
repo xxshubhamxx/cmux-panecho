@@ -10,15 +10,36 @@ extension MobileShellComposite {
         _ kind: DiagnosticAppEventKind,
         correlationID: String? = nil,
         startedAt: Date? = nil,
+        elapsedMilliseconds: UInt32? = nil,
         failure: DiagnosticFailureKind? = nil,
         count: Int? = nil
     ) {
         diagnosticLog?.recordAppEvent(
             kind,
             correlationID: correlationID,
-            elapsedMilliseconds: startedAt.map { appDiagnosticElapsedMilliseconds(since: $0) },
+            elapsedMilliseconds: elapsedMilliseconds
+                ?? startedAt.map { appDiagnosticElapsedMilliseconds(since: $0) },
             failure: failure,
             count: count
+        )
+    }
+
+    /// Adds one bounded terminal trace phase to the diagnostic spine.
+    public func recordTerminalTrace(
+        operation: DiagnosticTerminalTraceOperation,
+        phase: DiagnosticTerminalTracePhase,
+        traceID: DiagnosticTerminalTraceID,
+        surfaceID: String? = nil,
+        startedAt: Date? = nil,
+        detail: Int? = nil
+    ) {
+        diagnosticLog?.recordTerminalTrace(
+            operation: operation,
+            phase: phase,
+            traceID: traceID,
+            surface: DiagnosticCorrelation().handle(for: surfaceID),
+            elapsedMilliseconds: startedAt.map { appDiagnosticElapsedMilliseconds(since: $0) },
+            detail: detail
         )
     }
 
@@ -27,13 +48,15 @@ extension MobileShellComposite {
         _ kind: DiagnosticAppEventKind,
         correlationID: String? = nil,
         startedAt: Date? = nil,
+        elapsedMilliseconds: UInt32? = nil,
         failure: DiagnosticFailureKind? = nil,
         detail: DiagnosticAppEventDetail
     ) {
         diagnosticLog?.recordAppEvent(
             kind,
             correlationID: correlationID,
-            elapsedMilliseconds: startedAt.map { appDiagnosticElapsedMilliseconds(since: $0) },
+            elapsedMilliseconds: elapsedMilliseconds
+                ?? startedAt.map { appDiagnosticElapsedMilliseconds(since: $0) },
             failure: failure,
             detail: detail
         )

@@ -74,6 +74,10 @@ rm -rf "$DEST_APP/Contents/Resources/PostHog_PostHog.bundle"
 # treats a missing helper as "feature unavailable" (see ComputerUseRuntimeService).
 rm -rf "$DEST_APP/Contents/Library/$CMUX_COMPUTER_USE_HELPER_APP"
 rm -f "$DEST_APP/Contents/Resources/bin/cmux-cua"
+# Panecho: the Cloud VPN network system extension only tunnels to the hosted Cloud
+# backend this build never contacts, and it carries restricted entitlements bound
+# to upstream's team. Activation is refused in privacy mode (SystemExtensionActivator).
+rm -rf "$DEST_APP/Contents/Library/SystemExtensions"
 rmdir "$DEST_APP/Contents/Library" 2>/dev/null || true
 
 # Panecho: ship the react-grab inspector script offline so the in-app browser's

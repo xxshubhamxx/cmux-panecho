@@ -1,5 +1,5 @@
 /* This file is generated. Do not edit by hand. */
-/* cmux-tui mux protocol 12, IR 65aa592727bc414fe3e66ac125c9b8541a1926bbe9eaa572acc66b4681bf6589. */
+/* cmux-tui mux protocol 12, IR 7042c629f34d3606581d07b2d2c03b65116c2467810724163c54674865825cc0. */
 
 
 /** JSON accepted by the wire codec. bigint is serialized as an exact JSON integer. */
@@ -215,6 +215,22 @@ export type GetCellPixelsResult = {
   "width_px": number;
 };
 
+export type GuestUrlAcknowledgeResult = {
+  "accepted": boolean;
+};
+
+export type GuestUrlClaimResult = {
+  "claimed": boolean;
+};
+
+export type GuestUrlOpenResult = {
+  "opened": boolean;
+};
+
+export type GuestUrlSubscribeResult = {
+  "url_open_ready": boolean;
+};
+
 export type Id = bigint;
 
 export type IdMapping = {
@@ -313,6 +329,22 @@ export type LivePane = {
   "name": (string) | null;
   "short_id"?: string;
   "tabs": Array<Tab>;
+};
+
+export type MachineListeningTcpResult = {
+  "stdout": string;
+};
+
+export type MachineUsage = {
+  "api_equivalent_usd": number;
+  "as_of": (string) | null;
+  "period_days": number;
+  "total_tokens": bigint;
+  "vm_id": string;
+};
+
+export type MachineUsageResult = {
+  "usage": (MachineUsage) | null;
 };
 
 export type MintTerminalRendererResult = {
@@ -536,6 +568,77 @@ export type Screen = {
   "zoomed_pane": (Id) | null;
 };
 
+export type ServerStatsConnections = {
+  "accepted": bigint;
+  "active": bigint;
+  "limit": bigint;
+  "peak": bigint;
+  "refused": bigint;
+};
+
+export type ServerStatsHistogram = {
+  "count": bigint;
+  "max": bigint;
+  "mean": bigint;
+  "p50": bigint;
+  "p90": bigint;
+  "p99": bigint;
+};
+
+export type ServerStatsJournalWriter = {
+  "batch_size": ServerStatsHistogram;
+  "batches": bigint;
+  "commit_failures": bigint;
+  "commit_lock_wait_us": ServerStatsHistogram;
+  "commit_us": ServerStatsHistogram;
+  "deadline_expiries": bigint;
+  "durable_events": bigint;
+  "durable_queued": bigint;
+  "phase": ServerStatsWriterPhase;
+  "phase_for_us": bigint;
+  "receipt_wait_us": ServerStatsHistogram;
+  "terminal_events": bigint;
+  "terminal_queued": bigint;
+};
+
+export type ServerStatsLockHolder = {
+  "held_for_us": bigint;
+  "site": string;
+};
+
+export type ServerStatsLockSite = {
+  "acquisitions": bigint;
+  "hold_max_us": bigint;
+  "hold_total_us": bigint;
+  "site": string;
+};
+
+export type ServerStatsLockStall = {
+  "blocker": (string) | null;
+  "waited_us": bigint;
+  "waiter": string;
+};
+
+export type ServerStatsRegistryLock = {
+  "contended_acquisitions": bigint;
+  "hold_us": ServerStatsHistogram;
+  "holder": (ServerStatsLockHolder) | null;
+  "last_stall": (ServerStatsLockStall) | null;
+  "stalls": bigint;
+  "top_sites": Array<ServerStatsLockSite>;
+  "wait_us": ServerStatsHistogram;
+};
+
+export type ServerStatsResult = {
+  "connections": ServerStatsConnections;
+  "journal_writer": (ServerStatsJournalWriter) | null;
+  "registry_lock": ServerStatsRegistryLock;
+  "schema": number;
+  "uptime_ms": bigint;
+};
+
+export type ServerStatsWriterPhase = "idle" | "waiting_lock" | "committing";
+
 export type SetCellPixelsResult = {
   "failures": Array<CellPixelFailure>;
   "resizes": Array<CellPixelResize>;
@@ -585,12 +688,19 @@ export type Tab = {
   "title": string;
 };
 
+export type TerminalColorOverrides = {
+  "bg": (ColorHex) | null;
+  "cursor": (ColorHex) | null;
+  "fg": (ColorHex) | null;
+};
+
 export type TerminalColors = {
   "bg": (ColorHex) | null;
   "cursor"?: (ColorHex) | null;
   "cursor_blink"?: (boolean) | null;
   "cursor_style"?: (CursorStyle) | null;
   "fg": (ColorHex) | null;
+  "overrides"?: TerminalColorOverrides;
   "palette"?: Record<string, ColorHex>;
   "selection_bg": (ColorHex) | null;
   "selection_fg": (ColorHex) | null;
