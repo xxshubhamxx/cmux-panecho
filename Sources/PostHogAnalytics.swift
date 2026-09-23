@@ -12,6 +12,9 @@ final class PostHogAnalytics {
     private init() {}
 
     func startIfNeeded() {}
+    func recordLaunchIdentity() {}
+    func capture(_: String, properties _: [String: Any]) {}
+    func captureCrashException(pendingCrash _: GhosttyCrashBreadcrumb.PendingCrash) {}
     func trackActive(reason _: String) {}
     func trackDailyActive(reason _: String) {}
     func trackHourlyActive(reason _: String) {}
