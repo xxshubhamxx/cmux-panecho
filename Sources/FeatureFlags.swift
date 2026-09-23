@@ -599,6 +599,8 @@ final class CmuxFeatureFlags {
         distinctID: String,
         personProperties: [String: String]
     ) async -> [String: Bool]? {
+        // Panecho: ephemeral session, so the egress guard cannot see it.
+        guard !PrivacyMode.isEnabled else { return nil }
         guard (try? await releaseControlRetryAfterGate.wait()) != nil else { return nil }
         guard let request = postHogControlPlaneRequest(
             distinctID: distinctID,

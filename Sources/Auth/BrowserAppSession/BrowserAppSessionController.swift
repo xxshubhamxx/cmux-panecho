@@ -261,6 +261,8 @@ final class BrowserAppSessionController {
         requestGeneration: UInt64,
         snapshot: AuthenticatedSessionSnapshot
     ) async -> BrowserAppSessionRequestOutcome {
+        // Panecho: this session is ephemeral, so the egress guard cannot see it.
+        guard !PrivacyMode.isEnabled else { return .failed }
         guard handoffIsCurrent(
             requestGeneration,
             authSessionGeneration: snapshot.generation
