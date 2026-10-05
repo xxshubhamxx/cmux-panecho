@@ -13197,6 +13197,7 @@
 				B8B056D80000000000000004 /* MobileHostIdentityConcurrencyTests.swift */,
 				C1B1810000000000000015 /* MobileHostIrxSettingsMappingTests.swift */,
 				A7C0F0010000000000000001 /* MacPairedMacBackupPublisherScopeTests.swift */,
+				5E2701030000000000000002 /* MacSentryStartupPolicyTests.swift */,
 				900759686B8F971DD0790E18 /* CloudMachineNotificationDeliveryTests.swift */,
 				E107EF903AAF714086F52BC4 /* SurfaceSocketCommandTests.swift */,
 				7A0CE100000000000000072B /* CloudPortRoutePlanTests.swift */,
