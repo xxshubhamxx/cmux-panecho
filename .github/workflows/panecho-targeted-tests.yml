@@ -1,0 +1,100 @@
+name: Panecho targeted tests
+
+# Runs selected app-host unit tests and CLI tests on a stock macOS runner.
+# Upstream's test CI depends on Manaflow's runner fleet and CI-built products,
+# which a fork cannot reach. Manual dispatch only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      unit_selectors:
+        description: "cmux-unit -only-testing selectors, space separated (e.g. cmuxTests/SomeTests)"
+        required: false
+        default: ""
+      cli_selectors:
+        description: "cmux-cli-tests -only-testing selectors, space separated (e.g. cmuxCLITests/SomeTests)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: panecho-targeted-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          XCODE_DIR="/Applications/Xcode.app/Contents/Developer"
+          [ -d "$XCODE_DIR" ] || XCODE_DIR="$(ls -d /Applications/Xcode*.app 2>/dev/null | head -n 1)/Contents/Developer"
+          echo "DEVELOPER_DIR=$XCODE_DIR" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$XCODE_DIR" xcodebuild -version
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Download sentry-free GhosttyKit.xcframework
+        run: |
+          set -euo pipefail
+          GHOSTTY_SHA="$(git -C ghostty rev-parse HEAD)"
+          GHOSTTYKIT_URL="https://github.com/xxshubhamxx/cmux-panecho/releases/download/ghosttykit-nosentry-${GHOSTTY_SHA}/GhosttyKit.xcframework.tar.gz" \
+          GHOSTTYKIT_CHECKSUMS_FILE="$GITHUB_WORKSPACE/scripts/ghosttykit-nosentry-checksums.txt" \
+            ./scripts/download-prebuilt-ghosttykit.sh
+
+      - name: Setup Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - name: Run tests
+        env:
+          UNIT_SELECTORS: ${{ inputs.unit_selectors }}
+          CLI_SELECTORS: ${{ inputs.cli_selectors }}
+        run: |
+          set -uo pipefail
+          status=0
+          run_scheme() {
+            local scheme="$1" selectors="$2" args=() selector
+            [ -n "$selectors" ] || return 0
+            for selector in $selectors; do
+              case "$selector" in
+                *[!A-Za-z0-9_/.\(\)-]*) echo "::error::invalid selector: $selector" >&2; return 1 ;;
+              esac
+              args+=("-only-testing:$selector")
+            done
+            xcodebuild test \
+              -project cmux.xcodeproj \
+              -scheme "$scheme" \
+              -destination 'platform=macOS' \
+              -derivedDataPath build-tests \
+              -parallel-testing-enabled NO \
+              CODE_SIGN_IDENTITY=- \
+              CODE_SIGNING_REQUIRED=NO \
+              "${args[@]}" > "xcodebuild-$scheme.log" 2>&1
+            local rc=$?
+            grep -E "Test (Suite|Case)|✔|✘|error:|failed|passed|TEST (SUCCEEDED|FAILED)" "xcodebuild-$scheme.log" | tail -300 || true
+            return "$rc"
+          }
+          run_scheme cmux-unit "$UNIT_SELECTORS" || status=1
+          run_scheme cmux-cli-tests "$CLI_SELECTORS" || status=1
+          exit "$status"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: panecho-targeted-tests-logs-${{ github.run_id }}
+          path: xcodebuild-*.log
+          if-no-files-found: ignore
