@@ -4571,10 +4571,17 @@ final class SocketListenerAcceptPolicyTests: XCTestCase {
             detectedSnapshot(arguments: ["/usr/local/bin/agy", "--conversation=--sandbox"])
         )
 
-        let validSnapshot = try XCTUnwrap(
-            detectedSnapshot(arguments: ["/usr/local/bin/agy", "--conversation", "conversation-123", "--sandbox", "danger-full-access"])
+        // agy resolves an id prefix itself, so only its hooks know which
+        // conversation the process is in; argv must not claim the prefix.
+        XCTAssertNil(
+            detectedSnapshot(arguments: ["/usr/local/bin/agy", "--conversation", "98c0e"])
         )
-        XCTAssertEqual(validSnapshot.sessionId, "conversation-123")
+
+        let conversationID = "9afb49ac-ad52-4cc8-add9-30cabe294838"
+        let validSnapshot = try XCTUnwrap(
+            detectedSnapshot(arguments: ["/usr/local/bin/agy", "--conversation", conversationID, "--sandbox", "danger-full-access"])
+        )
+        XCTAssertEqual(validSnapshot.sessionId, conversationID)
         XCTAssertEqual(validSnapshot.workingDirectory, "/tmp/antigravity repo")
         XCTAssertEqual(validSnapshot.launchCommand?.launcher, "antigravity")
     }

@@ -730,7 +730,8 @@ private extension CmuxVaultAgentSessionIDSource {
     ) -> VaultAgentSessionIDResolution? {
         switch self {
         case .argvOption(let option):
-            guard let sessionId = process.arguments.nonOptionValue(afterOption: option) else { return nil }
+            guard let sessionId = process.arguments.nonOptionValue(afterOption: option)
+                .flatMap(registration.argvSessionID) else { return nil }
             return VaultAgentSessionIDResolution(sessionId: sessionId, source: registration.processArgumentsCarryForkParentFlag(process.arguments) ? .forkParentFallback : .explicit)
         case .piSessionFile:
             let carriesForkParentFlag = registration.processArgumentsCarryForkParentFlag(process.arguments)

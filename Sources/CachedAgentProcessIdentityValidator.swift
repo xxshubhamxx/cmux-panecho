@@ -122,13 +122,8 @@ struct CachedAgentProcessIdentityValidator: Sendable {
             let observedSessionID: String?
             switch registration.sessionIdSource {
             case .argvOption(let option):
-                // agy also accepts a conversation id prefix (`--conversation
-                // 98c0e`) and resolves it itself; only a full UUID names the
-                // conversation, so a prefix is treated like a bare launch.
-                let argvSessionID = nonOptionValue(after: option, in: arguments).flatMap {
-                    snapshot.kind == .antigravity && UUID(uuidString: $0) == nil ? nil : $0
-                }
-                guard let observedSessionID = argvSessionID
+                guard let observedSessionID = nonOptionValue(after: option, in: arguments)
+                    .flatMap(registration.argvSessionID)
                     ?? authoritativeEnvironmentSessionID else {
                     // The identity option only appears on explicit resumes. A
                     // fresh launch has none: Antigravity mints its conversation

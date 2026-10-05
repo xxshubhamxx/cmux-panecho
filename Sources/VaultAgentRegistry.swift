@@ -191,6 +191,14 @@ struct CmuxVaultAgentRegistration: Codable, Hashable, Sendable {
         return candidate == current
     }
 
+    /// The session an `.argvOption` value names, if any. agy also accepts a
+    /// conversation id prefix (`--conversation 98c0e`) and resolves it itself,
+    /// so only a full UUID names an Antigravity conversation; for a prefix the
+    /// hook record, not argv, says which conversation the process is in.
+    func argvSessionID(_ value: String) -> String? {
+        id == Self.builtInAntigravity.id && UUID(uuidString: value) == nil ? nil : value
+    }
+
     static var builtInAntigravity: CmuxVaultAgentRegistration {
         CmuxVaultAgentRegistration(
             id: "antigravity",
