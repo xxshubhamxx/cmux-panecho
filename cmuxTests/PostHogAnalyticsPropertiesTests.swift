@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 
-#if canImport(cmux_DEV)
+// Panecho links a no-op PostHogAnalytics stub; these tests cover the real client.
+#if canImport(cmux_DEV) && !PRIVACY_MODE && canImport(PostHog)
 @testable import cmux_DEV
 
 @Suite(.serialized)
