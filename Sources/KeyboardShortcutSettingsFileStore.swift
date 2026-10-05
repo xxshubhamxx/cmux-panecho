@@ -8,8 +8,8 @@ nonisolated private let cmuxSettingsFileStoreLogger = Logger(subsystem: "com.cmu
 
 final class CmuxSettingsFileStore {
     static let currentSchemaVersion = 1
-    static let schemaURLString = "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.64.25.2/web/data/cmux.schema.json"
-    private static let legacySchemaURLString = "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.64.25.2/web/data/cmux-settings.schema.json"
+    static let schemaURLString = "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.65.0.1/web/data/cmux.schema.json"
+    private static let legacySchemaURLString = "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.65.0.1/web/data/cmux-settings.schema.json"
     private static let releaseBundleIdentifier = "com.cmuxterm.app"
     private static let backupsDefaultsKey = "cmux.settingsFile.backups.v1"
     private static let importedManagedDefaultsDefaultsKey = "cmux.settingsFile.importedManagedDefaults.v1"

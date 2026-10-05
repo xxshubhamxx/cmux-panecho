@@ -389,8 +389,8 @@ extension CMUXCLI {
                 DocsResource(label: "agent hook docs", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.64.17.1/docs/agent-hooks.md"),
                 DocsResource(label: "feed docs", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.64.17.1/docs/feed.md"),
                 DocsResource(label: "notifications docs", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.64.17.1/docs/notifications.md"),
-                DocsResource(label: "capture skill", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.64.25.2/skills/cmux-capture/SKILL.md"),
-                DocsResource(label: "capture commands", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.64.25.2/skills/cmux-capture/references/commands.md"),
+                DocsResource(label: "capture skill", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.65.0.1/skills/cmux-capture/SKILL.md"),
+                DocsResource(label: "capture commands", url: "https://raw.githubusercontent.com/xxshubhamxx/cmux-panecho/panecho-v0.65.0.1/skills/cmux-capture/references/commands.md"),
             ],
             commands: [
                 "cmux shot --label before",
