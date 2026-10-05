@@ -149,7 +149,8 @@ extension ControlNotificationContext {
         title: String,
         subtitle: String,
         body: String,
-        replyShapeWire: String?
+        replyShapeWire: String?,
+        effects: ControlNotificationEffectsPatch?
     ) -> ControlNotificationCreateResolution { .tabManagerUnavailable }
 
     func controlNotificationCreateForSurface(
@@ -158,7 +159,8 @@ extension ControlNotificationContext {
         title: String,
         subtitle: String,
         body: String,
-        replyShapeWire: String?
+        replyShapeWire: String?,
+        effects: ControlNotificationEffectsPatch?
     ) -> ControlNotificationTargetedDeliveryResolution { .tabManagerUnavailable }
 
     func controlNotificationCreateForTarget(
@@ -168,7 +170,8 @@ extension ControlNotificationContext {
         title: String,
         subtitle: String,
         body: String,
-        replyShapeWire: String?
+        replyShapeWire: String?,
+        effects: ControlNotificationEffectsPatch?
     ) -> ControlNotificationTargetedDeliveryResolution { .tabManagerUnavailable }
 
     func controlNotificationList() -> [ControlNotificationSnapshot] { [] }
@@ -291,10 +294,14 @@ extension ControlWorkspaceContext {
     func controlWorkspaceStrings() -> ControlWorkspaceStrings {
         ControlWorkspaceStrings(
             closeProtected: "", closeFailed: "",
+            closeConfirmationRequired: "",
             reorderManyMissingOrder: "",
             reorderManyDuplicateWorkspace: "",
-            reorderManyWorkspaceNotFound: "",
-            reorderManyInvalidWorkspace: "",
+            workspaceNotFound: "",
+            invalidWorkspaceRef: "",
+            reorderIndexNotAnInteger: "",
+            reorderMissingWorkspaceID: "",
+            reorderTargetRequired: "",
             reorderManyTabManagerUnavailable: "", relayOwnerUnavailable: ""
         )
     }
@@ -320,7 +327,8 @@ extension ControlWorkspaceContext {
 
     func controlCloseWorkspace(
         routing: ControlRoutingSelectors,
-        workspaceID: UUID
+        workspaceID: UUID,
+        force: Bool
     ) -> ControlWorkspaceCloseResolution { .tabManagerUnavailable }
 
     func controlMoveWorkspaceToWindow(
@@ -485,7 +493,8 @@ extension ControlSurfaceContext {
     func controlSurfaceClose(
         routing: ControlRoutingSelectors,
         surfaceID: UUID?,
-        hasSurfaceIDParam: Bool
+        hasSurfaceIDParam: Bool,
+        force: Bool
     ) -> ControlSurfaceCloseResolution { .tabManagerUnavailable }
 
     func controlSurfaceMove(params: [String: JSONValue]) -> ControlCallResult {

@@ -1,3 +1,5 @@
+import CmuxCloud
+import CmuxSurfaceCatalogModel
 import Foundation
 
 extension Workspace {
@@ -13,9 +15,9 @@ extension Workspace {
         let policy = policy ?? surfaceOwnershipPolicy
         if let resource = snapshot.browser?.cloudResource {
             if let projection, projection.resource != resource { return false }
-            return policy.rejection(for: resource.machine) == nil
+            return policy.rejection(for: resource.machine, kind: resource.kind) == nil
         }
-        if let projection { return policy.rejection(for: projection.resource.machine) == nil }
+        if let projection { return policy.rejection(for: projection.resource.machine, kind: projection.resource.kind) == nil }
         if snapshot.type == .browser, let raw = snapshot.browser?.urlString,
            URL(string: raw)?.path == "/vnc.html" {
             return policy.rejection(for: nil) == nil
@@ -27,7 +29,7 @@ extension Workspace {
     /// binding. Startup may adopt a saved owner; an already bound workspace may
     /// never be rebound as a side effect of restoring foreign display views.
     func acceptsRestoredSession(_ snapshot: SessionWorkspaceSnapshot) -> Bool {
-        let savedOwner = Self.restoredCloudVMBinding(from: snapshot.cloudVM).map { SurfaceMachineID.cloud($0.vmID) }
+        let savedOwner = Self.restoredCloudVMBinding(from: snapshot.cloudVM).map { SurfaceMachineID(rawValue: $0.vmID) }
         if let owner = surfaceOwnershipPolicy.cloudMachine, savedOwner != owner { return false }
         let policy = SurfaceOwnershipPolicy(cloudMachine: savedOwner ?? surfaceOwnershipPolicy.cloudMachine)
         let records = snapshot.surfaceProjections ?? []

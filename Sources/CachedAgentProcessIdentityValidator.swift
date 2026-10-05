@@ -122,7 +122,13 @@ struct CachedAgentProcessIdentityValidator: Sendable {
             let observedSessionID: String?
             switch registration.sessionIdSource {
             case .argvOption(let option):
-                guard let observedSessionID = nonOptionValue(after: option, in: arguments)
+                // agy also accepts a conversation id prefix (`--conversation
+                // 98c0e`) and resolves it itself; only a full UUID names the
+                // conversation, so a prefix is treated like a bare launch.
+                let argvSessionID = nonOptionValue(after: option, in: arguments).flatMap {
+                    snapshot.kind == .antigravity && UUID(uuidString: $0) == nil ? nil : $0
+                }
+                guard let observedSessionID = argvSessionID
                     ?? authoritativeEnvironmentSessionID else {
                     // The identity option only appears on explicit resumes. A
                     // fresh launch has none: Antigravity mints its conversation
@@ -183,12 +189,15 @@ struct CachedAgentProcessIdentityValidator: Sendable {
             // In a fork, --resume names the parent. Only an explicit child
             // identity can contradict the current hook record; a cached
             // snapshot still cannot vouch for a missing child identity.
-            let identityOptions = Self.hasEnabledForkSessionFlag(in: arguments)
-                ? ["--session-id"] : ["--session-id", "--resume", "-r"]
-            observedSessionID = firstValue(
-                after: identityOptions,
-                in: arguments
-            ) ?? authoritativeEnvironmentSessionID
+            // `--resume` also takes a session title (`claude --resume
+            // my-feature`); only a UUID there names a session.
+            let resumedSessionID = Self.hasEnabledForkSessionFlag(in: arguments)
+                ? nil
+                : firstValue(after: ["--resume", "-r"], in: arguments)
+                    .flatMap { UUID(uuidString: $0) == nil ? nil : $0 }
+            observedSessionID = firstValue(after: ["--session-id"], in: arguments)
+                ?? resumedSessionID
+                ?? authoritativeEnvironmentSessionID
         case .codex:
             observedSessionID = firstValue(
                 after: ["--session-id", "--session", "--resume", "-r"],

@@ -66,7 +66,8 @@ struct SudoProcessLifecycleTests {
         )
 
         let receivedBytes = try receiver.withReceivedDescriptor(
-            expectedByteCount: reviewedBytes.count
+            expectedByteCount: reviewedBytes.count,
+            expectedSHA256: SudoSHA256.hex(reviewedBytes)
         ) { descriptor in
             try SudoReviewedScriptReader(descriptor: descriptor).read()
         }
@@ -121,8 +122,10 @@ struct SudoProcessLifecycleTests {
 
         #expect(reapedProcessIdentifier == process.identity.processIdentifier)
         var status: Int32 = 0
-        #expect(waitpid(process.identity.processIdentifier, &status, WNOHANG) == -1)
-        #expect(errno == ECHILD)
+        let reapResult = waitpid(process.identity.processIdentifier, &status, WNOHANG)
+        let reapErrno = errno
+        #expect(reapResult == -1)
+        #expect(reapErrno == ECHILD)
     }
 
     @Test("Execution deadline terminates a script PTY tree", .timeLimit(.minutes(1)))
@@ -400,7 +403,7 @@ struct SudoProcessLifecycleTests {
         let runner = SudoExecutionRunner(
             paths: fixture.paths,
             expectedParentExecutableURL: URL(fileURLWithPath: "/not/the/test-parent"),
-            privilegedHelperExecutableURL: URL(fileURLWithPath: "/usr/bin/false"),
+            helperPolicy: .testPolicy(),
             messages: .testMessages,
             pamConfiguration: SudoPAMConfiguration(
                 fileURL: fixture.root.appendingPathComponent("missing-pam")
@@ -433,7 +436,7 @@ struct SudoProcessLifecycleTests {
         let runner = SudoExecutionRunner(
             paths: paths,
             expectedParentExecutableURL: URL(fileURLWithPath: "/not/the/test-parent"),
-            privilegedHelperExecutableURL: URL(fileURLWithPath: "/usr/bin/false"),
+            helperPolicy: .testPolicy(),
             messages: .testMessages
         )
 

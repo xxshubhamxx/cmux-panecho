@@ -44,6 +44,44 @@
 				<string>public.unix-executable</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Markdown document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>net.daringfireball.markdown</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Source code</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.source-code</string>
+				<string>public.json</string>
+				<string>public.yaml</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Plain text</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.plain-text</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
@@ -88,16 +126,12 @@
 	<string>A program running within $(PRODUCT_NAME) would like to access your location.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>A program running within $(PRODUCT_NAME) would like to access your photo library.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>A program running within $(PRODUCT_NAME) would like to discover devices on your local network.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>A program running within $(PRODUCT_NAME) would like to access your system's audio.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>A program running within $(PRODUCT_NAME) would like to use speech recognition.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>A program running within $(PRODUCT_NAME) would like to access motion data.</string>
-	<key>NSSystemAdministrationUsageDescription</key>
-	<string>A program running within $(PRODUCT_NAME) would like to perform system administration tasks.</string>
 	<key>NSSystemExtensionUsageDescription</key>
 	<string>$(PRODUCT_NAME) installs a network extension so this Mac can reach your Cloud machines on their private network. It runs only while you use $(PRODUCT_NAME) Cloud.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
@@ -128,6 +162,10 @@
 	<string>A program running within $(PRODUCT_NAME) would like to read and write your reminders.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>A program running within $(PRODUCT_NAME) would like to access your location.</string>
+	<key>NSSystemAdministrationUsageDescription</key>
+	<string>A program running within $(PRODUCT_NAME) would like to perform system administration tasks.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>A program running within $(PRODUCT_NAME) would like to discover devices on your local network.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -259,8 +297,63 @@
 	<integer>0</integer>
 	<key>SUSendProfileInfo</key>
 	<false/>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.shell-script</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Terminal shell script</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.apple.terminal.shell-script</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>command</string>
+					<string>tool</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.plain-text</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Markdown document</string>
+			<key>UTTypeIdentifier</key>
+			<string>net.daringfireball.markdown</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>md</string>
+					<string>markdown</string>
+					<string>mkd</string>
+					<string>mdx</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>text/markdown</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.cmux.cloud-sidebar-row</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Cloud Sidebar Row</string>
+		</dict>
 		<dict>
 			<key>UTTypeIdentifier</key>
 			<string>com.splittabbar.tabtransfer</string>
@@ -310,27 +403,6 @@
 			<array>
 				<string>public.data</string>
 			</array>
-		</dict>
-	</array>
-	<key>UTImportedTypeDeclarations</key>
-	<array>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.shell-script</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>Terminal shell script</string>
-			<key>UTTypeIdentifier</key>
-			<string>com.apple.terminal.shell-script</string>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>command</string>
-					<string>tool</string>
-				</array>
-			</dict>
 		</dict>
 	</array>
 </dict>

@@ -68,6 +68,34 @@ private struct NetworkOutcomeTestConsent: AnalyticsConsentProviding {
         #expect(event?.properties["failure"] == .string("hostUnreachable"))
     }
 
+    @Test func taskModelResultEmitsProviderSourceAndEffortCount() async {
+        let uploader = RecordingAnalyticsUploader()
+        let emitter = AnalyticsEmitter(
+            uploader: uploader,
+            consent: NetworkOutcomeTestConsent(isTelemetryEnabled: true),
+            anonymousID: "local-install"
+        )
+        let reporter = MobileNetworkOutcomeReporter(emitter: emitter)
+
+        reporter.ingest(DiagnosticEvent(
+            .appFeatureAction,
+            surface: 42,
+            ms: 6,
+            a: DiagnosticAppEventKind.taskModelListResultObserved.rawValue,
+            b: DiagnosticTaskModelProvider.codex.rawValue,
+            c: DiagnosticTaskModelSource.discovered.rawValue
+        ))
+        await reporter.flush()
+
+        let event = await uploader.uploadedEvents.first
+        #expect(event?.name == MobileNetworkOutcomeReporter.taskModelResultEventName)
+        #expect(event?.properties["operation"] == .string("model_list"))
+        #expect(event?.properties["provider"] == .string("codex"))
+        #expect(event?.properties["source"] == .string("discovered"))
+        #expect(event?.properties["effort_count"] == .int(6))
+        #expect(event?.properties["correlation_id"] == .int(42))
+    }
+
     @Test func transportDialCompletionEmitsLatencyOnly() async {
         let uploader = RecordingAnalyticsUploader()
         let emitter = AnalyticsEmitter(
@@ -104,6 +132,119 @@ private struct NetworkOutcomeTestConsent: AnalyticsConsentProviding {
         #expect(event?.properties["event_a"] == .int(DiagnosticTransportKind.iroh.rawValue))
         #expect(event?.properties["event_b"] == .int(DiagnosticFailureKind.timedOut.rawValue))
         #expect(event?.properties["event_c"] == .int(7))
+    }
+
+    @Test func irohPathEventsEmitEachRouteTransitionForAxiom() async {
+        let uploader = RecordingAnalyticsUploader()
+        let emitter = AnalyticsEmitter(
+            uploader: uploader,
+            consent: NetworkOutcomeTestConsent(isTelemetryEnabled: true),
+            anonymousID: "local-install"
+        )
+        let reporter = MobileNetworkOutcomeReporter(emitter: emitter)
+
+        reporter.ingest(DiagnosticEvent(
+            code: .transportPathEvent,
+            tNanos: 1,
+            surface: 8,
+            a: 1,
+            b: DiagnosticPathKind.relay.rawValue,
+            c: 23
+        ))
+        reporter.ingest(DiagnosticEvent(
+            code: .transportPathEvent,
+            tNanos: 2,
+            surface: 8,
+            a: 3,
+            b: DiagnosticPathKind.relay.rawValue,
+            c: 23
+        ))
+        reporter.ingest(DiagnosticEvent(
+            code: .transportPathEvent,
+            tNanos: 3,
+            surface: 8,
+            a: 1,
+            b: DiagnosticPathKind.privateNetwork.rawValue,
+            c: 23
+        ))
+        reporter.ingest(DiagnosticEvent(
+            code: .selectedPathChanged,
+            tNanos: 4,
+            surface: 8,
+            a: DiagnosticPathKind.direct.rawValue,
+            c: 23
+        ))
+        await reporter.flush()
+
+        let events = await uploader.uploadedEvents
+        #expect(events.map(\.name) == Array(repeating: MobileNetworkOutcomeReporter.pathEventName, count: 4))
+        #expect(events.map { $0.properties["operation"] } == [
+            .string("opened"),
+            .string("selected"),
+            .string("opened"),
+            .string("snapshot"),
+        ])
+        #expect(events.map { $0.properties["path"] } == [
+            .string("relay"),
+            .string("relay"),
+            .string("private_network"),
+            .string("direct"),
+        ])
+        #expect(events.allSatisfy { $0.properties["transport"] == .string("iroh") })
+        #expect(events.allSatisfy { $0.properties["event_surface"] == .int(8) })
+        #expect(events.allSatisfy { $0.properties["event_c"] == .int(23) })
+    }
+
+    @Test func irohPathInventoryEmitsRelayAndNonRelayCountsForAxiom() async {
+        let uploader = RecordingAnalyticsUploader()
+        let emitter = AnalyticsEmitter(
+            uploader: uploader,
+            consent: NetworkOutcomeTestConsent(isTelemetryEnabled: true),
+            anonymousID: "local-install"
+        )
+        let reporter = MobileNetworkOutcomeReporter(emitter: emitter)
+
+        reporter.ingest(DiagnosticEvent(
+            code: .transportPathInventory,
+            tNanos: 1,
+            surface: 8,
+            a: 1,
+            b: 2,
+            c: 23
+        ))
+        await reporter.flush()
+
+        let event = await uploader.uploadedEvents.first
+        #expect(event?.name == MobileNetworkOutcomeReporter.pathInventoryEventName)
+        #expect(event?.properties["operation"] == .string("inventory"))
+        #expect(event?.properties["transport"] == .string("iroh"))
+        #expect(event?.properties["relay_path_count"] == .int(1))
+        #expect(event?.properties["non_relay_path_count"] == .int(2))
+        #expect(event?.properties["path_count"] == .int(3))
+        #expect(event?.properties["event_code"] == .string("transportPathInventory"))
+        #expect(event?.properties["event_code_raw"] == .int(83))
+        #expect(event?.properties["event_c"] == .int(23))
+    }
+
+    @Test func irohPathInventoryRejectsCountsAboveAggregateBound() async {
+        let uploader = RecordingAnalyticsUploader()
+        let emitter = AnalyticsEmitter(
+            uploader: uploader,
+            consent: NetworkOutcomeTestConsent(isTelemetryEnabled: true),
+            anonymousID: "local-install"
+        )
+        let reporter = MobileNetworkOutcomeReporter(emitter: emitter)
+
+        reporter.ingest(DiagnosticEvent(
+            code: .transportPathInventory,
+            tNanos: 1,
+            a: 64,
+            b: 1,
+            c: 23
+        ))
+        await reporter.flush()
+
+        #expect(await uploader.uploadedEvents.isEmpty)
     }
 
     @Test func cancelledDialEmitsLifecycleReasonAndAttemptContext() {

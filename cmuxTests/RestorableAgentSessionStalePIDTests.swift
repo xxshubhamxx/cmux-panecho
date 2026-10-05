@@ -159,6 +159,112 @@ struct RestorableAgentSessionStalePIDTests {
         #expect(index.hasLiveProcess(workspaceId: ws, panelId: panel))
     }
 
+    /// Scheduled hibernation republishes a cached index every tick. A live agent
+    /// whose argv names no session was admitted on its current hook record, and
+    /// the cached refresh must not quietly downgrade it to exited, or the next
+    /// autosave records `wasAgentRunning=false` and restart skips the resume.
+    @Test func cachedRevalidationKeepsHookRecordEvidenceForBareArgv() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("cmux-cached-hook-evidence-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: root) }
+        let dir = root.appendingPathComponent("repo", isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let previousHookStateDir = getenv("CMUX_AGENT_HOOK_STATE_DIR").map { String(cString: $0) }
+        let stateDir = root.appendingPathComponent(".cmuxterm", isDirectory: true)
+        setenv("CMUX_AGENT_HOOK_STATE_DIR", stateDir.path, 1)
+        defer {
+            if let previousHookStateDir {
+                setenv("CMUX_AGENT_HOOK_STATE_DIR", previousHookStateDir, 1)
+            } else {
+                unsetenv("CMUX_AGENT_HOOK_STATE_DIR")
+            }
+        }
+
+        let ws = UUID()
+        let panel = UUID()
+        let livePID = 12_345
+        let sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        let liveIdentity = AgentPIDProcessIdentity(
+            pid: pid_t(livePID),
+            startSeconds: 9,
+            startMicroseconds: 0
+        )
+        var record = driftedAgentHookRecord(
+            launcher: "codex",
+            sessionId: sid,
+            workspaceId: ws,
+            panelId: panel,
+            recordedCwd: dir.path,
+            launchCwd: dir.path,
+            updatedAt: 10
+        )
+        record["pid"] = livePID
+        record["pidStartSeconds"] = liveIdentity.startSeconds
+        record["pidStartMicroseconds"] = liveIdentity.startMicroseconds
+        try writeHookStore(
+            root: root,
+            storeFilename: "codex-hook-sessions.json",
+            sessions: [sid: record]
+        )
+        let processArguments: (Int) -> CmuxTopProcessArguments? = { pid in
+            guard pid == livePID else { return nil }
+            return CmuxTopProcessArguments(
+                arguments: ["/usr/local/bin/codex"],
+                environment: [
+                    "CMUX_WORKSPACE_ID": ws.uuidString,
+                    "CMUX_SURFACE_ID": panel.uuidString,
+                ]
+            )
+        }
+        let processIdentity: (Int) -> AgentPIDProcessIdentity? = { pid in
+            pid == livePID ? liveIdentity : nil
+        }
+        let index = RestorableAgentSessionIndex.load(
+            homeDirectory: root.path,
+            fileManager: fm,
+            registry: CmuxVaultAgentRegistry(registrations: []),
+            detectedSnapshots: [:],
+            processArgumentsProvider: processArguments,
+            processPresenceProvider: { pid in
+                pid == livePID ? .present : .absent
+            },
+            processIdentityProvider: processIdentity
+        )
+        #expect(index.hasLiveProcess(workspaceId: ws, panelId: panel))
+
+        let processSnapshot = CmuxTopProcessSnapshot(
+            processes: [
+                CmuxTopProcessInfo(
+                    pid: livePID,
+                    parentPID: 1,
+                    name: "codex",
+                    path: "/usr/local/bin/codex",
+                    ttyDevice: nil,
+                    cmuxWorkspaceID: ws,
+                    cmuxSurfaceID: panel,
+                    cmuxAttributionReason: "test",
+                    processGroupID: livePID,
+                    terminalProcessGroupID: livePID,
+                    cpuPercent: 0,
+                    residentBytes: 1,
+                    virtualBytes: 1,
+                    threadCount: 1
+                ),
+            ],
+            sampledAt: Date(timeIntervalSince1970: 30),
+            includesProcessDetails: true
+        )
+        let revalidated = index.revalidatingCachedProcesses(
+            against: processSnapshot,
+            processArgumentsProvider: processArguments,
+            processIdentityProvider: processIdentity
+        )
+
+        #expect(revalidated.hasLiveProcess(workspaceId: ws, panelId: panel))
+        #expect(revalidated.entry(workspaceId: ws, panelId: panel)?.processLiveness == .running)
+    }
+
     private func driftedAgentHookRecord(
         launcher: String,
         sessionId: String,

@@ -1,3 +1,5 @@
+import CmuxCloud
+import CmuxSurfaceCatalogModel
 import Foundation
 import Bonsplit
 import Testing
@@ -9,6 +11,29 @@ import XCTest
 @testable import cmux
 #endif
 final class MachinesPanelModelTests: XCTestCase {
+    @MainActor
+    func testLocalWorkspaceProjectionRefreshesWithoutCatalogPoll() {
+        let first = UUID()
+        let second = UUID()
+        var selected = first
+        let model = MachinesPanelViewModel(
+            client: nil,
+            isCloudEnabled: { false },
+            localWorkspacesProvider: {
+                [
+                    CloudTreeLocalWorkspace(id: first, title: "first", isSelected: selected == first),
+                    CloudTreeLocalWorkspace(id: second, title: "second", isSelected: selected == second),
+                ]
+            }
+        )
+
+        model.refreshLocalWorkspaces(selectedWorkspaceID: selected)
+        XCTAssertEqual(model.localWorkspaces.first(where: \.isSelected)?.id, first)
+        selected = second
+        model.refreshLocalWorkspaces(selectedWorkspaceID: selected)
+        XCTAssertEqual(model.localWorkspaces.first(where: \.isSelected)?.id, second)
+    }
+
     func testSnapshotMapsSummaryFields() {
         let summary = VMSummary(
             id: "noble-wren",
@@ -160,18 +185,18 @@ final class MachinesPanelModelTests: XCTestCase {
 
         // Availability follows the Cloud VM UI flag, independent of feed/dock.
         XCTAssertTrue(
-            RightSidebarMode.machines.isAvailable(feedEnabled: false, dockEnabled: false, machinesEnabled: true)
+            RightSidebarMode.machines.isAvailable(feedEnabled: false, machinesEnabled: true)
         )
         XCTAssertFalse(
-            RightSidebarMode.machines.isAvailable(feedEnabled: true, dockEnabled: true, machinesEnabled: false)
+            RightSidebarMode.machines.isAvailable(feedEnabled: true, machinesEnabled: false)
         )
         XCTAssertEqual(
-            RightSidebarMode.availableModes(feedEnabled: false, dockEnabled: false, machinesEnabled: true),
-            [.files, .find, .sessions, .machines]
+            RightSidebarMode.availableModes(feedEnabled: false, machinesEnabled: true),
+            [.files, .find, .sessions, .dock, .machines]
         )
         XCTAssertEqual(
-            RightSidebarMode.availableModes(feedEnabled: false, dockEnabled: false, machinesEnabled: false),
-            [.files, .find, .sessions]
+            RightSidebarMode.availableModes(feedEnabled: false, machinesEnabled: false),
+            [.files, .find, .sessions, .dock]
         )
     }
 
@@ -340,7 +365,7 @@ final class MachinesPanelModelTests: XCTestCase {
             now: now
         )
         XCTAssertEqual(single?.isSingleMachinePlan, true)
-        XCTAssertEqual(single?.countLabel, "1 of 1 machine")
+        XCTAssertEqual(single?.usage.countLabel, "1 of 1 machine")
         XCTAssertEqual(single?.freeAccessExpiresAt, serverExpiry)
         XCTAssertEqual(single?.freeAccessBanner, .expiresIn(countdown: "2d 1h"))
 
@@ -350,7 +375,7 @@ final class MachinesPanelModelTests: XCTestCase {
             now: now
         )
         XCTAssertEqual(plural?.isSingleMachinePlan, false)
-        XCTAssertEqual(plural?.countLabel, "2 of 5 machines")
+        XCTAssertEqual(plural?.usage.countLabel, "2 of 5 machines")
         XCTAssertEqual(plural?.freeAccessBanner, MachinePlanSnapshot.FreeAccessBanner.none)
     }
 
@@ -577,11 +602,14 @@ final class MachinesPanelModelTests: XCTestCase {
         XCTAssertTrue(flattened[0].isMachineRow)
         XCTAssertTrue(flattened[3].isMachineRow)
         XCTAssertEqual(flattened[3].machine, .cloud("vivid-newt"))
-        // Only terminals and displays leave the tree by drag; workspaces,
-        // browsers, ports, machines, and headers do not.
+        // Remote workspace rows export their placement group alongside terminal
+        // and display leaves. Local workspace groups remain reorder-only because
+        // they point at live panes in the source workspace.
         for node in flattened {
             switch node.kind {
             case .terminal, .display:
+                XCTAssertTrue(node.isDragSource, "\(node.id) should drag")
+            case .workspace where !node.machine.isLocal:
                 XCTAssertTrue(node.isDragSource, "\(node.id) should drag")
             default:
                 XCTAssertFalse(node.isDragSource, "\(node.id) should not drag")
@@ -996,6 +1024,26 @@ final class CloudTreeScopeAndSignatureTests: XCTestCase {
         XCTAssertFalse(declared.capabilities.snapshot)
     }
 
+    func testSocketCloudVMSummaryPreservesAttachTransports() {
+        let summary = VMSummary(
+            id: "transport-limited",
+            provider: "freestyle",
+            status: "running",
+            image: "cmux-devbox",
+            createdAt: 0,
+            capabilities: VMCapabilities(
+                snapshot: true,
+                restore: true,
+                fork: true,
+                attachTransports: ["ssh"]
+            )
+        )
+
+        let payload = TerminalController.socketWorkerVMSummaryPayload(summary)
+        let capabilities = payload["capabilities"] as? [String: Any]
+        XCTAssertEqual(capabilities?["attach_transports"] as? [String], ["ssh"])
+    }
+
     private func terminal(_ machine: SurfaceMachineID, _ key: String, title: String = "shell", cwd: String? = "/root") -> SurfaceResource {
         SurfaceResource(id: SurfaceResourceID(machine: machine, kind: .terminal, key: key), title: title, detail: cwd, lifecycle: .running, agent: nil, remoteWorkspace: SurfaceRemoteWorkspace(id: "ws_0", name: "0", index: 0, focused: true), port: nil, url: nil)
     }
@@ -1077,7 +1125,7 @@ final class CloudTreeScopeAndSignatureTests: XCTestCase {
     @Test func emptyDecisionMatchesWhatTheTreeRenders() {
         let localOnly = SurfaceCatalogSnapshot(machines: [info(.local)], resources: [terminal(.local, "AAA")], projections: [])
         #expect(
-            CloudTreeNodeBuilder.nodes(machines: [], snapshot: localOnly, localWorkspaces: []).isEmpty,
+            CloudTreeNodeBuilder.nodes(machines: [], snapshot: localOnly, localWorkspaces: []).withoutCoderouterSection.isEmpty,
             "precondition: the cloud-only tree renders nothing for a local-only catalog"
         )
         #expect(

@@ -62,6 +62,7 @@ jobs:
           zig build \
             -Dcrash-report-subdir="$GHOSTTYKIT_CRASH_REPORT_SUBDIR" \
             -Dsentry=false \
+            -Di18n=false \
             -Demit-xcframework=true \
             -Demit-macos-app=false \
             -Dxcframework-target=universal \

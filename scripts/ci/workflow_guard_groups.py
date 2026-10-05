@@ -19,12 +19,14 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+import workload_entrypoints
+
 
 GUARD_WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ci-guards.yml"
 GUARD_JOB = "workflow-guard-tests"
 # A path a step runs directly, such as `python3 tests/x.py` or `./scripts/y.sh`.
 DIRECT_PATH = re.compile(r"(?:\./)?((?:tests(?:_v2)?|scripts|ios/tests)/[A-Za-z0-9_./-]+)")
-GROUP_CONDITION = re.compile(r"\$\{\{ matrix\.group == '([^']+)' \}\}")
+GROUP_CONDITION = re.compile(r"\$\{\{\s*matrix\.group\s*==\s*'([^']+)'\s*(?:&&\s*steps\.fast-guard\.outputs\.skip\s*!=\s*'true'\s*)?\}\}")
 # A guard job gates itself on the route that selects it, so the workflow also
 # names which route owns which job.
 ROUTE_CONDITION = re.compile(r"\$\{\{ inputs\.([A-Za-z0-9_]+) == 'true' \}\}")
@@ -34,6 +36,7 @@ GROUPS = (
     "preflight",
     "ci",
     "app-host-execution",
+    "app-host-watchdog",
     "app-host-process",
     "app-host-cache",
     "release-ios",
@@ -50,6 +53,14 @@ GROUPS = (
 PATH_OWNERS = {
     ".github/workflows/ci-main-full-suite.yml": frozenset(("ci",)),
 
+    # test_ci_runner_capability_resolver.py reads the capability map, the
+    # resolver it imports, the reusable workflow that publishes the map, and
+    # the one workflow wired to consume it.
+    ".github/runners.json": frozenset(("ci",)),
+    ".github/workflows/resolve-runners.yml": frozenset(("ci",)),
+    ".github/workflows/ios-app-store.yml": frozenset(("ci",)),
+    "scripts/ci/resolve_runners.py": frozenset(("ci",)),
+
     ".github/workflows/ci-health-report.yml": frozenset(("ci",)),
     ".github/workflows/ci-queue-janitor.yml": frozenset(("ci",)),
     ".github/workflows/required-checks-drift.yml": frozenset(("ci",)),
@@ -59,6 +70,10 @@ PATH_OWNERS = {
     ".github/workflows/ci-web.yml": frozenset(GROUPS),
     ".github/workflows/web-complexity.yml": frozenset(("ci",)),
     ".github/workflows/web-complexity-trusted.yml": frozenset(("ci",)),
+    ".github/workflows/iroh-v2-production-drift.yml": frozenset(("ci",)),
+    "tests/test_iroh_drift_issue.py": frozenset(("ci",)),
+    ".github/workflows/feature-flag-review-drift.yml": frozenset(("ci",)),
+    "tests/test_feature_flag_review_drift_issue.py": frozenset(("ci",)),
     ".github/review-fabric-policy.json": frozenset(("preflight",)),
     ".github/review-fabric.md": frozenset(("preflight",)),
     ".github/scripts/review_fabric.py": frozenset(("preflight",)),
@@ -67,30 +82,94 @@ PATH_OWNERS = {
     "ghostty": frozenset(("release-tooling",)),
     "ios/scripts/fetch-testflight-notes-history.sh": frozenset(("release-ios",)),
     "ios/scripts/upload-testflight.sh": frozenset(("release-ios",)),
+    # validate_test_execution_registry.py reads the recipe for the tests it runs.
+    "scripts/verify-local.py": frozenset(("preflight", "ci")),
+    # test_lint_feature_flags_scope.py reads its parser and registry discovery.
+    "scripts/lint-feature-flags.py": frozenset(("preflight", "ci")),
+    # test_feature_flag_review_lead_time.py loads the report by path.
+    "scripts/report-feature-flag-review-lead-time.py": frozenset(("preflight", "ci")),
+    "scripts/verification_receipt.py": frozenset(("ci",)),
     "scripts/ci/app_host_test_products.py": frozenset(("preflight",)),
     "scripts/ci/build_input_fingerprint.py": frozenset(("preflight",)),
     "scripts/ci/build_graph_health.py": frozenset(("preflight",)),
     "scripts/ci/compile-app-host-test-product.sh": frozenset(("preflight",)),
     "scripts/ci/find_admitted_build.py": frozenset(("preflight",)),
     "scripts/ci/main_full_suite.py": frozenset(("ci",)),
+    # test_ci_package_bisect.py loads it by path.
+    "scripts/ci/package_bisect.py": frozenset(("ci",)),
+    # test_ci_merge_receipt.py and test_ci_main_regression_attribution.py load
+    # these by path; the receipt test also reads its workflow and fixtures.
+    "scripts/ci/main_regression_attribution.py": frozenset(("ci",)),
+    # ...and the attribution imports these: the restart marker, the paths
+    # outside the app, and the suites a changed string reaches.
+    "scripts/ci/app_host_result_accounting.py": frozenset(("ci",)),
+    "scripts/ci/app_host_test_rerun.py": frozenset(("ci",)),
+    "scripts/ci/reverse_test_impact.py": frozenset(("ci",)),
+    "scripts/ci/merge_receipt.py": frozenset(("ci",)),
+    ".github/workflows/merge-receipt.yml": frozenset(("ci",)),
+    "tests/fixtures/merge_receipt/pr14433.json": frozenset(("ci",)),
+    "tests/fixtures/merge_receipt/pr14461.json": frozenset(("ci",)),
+    # The local merge-main resolver runs these trusted generators. The
+    # resolver also backs the project-file merge driver below.
+    "scripts/ci/merge_main_resolver.py": frozenset(("preflight", "ci")),
+    "scripts/merge-xcstrings.py": frozenset(("ci",)),
+    "scripts/normalize-pbxproj.py": frozenset(("ci",)),
+    "scripts/generate-cmux-config-schema.py": frozenset(("ci",)),
+    # test_merge_pbxproj.py runs the merge driver, which runs the normalizer
+    # above and borrows union_pbxproj from the local resolver.
+    "scripts/merge-pbxproj.py": frozenset(("preflight",)),
+    # test_ci_merge_main.py runs merge-main end to end: the green-base
+    # selection, the merge resolver above, and the guard runner it reruns
+    # failed steps with (test_ci_run_guards.py also imports the runner).
+    "scripts/merge-main.sh": frozenset(("ci",)),
+    "scripts/ci/merge_main.py": frozenset(("ci",)),
+    "scripts/ci/last_green_base.py": frozenset(("ci",)),
+    "scripts/ci/run_ci_guards.py": frozenset(("ci",)),
+    "scripts/ci/guards-local.sh": frozenset(("ci",)),
 
     "scripts/ci/ios_upload_batch_decision.py": frozenset(("release-ios",)),
     "scripts/ci/peer_product_source.py": frozenset(("preflight",)),
-    "scripts/ci/persistent_mac_route.py": frozenset(("preflight",)),
+    "scripts/ci/drop-previous-nightlies-with-other-sparkle-key.sh": frozenset(("release-notary",)),
+    "scripts/ci/nightly-sparkle-key.sh": frozenset(("release-notary",)),
     "scripts/ci/product_input_identity.py": frozenset(("preflight",)),
     "scripts/ci/ci_health_report.py": frozenset(("ci",)),
     "scripts/ci/queue_janitor.py": frozenset(("ci",)),
     "scripts/ci/required_status_checks.py": frozenset(("ci",)),
+    "scripts/ci/relocate_package_framework_rpaths.py": frozenset(("preflight",)),
     "scripts/ci/restore-app-host-test-product.sh": frozenset(("preflight",)),
     "scripts/ci/reuse_app_host_products.py": frozenset(("preflight",)),
     "scripts/ci/run_python_test_lane.py": frozenset(("preflight",)),
+    "scripts/ci/ci_process_tree.py": frozenset(("app-host-execution", "app-host-watchdog")),
+    "scripts/ci/hung_test_watchdog.py": frozenset(("app-host-execution", "app-host-watchdog")),
+    "scripts/ci/run_with_timeout.py": frozenset(("app-host-execution", "app-host-watchdog")),
+    # test_ci_xcodebuild_noninteractive_helper.py loads it by path.
+    "scripts/ci/xcodebuild_noninteractive.py": frozenset(("app-host-watchdog",)),
+    # lint-ios-conventions-diff.sh runs lint-ios-package-conventions.sh, which
+    # runs the namespace linter, which imports the source mask.
+    "scripts/lint_swift_namespaces.py": frozenset(("release-ios",)),
+    "scripts/swift_source_mask.py": frozenset(("release-ios",)),
+    # test_ci_reusable_workflow_permissions.py loads it; cmux.ci.guard runs that.
+    "scripts/ci/check_reusable_workflow_permissions.py": frozenset(("ci",)),
     "scripts/ci/require_swift_test_execution.py": frozenset(("app-host-execution",)),
     "scripts/ci/run-swift-testing-suites.sh": frozenset(("app-host-execution",)),
+    # The swift-package-tests lane; detect_ci_change_areas.py reads its package list.
+    "scripts/ci/package-test-lane.sh": frozenset(("app-host-execution", "ci")),
     "scripts/ci/sanitize-xcode-source-packages-cache.py": frozenset(("preflight",)),
+    # tests/test_ci_ui_tests_dispatch.py imports the script and reads the
+    # workflow; owned_pool_rescue.py and classify_failures.py import it too.
+    "scripts/ci/ui_tests_dispatch.py": frozenset(("app-host-execution", "ci")),
+    ".github/workflows/ci-ui-tests.yml": frozenset(("app-host-execution", "ci")),
+    # tests/test_ci_pr_media.py imports the script and reads the workflow.
+    "scripts/ci/pr_media.py": frozenset(("app-host-execution",)),
+    ".github/workflows/pr-media.yml": frozenset(("app-host-execution",)),
     # detect_ci_change_areas.py imports this to decide the swift-package-tests
     # route, so the ci group's router tests observe an edit to it even though
     # no guard step names it in a `run:`.
     "scripts/ci/select_package_tests.py": frozenset(("ci",)),
+    # test_ci_delta_since_green.py imports it; ci.yml runs the base copy.
+    "scripts/ci/delta_since_green.py": frozenset(("ci",)),
+    # test_ci_package_interface_fingerprint.py imports it; the package lane runs it.
+    "scripts/ci/package_interface_fingerprint.py": frozenset(("ci",)),
     "scripts/ci/swift_incremental_diagnostics.py": frozenset(("preflight",)),
     "scripts/ci/test_execution_registry.py": frozenset(("preflight",)),
     "skills/cmux-cloud-vm/SKILL.md": frozenset(("preflight",)),
@@ -108,12 +187,12 @@ ROUTING_POLICY_PATHS = frozenset({
     "scripts/ci/detect_ci_change_areas.py",
     "scripts/ci/detect_linux_guard_changes.py",
     "scripts/ci/workflow_guard_groups.py",
+    "scripts/ci/workload_entrypoints.py",
+    "scripts/ci/cmux-workload-profiles.json",
     "tests/test_ci_change_areas.py",
+    "tests/test_ci_fork_runner_routing.py",
     "tests/test_ci_linux_guard_routing.py",
     "tests/test_ci_guard_workflow_structure.py",
-    "tests/test_ci_app_host_guard_structure.py",
-    "tests/test_ci_quality_guard_structure.py",
-    "tests/test_ci_release_guard_structure.py",
 })
 
 DETERMINISM_SUFFIXES = (".swift", ".py", ".sh", ".ts", ".tsx", ".js", ".mjs")
@@ -126,7 +205,8 @@ def _python_syntax_scan(path: str) -> bool:
 def _determinism_scan(path: str) -> bool:
     if not path.endswith(DETERMINISM_SUFFIXES):
         return False
-    if path.startswith(("cmuxTests/", "cmuxUITests/", "ios/cmuxUITests/",
+    if path.startswith(("cmuxTests/", "cmuxCLITests/", "cmuxCLITestSupport/",
+                        "cmuxUITests/", "ios/cmuxUITests/",
                         "tests/", "tests_v2/", "web/tests/", "webviews/test/")):
         return True
     return path.startswith("Packages/") and "/Tests/" in path
@@ -252,6 +332,19 @@ def step_owners(text: str) -> dict[str, str]:
     return owners
 
 
+def run_paths(run: str) -> list[str]:
+    """Paths a `run:` executes, including through a workload profile."""
+    paths = DIRECT_PATH.findall(run)
+    try:
+        profiles = workload_entrypoints.entrypoints(run)
+    except (OSError, UnicodeError, ValueError, KeyError) as error:
+        raise GuardWorkflowError(f"cannot resolve a workload profile: {error}") from error
+    for entrypoint, script in profiles:
+        paths.append(entrypoint)
+        paths.extend(DIRECT_PATH.findall(script))
+    return paths
+
+
 def direct_path_owners(text: str) -> dict[str, frozenset[str]]:
     """Map each path a group-conditioned step runs directly to its groups."""
     owners: dict[str, set[str]] = {}
@@ -259,7 +352,7 @@ def direct_path_owners(text: str) -> dict[str, frozenset[str]]:
         match = GROUP_CONDITION.fullmatch(step.get("if", ""))
         if match is None:
             continue
-        for path in DIRECT_PATH.findall(step.get("run", "")):
+        for path in run_paths(step.get("run", "")):
             owners.setdefault(path, set()).add(match.group(1))
     return {path: frozenset(groups) for path, groups in owners.items()}
 
@@ -293,7 +386,7 @@ def route_direct_paths(text: str) -> dict[str, frozenset[str]]:
             continue
         paths = routes.setdefault(route, set())
         for step in job_steps(text, job_name):
-            paths.update(DIRECT_PATH.findall(step.get("run", "")))
+            paths.update(run_paths(step.get("run", "")))
     if not routes:
         raise GuardWorkflowError("no job is gated on a workflow input")
     return {route: frozenset(paths) for route, paths in routes.items()}

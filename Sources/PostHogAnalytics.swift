@@ -1,3 +1,4 @@
+import CmuxSettings
 import AppKit
 import Foundation
 #if !PRIVACY_MODE && canImport(PostHog)

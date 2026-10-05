@@ -220,7 +220,7 @@ extension RemoteSessionCoordinator {
     func probeRemoteBootstrapStateLocked(version: String) throws -> RemoteBootstrapState {
         let script = Self.remotePlatformProbeScript(version: version)
         let command = "sh -c \(script.shellSingleQuoted)"
-        let result = try sshExec(arguments: daemonBootstrapSSHArguments() + [configuration.destination, command], timeout: 20)
+        let result = try sshExec(arguments: daemonBootstrapSSHArguments() + ["--", configuration.destination, command], timeout: 20)
 
         let lines = result.stdout
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -321,14 +321,7 @@ extension RemoteSessionCoordinator {
             if Self.isPanechoPrivacyModeEnabled() {
                 debugLog("remote.build.privacy-skip-download: building cmuxd-remote locally for \(goOS)-\(goArch)")
             } else {
-                let download = try manifestRepository.downloadBinary(
-                    entry: entry,
-                    version: manifest.appVersion,
-                    releaseURL: manifest.releaseURL
-                )
-                if download.usedLiveManifestChecksumFallback {
-                    debugLog("remote.download.checksum-fallback: embedded manifest checksum stale, live manifest matched for \(entry.assetName)")
-                }
+                let download = try manifestRepository.downloadBinary(entry: entry, version: manifest.appVersion)
                 debugLog("remote.build.downloaded path=\(download.binaryURL.path)")
                 return download.binaryURL
             }
@@ -402,7 +395,7 @@ extension RemoteSessionCoordinator {
         let request = #"{"id":1,"method":"hello","params":{}}"#
         let script = "printf '%s\\n' \(request.shellSingleQuoted) | \(remotePath.shellSingleQuoted) serve --stdio"
         let command = "sh -c \(script.shellSingleQuoted)"
-        let result = try sshExec(arguments: daemonBootstrapSSHArguments() + [configuration.destination, command], timeout: 12)
+        let result = try sshExec(arguments: daemonBootstrapSSHArguments() + ["--", configuration.destination, command], timeout: 12)
         guard result.status == 0 else {
             let detail = Self.bestErrorLine(stderr: result.stderr, stdout: result.stdout) ?? "ssh exited \(result.status)"
             throw NSError(domain: "cmux.remote.daemon", code: 40, userInfo: [

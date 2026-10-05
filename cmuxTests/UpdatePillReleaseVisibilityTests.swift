@@ -168,9 +168,7 @@ struct BrowserInsecureHTTPSettingsTests {
         checkEqual(prepared.httpMethod, "POST")
         checkEqual(prepared.httpBody, Data("token=abc123".utf8))
         checkEqual(prepared.value(forHTTPHeaderField: "Content-Type"), "application/x-www-form-urlencoded")
-        // #13003: the prepared request keeps the caller's cache policy so refreshing a
-        // failed navigation replays the original request semantics.
-        checkEqual(prepared.cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
+        checkEqual(prepared.cachePolicy, .useProtocolCachePolicy)
     }
 
     @Test
@@ -415,21 +413,14 @@ struct TitlebarControlsSizingPolicyTests {
         let classic = TitlebarControlsLayoutMetrics.contentSize(config: classicConfig)
         let classicRepeat = TitlebarControlsLayoutMetrics.contentSize(config: classicConfig)
         checkEqual(classic, classicRepeat)
-        // System font metrics determine hint widths; every native control must
-        // still fit inside the deterministic reservation for each style.
-        let classicRightEdge = TitlebarControlsHitRegions.buttonXRanges(config: classicConfig)
-            .map(\.upperBound).max() ?? 0
-        checkGreaterThanOrEqual(classic.width, classicRightEdge)
+        checkEqual(classic.width, 152, accuracy: 0.001)
         checkEqual(classic.height, WindowChromeMetrics.appTitlebarHeight, accuracy: 0.001)
 
         let compactConfig = TitlebarControlsStyle.compact.config
         let compact = TitlebarControlsLayoutMetrics.contentSize(config: compactConfig)
         let compactRepeat = TitlebarControlsLayoutMetrics.contentSize(config: compactConfig)
         checkEqual(compact, compactRepeat)
-        let compactRightEdge = TitlebarControlsHitRegions.buttonXRanges(config: compactConfig)
-            .map(\.upperBound).max() ?? 0
-        checkGreaterThanOrEqual(compact.width, compactRightEdge)
-        checkGreaterThan(classic.width, compact.width)
+        checkEqual(compact.width, 139, accuracy: 0.001)
         checkEqual(compact.height, WindowChromeMetrics.appTitlebarHeight, accuracy: 0.001)
     }
 

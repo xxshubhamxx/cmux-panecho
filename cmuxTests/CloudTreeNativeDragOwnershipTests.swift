@@ -1,5 +1,6 @@
 import AppKit
 import Bonsplit
+import CmuxSurfaceCatalogModel
 import Testing
 
 #if canImport(cmux_DEV)
@@ -362,7 +363,7 @@ struct CloudTreeNativeDragOwnershipTests {
         openDesktop: { _ in },
         runCommand: { _, _ in },
         confirmDelete: { _ in },
-        promptRename: { _, _ in },
+        promptRename: { _ in },
         resizeDisk: { _, _ in },
         promptUpgrade: {}
     )
